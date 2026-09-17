@@ -900,11 +900,9 @@ pub struct PendingToolCall {
 
 impl AIChatService {
     pub fn new() -> Self {
+        crate::load_environment();
         for key in [
             "BOT_TOKEN",
-            "AI_ENDPOINT",
-            "AI_API_KEY",
-            "AI_MODEL",
             "OWNER_USER_ID",
             "ALLOWED_CHAT_IDS",
             "IMAGE_FALLBACK_PROVIDER",

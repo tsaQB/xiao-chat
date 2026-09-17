@@ -173,6 +173,14 @@ pub fn get_providers_store_path() -> std::path::PathBuf {
 }
 
 pub fn load_provider_store() -> ProviderStore {
+    let mut store = load_provider_store_from_storage();
+    if store.providers.is_empty() && seed_default_provider_from_env_if_empty(&mut store) {
+        return store;
+    }
+    store
+}
+
+fn load_provider_store_from_storage() -> ProviderStore {
     if let Ok(conn) = open_session_db() {
         if let Ok(value) = conn.query_row(
             "SELECT value FROM settings WHERE key='provider_store'",
@@ -214,7 +222,7 @@ pub fn load_provider_store() -> ProviderStore {
                     if let Err(err) = std::fs::remove_file(&p) {
                         warn!("Failed to remove migrated legacy provider file: {err}");
                     }
-                    return load_provider_store();
+                    return load_provider_store_from_storage();
                 }
                 return store;
             }
@@ -223,12 +231,154 @@ pub fn load_provider_store() -> ProviderStore {
     ProviderStore::default()
 }
 
+pub const DEFAULT_OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";
+pub const DEFAULT_OPENROUTER_MODEL: &str = "google/gemini-2.0-flash-001";
+
+pub fn parse_auto_seed_endpoint(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.contains("YOUR_")
+        || (!trimmed.starts_with("http://") && !trimmed.starts_with("https://"))
+    {
+        return None;
+    }
+    Some(trimmed.trim_end_matches('/').to_string())
+}
+
+pub fn seed_default_provider_from_env_if_empty(store: &mut ProviderStore) -> bool {
+    crate::load_environment();
+    let Ok(mut conn) = open_session_db() else {
+        warn!("Failed to open session database for provider auto-seeding");
+        return false;
+    };
+    seed_default_provider_from_env_if_empty_on_conn_and_dir(&mut conn, &secret_store_dir(), store)
+}
+
+pub(crate) fn seed_default_provider_from_env_if_empty_on_conn_and_dir(
+    conn: &mut Connection,
+    secrets_dir: &Path,
+    store: &mut ProviderStore,
+) -> bool {
+    if !store.providers.is_empty() {
+        return false;
+    }
+
+    let endpoint_raw = std::env::var("AI_ENDPOINT").ok();
+    let endpoint = match endpoint_raw.as_deref() {
+        Some(raw) => match parse_auto_seed_endpoint(raw) {
+            Some(ep) => ep,
+            None => return false,
+        },
+        None => DEFAULT_OPENROUTER_ENDPOINT.to_string(),
+    };
+
+    let api_key = match std::env::var("AI_API_KEY") {
+        Ok(val) => {
+            let trimmed = val.trim();
+            if trimmed.contains("YOUR_") {
+                return false;
+            }
+            if trimmed.is_empty() {
+                "none".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        }
+        Err(_) => "none".to_string(),
+    };
+
+    let is_local = endpoint.contains("127.0.0.1")
+        || endpoint.contains("localhost")
+        || endpoint.contains("0.0.0.0");
+    if !is_local && (api_key == "none" || api_key.is_empty()) {
+        return false;
+    }
+
+    let active_model = match std::env::var("AI_MODEL") {
+        Ok(val) => {
+            let trimmed = val.trim();
+            if trimmed.is_empty() {
+                if endpoint == DEFAULT_OPENROUTER_ENDPOINT || endpoint.contains("openrouter.ai") {
+                    DEFAULT_OPENROUTER_MODEL.to_string()
+                } else {
+                    "default".to_string()
+                }
+            } else {
+                trimmed.to_string()
+            }
+        }
+        Err(_) => {
+            if endpoint == DEFAULT_OPENROUTER_ENDPOINT || endpoint.contains("openrouter.ai") {
+                DEFAULT_OPENROUTER_MODEL.to_string()
+            } else {
+                "default".to_string()
+            }
+        }
+    };
+
+    let (name, id) =
+        if endpoint == DEFAULT_OPENROUTER_ENDPOINT || endpoint.contains("openrouter.ai") {
+            ("OpenRouter".to_string(), "openrouter".to_string())
+        } else {
+            let n = url::Url::parse(&endpoint)
+                .ok()
+                .and_then(|u| u.host_str().map(|h| h.to_string()))
+                .filter(|h| !h.is_empty())
+                .unwrap_or_else(|| "Default Provider".to_string());
+            (n, "env-default".to_string())
+        };
+
+    let new_provider = ProviderConfig {
+        id: id.clone(),
+        name,
+        endpoint,
+        api_key,
+        api_key_ref: None,
+        models: vec![active_model.clone()],
+        active_model,
+    };
+
+    let candidate = ProviderStore {
+        active_id: Some(id),
+        providers: vec![new_provider],
+    };
+
+    if let Err(error) = save_provider_state_on_conn_and_dir(conn, secrets_dir, &candidate) {
+        warn!("Failed to auto-seed provider store from environment: {error}");
+        return false;
+    }
+
+    let Ok(value) = conn.query_row(
+        "SELECT value FROM settings WHERE key='provider_store'",
+        [],
+        |row| row.get::<_, String>(0),
+    ) else {
+        warn!("Failed to read back persisted provider store after auto-seeding");
+        return false;
+    };
+    let Ok(persisted) = serde_json::from_str::<ProviderStore>(&value) else {
+        warn!("Failed to deserialize persisted provider store after auto-seeding");
+        return false;
+    };
+
+    *store = hydrate_provider_store_in_dir(secrets_dir, persisted);
+    true
+}
+
 pub fn save_provider_store(store: &ProviderStore) -> std::io::Result<()> {
     save_provider_state_db(store)
 }
 
 fn save_provider_state_db(store: &ProviderStore) -> std::io::Result<()> {
     let mut conn = open_session_db().map_err(|e| std::io::Error::other(e.to_string()))?;
+    save_provider_state_on_conn_and_dir(&mut conn, &secret_store_dir(), store)
+}
+
+fn save_provider_state_on_conn_and_dir(
+    conn: &mut Connection,
+    secrets_dir: &Path,
+    store: &ProviderStore,
+) -> std::io::Result<()> {
     let existing_store = conn
         .query_row(
             "SELECT value FROM settings WHERE key='provider_store'",
@@ -264,31 +414,31 @@ fn save_provider_state_db(store: &ProviderStore) -> std::io::Result<()> {
         if has_secret {
             let reusable = old_ref
                 .as_deref()
-                .and_then(|secret_ref| read_secret(secret_ref).ok())
+                .and_then(|secret_ref| read_secret_in_dir(secrets_dir, secret_ref).ok())
                 .is_some_and(|current| current == provider.api_key);
             if reusable {
                 provider.api_key_ref = old_ref;
             } else {
                 let new_ref = create_secret_ref("provider", &provider.id);
-                if let Err(error) = write_secret(&new_ref, &provider.api_key) {
+                if let Err(error) = write_secret_in_dir(secrets_dir, &new_ref, &provider.api_key) {
                     for secret_ref in &newly_written_refs {
-                        remove_secret(secret_ref);
+                        remove_secret_in_dir(secrets_dir, secret_ref);
                     }
                     return Err(error);
                 }
-                match read_secret(&new_ref) {
+                match read_secret_in_dir(secrets_dir, &new_ref) {
                     Ok(verified) if verified == provider.api_key => {}
                     Ok(_) => {
-                        remove_secret(&new_ref);
+                        remove_secret_in_dir(secrets_dir, &new_ref);
                         for secret_ref in &newly_written_refs {
-                            remove_secret(secret_ref);
+                            remove_secret_in_dir(secrets_dir, secret_ref);
                         }
                         return Err(io::Error::other("provider secret verification mismatch"));
                     }
                     Err(error) => {
-                        remove_secret(&new_ref);
+                        remove_secret_in_dir(secrets_dir, &new_ref);
                         for secret_ref in &newly_written_refs {
-                            remove_secret(secret_ref);
+                            remove_secret_in_dir(secrets_dir, secret_ref);
                         }
                         return Err(error);
                     }
@@ -374,7 +524,7 @@ fn save_provider_state_db(store: &ProviderStore) -> std::io::Result<()> {
 
     if let Err(error) = commit_result {
         for secret_ref in &newly_written_refs {
-            remove_secret(secret_ref);
+            remove_secret_in_dir(secrets_dir, secret_ref);
         }
         return Err(error);
     }
@@ -388,27 +538,33 @@ fn save_provider_state_db(store: &ProviderStore) -> std::io::Result<()> {
     superseded_refs.dedup();
     for secret_ref in superseded_refs {
         if !live_refs.contains(secret_ref.as_str()) {
-            remove_secret(&secret_ref);
+            remove_secret_in_dir(secrets_dir, &secret_ref);
         }
     }
     Ok(())
 }
 
-fn hydrate_provider_store(mut store: ProviderStore) -> ProviderStore {
+fn hydrate_provider_store(store: ProviderStore) -> ProviderStore {
+    hydrate_provider_store_in_dir(&secret_store_dir(), store)
+}
+
+fn hydrate_provider_store_in_dir(secrets_dir: &Path, mut store: ProviderStore) -> ProviderStore {
     for provider in &mut store.providers {
         provider.api_key = provider
             .api_key_ref
             .as_deref()
-            .and_then(|secret_ref| match read_secret(secret_ref) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    warn!(
-                        "Unable to load provider credential reference for '{}': {error}",
-                        provider.id
-                    );
-                    None
-                }
-            })
+            .and_then(
+                |secret_ref| match read_secret_in_dir(secrets_dir, secret_ref) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        warn!(
+                            "Unable to load provider credential reference for '{}': {error}",
+                            provider.id
+                        );
+                        None
+                    }
+                },
+            )
             .unwrap_or_default();
     }
     store
@@ -3032,5 +3188,368 @@ mod tests {
         assert!(!group_topic_scope.is_private());
         assert_eq!(group_topic_scope.chat_id, -1001234567);
         assert_eq!(group_topic_scope.thread_id, 99);
+    }
+
+    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvCleanupGuard {
+        vars: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl Drop for EnvCleanupGuard {
+        fn drop(&mut self) {
+            for (key, original) in &self.vars {
+                match original {
+                    Some(val) => std::env::set_var(key, val),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    fn settings_test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+        conn
+    }
+
+    fn run_with_isolated_ai_env<F>(
+        endpoint: Option<&str>,
+        api_key: Option<&str>,
+        model: Option<&str>,
+        test_fn: F,
+    ) where
+        F: FnOnce(&mut Connection, &Path),
+    {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvCleanupGuard {
+            vars: vec![
+                ("AI_ENDPOINT", std::env::var("AI_ENDPOINT").ok()),
+                ("AI_API_KEY", std::env::var("AI_API_KEY").ok()),
+                ("AI_MODEL", std::env::var("AI_MODEL").ok()),
+            ],
+        };
+
+        match endpoint {
+            Some(ep) => std::env::set_var("AI_ENDPOINT", ep),
+            None => std::env::remove_var("AI_ENDPOINT"),
+        }
+        match api_key {
+            Some(key) => std::env::set_var("AI_API_KEY", key),
+            None => std::env::remove_var("AI_API_KEY"),
+        }
+        match model {
+            Some(m) => std::env::set_var("AI_MODEL", m),
+            None => std::env::remove_var("AI_MODEL"),
+        }
+
+        let secrets_dir = std::env::temp_dir().join(format!(
+            "xiaoai-autoseed-test-{}-{:x}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let mut conn = settings_test_conn();
+
+        test_fn(&mut conn, &secrets_dir);
+
+        let _ = std::fs::remove_dir_all(secrets_dir);
+    }
+
+    #[test]
+    fn test_auto_seed_provider_from_env_when_empty() {
+        run_with_isolated_ai_env(
+            Some("https://api.openai.com/v1/"),
+            Some("sk-test-secret-key-12345"),
+            Some("gpt-4o"),
+            |conn, secrets_dir| {
+                let mut store = ProviderStore::default();
+                let seeded = seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    secrets_dir,
+                    &mut store,
+                );
+                assert!(seeded);
+                assert_eq!(store.providers.len(), 1);
+                assert_eq!(store.active_id, Some("env-default".to_string()));
+
+                let p = &store.providers[0];
+                assert_eq!(p.id, "env-default");
+                assert_eq!(p.endpoint, "https://api.openai.com/v1");
+                assert_eq!(p.name, "api.openai.com");
+                assert_eq!(p.active_model, "gpt-4o");
+                assert_eq!(p.models, vec!["gpt-4o".to_string()]);
+                assert_eq!(p.api_key, "sk-test-secret-key-12345");
+
+                let secret_ref = p.api_key_ref.as_ref().expect("api_key_ref populated");
+                assert!(secret_ref.starts_with("secret://provider/env-default/"));
+
+                let secret_path = secret_path_in_dir(secrets_dir, secret_ref).unwrap();
+                assert!(secret_path.exists());
+                assert_eq!(
+                    read_secret_in_dir(secrets_dir, secret_ref).unwrap(),
+                    "sk-test-secret-key-12345"
+                );
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let file_mode = std::fs::metadata(&secret_path)
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777;
+                    assert_eq!(file_mode, 0o600);
+                    let dir_mode =
+                        std::fs::metadata(secrets_dir).unwrap().permissions().mode() & 0o777;
+                    assert_eq!(dir_mode, 0o700);
+                }
+
+                let persisted_json: String = conn
+                    .query_row(
+                        "SELECT value FROM settings WHERE key='provider_store'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert!(!persisted_json.contains("sk-test-secret-key-12345"));
+                assert!(persisted_json.contains(secret_ref));
+
+                let ep: String = conn
+                    .query_row(
+                        "SELECT value FROM settings WHERE key='app:AI_ENDPOINT'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(ep, "https://api.openai.com/v1");
+
+                let model: String = conn
+                    .query_row(
+                        "SELECT value FROM settings WHERE key='app:AI_MODEL'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(model, "gpt-4o");
+
+                let key_ref: String = conn
+                    .query_row(
+                        "SELECT value FROM settings WHERE key='app:AI_API_KEY_REF'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(key_ref, *secret_ref);
+
+                let plaintext_key_count: usize = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM settings WHERE key='app:AI_API_KEY'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(plaintext_key_count, 0);
+            },
+        );
+    }
+
+    #[test]
+    fn test_auto_seed_does_not_override_existing() {
+        run_with_isolated_ai_env(
+            Some("https://new-endpoint.ai/v1"),
+            Some("new-key"),
+            Some("new-model"),
+            |conn, secrets_dir| {
+                let mut store = ProviderStore {
+                    active_id: Some("existing".to_string()),
+                    providers: vec![ProviderConfig {
+                        id: "existing".to_string(),
+                        name: "Existing".to_string(),
+                        endpoint: "https://existing.ai/v1".to_string(),
+                        api_key: "existing-key".to_string(),
+                        api_key_ref: None,
+                        models: vec!["existing-model".to_string()],
+                        active_model: "existing-model".to_string(),
+                    }],
+                };
+
+                let seeded = seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    secrets_dir,
+                    &mut store,
+                );
+                assert!(!seeded);
+                assert_eq!(store.providers.len(), 1);
+                assert_eq!(store.providers[0].id, "existing");
+                assert_eq!(store.providers[0].endpoint, "https://existing.ai/v1");
+            },
+        );
+    }
+
+    #[test]
+    fn test_auto_seed_ignores_empty_or_dummy_endpoint() {
+        // 1. Dummy placeholder
+        run_with_isolated_ai_env(
+            Some("http://YOUR_API_ENDPOINT_HERE/v1"),
+            Some("sk-test"),
+            Some("default"),
+            |conn, secrets_dir| {
+                let mut store = ProviderStore::default();
+                assert!(!seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    secrets_dir,
+                    &mut store,
+                ));
+                assert!(store.providers.is_empty());
+            },
+        );
+
+        // 2. Empty string
+        run_with_isolated_ai_env(
+            Some("   "),
+            Some("sk-test"),
+            Some("default"),
+            |conn, secrets_dir| {
+                let mut store = ProviderStore::default();
+                assert!(!seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    secrets_dir,
+                    &mut store,
+                ));
+                assert!(store.providers.is_empty());
+            },
+        );
+
+        // 3. Non-HTTP scheme
+        run_with_isolated_ai_env(
+            Some("ftp://api.example.com/v1"),
+            Some("sk-test"),
+            Some("default"),
+            |conn, secrets_dir| {
+                let mut store = ProviderStore::default();
+                assert!(!seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    secrets_dir,
+                    &mut store,
+                ));
+                assert!(store.providers.is_empty());
+            },
+        );
+    }
+
+    #[test]
+    fn test_auto_seed_defaults_api_key_and_model_when_omitted() {
+        run_with_isolated_ai_env(
+            Some("http://127.0.0.1:11434/v1"),
+            None,
+            None,
+            |conn, secrets_dir| {
+                let mut store = ProviderStore::default();
+                let seeded = seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    secrets_dir,
+                    &mut store,
+                );
+                assert!(seeded);
+                assert_eq!(store.providers.len(), 1);
+
+                let p = &store.providers[0];
+                assert_eq!(p.id, "env-default");
+                assert_eq!(p.endpoint, "http://127.0.0.1:11434/v1");
+                assert_eq!(p.name, "127.0.0.1");
+                assert_eq!(p.api_key, ""); // "none" is unauthenticated
+                assert_eq!(p.api_key_ref, None);
+                assert_eq!(p.active_model, "default");
+                assert_eq!(p.models, vec!["default".to_string()]);
+            },
+        );
+    }
+
+    #[test]
+    fn test_auto_seed_openrouter_defaults_when_only_api_key_is_provided() {
+        run_with_isolated_ai_env(
+            None,
+            Some("sk-or-v1-testkey123"),
+            None,
+            |conn, secrets_dir| {
+                let mut store = ProviderStore::default();
+                let seeded = seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    secrets_dir,
+                    &mut store,
+                );
+                assert!(seeded);
+                assert_eq!(store.providers.len(), 1);
+                assert_eq!(store.active_id, Some("openrouter".to_string()));
+
+                let p = &store.providers[0];
+                assert_eq!(p.id, "openrouter");
+                assert_eq!(p.endpoint, DEFAULT_OPENROUTER_ENDPOINT);
+                assert_eq!(p.name, "OpenRouter");
+                assert_eq!(p.active_model, DEFAULT_OPENROUTER_MODEL);
+                assert_eq!(p.models, vec![DEFAULT_OPENROUTER_MODEL.to_string()]);
+                assert_eq!(p.api_key, "sk-or-v1-testkey123");
+            },
+        );
+    }
+
+    #[test]
+    fn test_auto_seed_openrouter_requires_api_key_and_rejects_placeholder() {
+        // Placeholder key rejected
+        run_with_isolated_ai_env(
+            None,
+            Some("YOUR_OPENROUTER_API_KEY_HERE"),
+            None,
+            |conn, secrets_dir| {
+                let mut store = ProviderStore::default();
+                assert!(!seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    secrets_dir,
+                    &mut store,
+                ));
+                assert!(store.providers.is_empty());
+            },
+        );
+
+        // Missing key rejected for remote OpenRouter
+        run_with_isolated_ai_env(None, None, None, |conn, secrets_dir| {
+            let mut store = ProviderStore::default();
+            assert!(!seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                conn,
+                secrets_dir,
+                &mut store,
+            ));
+            assert!(store.providers.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_auto_seed_failure_leaves_store_intact_and_unmutated() {
+        run_with_isolated_ai_env(
+            Some("https://api.openai.com/v1"),
+            Some("sk-secret"),
+            Some("gpt-4o"),
+            |conn, _valid_secrets_dir| {
+                let invalid_secrets_file = std::env::temp_dir().join(format!(
+                    "xiaoai-invalid-secrets-{}-{:x}",
+                    std::process::id(),
+                    rand::random::<u64>()
+                ));
+                std::fs::write(&invalid_secrets_file, b"not a directory").unwrap();
+
+                let mut store = ProviderStore::default();
+                let seeded = seed_default_provider_from_env_if_empty_on_conn_and_dir(
+                    conn,
+                    &invalid_secrets_file,
+                    &mut store,
+                );
+                assert!(!seeded);
+                assert!(store.providers.is_empty());
+                assert_eq!(store.active_id, None);
+
+                let _ = std::fs::remove_file(invalid_secrets_file);
+            },
+        );
     }
 }

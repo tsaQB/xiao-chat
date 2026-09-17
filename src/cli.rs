@@ -327,28 +327,67 @@ pub(crate) async fn run_cli_quickstart_wizard(ai_service: &AIChatService) -> Opt
     let stdin = io::stdin();
     let mut reader = stdin.lock();
 
+    load_environment();
+
+    let env_endpoint = std::env::var("AI_ENDPOINT")
+        .ok()
+        .and_then(|s| crate::ai::storage::parse_auto_seed_endpoint(&s));
+
+    let env_api_key = std::env::var("AI_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let env_model = std::env::var("AI_MODEL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let default_endpoint =
+        env_endpoint.unwrap_or_else(|| crate::ai::storage::DEFAULT_OPENROUTER_ENDPOINT.to_string());
+
     // Step 1: AI Provider & Main Model
     println!("\n\x1b[1;37m[1/2] AI Provider & Main Model\x1b[0m");
     let endpoint = loop {
-        print!("  \x1b[1;37mEndpoint URL\x1b[0m \x1b[38;5;244m(e.g. https://openrouter.ai/api/v1):\x1b[0m ");
+        print!(
+            "  \x1b[1;37mEndpoint URL\x1b[0m \x1b[38;5;244m[default: {default_endpoint}]:\x1b[0m "
+        );
         let _ = io::stdout().flush();
         let mut input = String::new();
         if reader.read_line(&mut input).is_err() {
             println!("\n\x1b[38;5;244mSetup dibatalkan.\x1b[0m");
             return None;
         }
-        let clean = input.trim().trim_end_matches('/').to_string();
+        let trimmed = input.trim();
+        let clean = if trimmed.is_empty() {
+            default_endpoint.clone()
+        } else {
+            trimmed.trim_end_matches('/').to_string()
+        };
         if clean.starts_with("http://") || clean.starts_with("https://") {
             break clean;
         }
         println!("  \x1b[31m✖ Error: Endpoint harus diawali dengan http:// atau https://\x1b[0m");
     };
 
-    print!("  \x1b[1;37mAPI Key\x1b[0m \x1b[38;5;244m(Enter jika lokal / tanpa key):\x1b[0m ");
+    if env_api_key.is_some() {
+        print!("  \x1b[1;37mAPI Key\x1b[0m \x1b[38;5;244m(Enter untuk memakai dari .env):\x1b[0m ");
+    } else if endpoint == crate::ai::storage::DEFAULT_OPENROUTER_ENDPOINT
+        || endpoint.contains("openrouter.ai")
+    {
+        print!("  \x1b[1;37mAPI Key\x1b[0m \x1b[38;5;244m(dapatkan di https://openrouter.ai/keys):\x1b[0m ");
+    } else {
+        print!("  \x1b[1;37mAPI Key\x1b[0m \x1b[38;5;244m(Enter jika lokal / tanpa key):\x1b[0m ");
+    }
     let _ = io::stdout().flush();
     let mut key_input = String::new();
     let _ = reader.read_line(&mut key_input);
-    let mut api_key = key_input.trim().to_string();
+    let trimmed_key = key_input.trim();
+    let mut api_key = if trimmed_key.is_empty() {
+        env_api_key.clone().unwrap_or_else(|| "none".to_string())
+    } else {
+        trimmed_key.to_string()
+    };
     if api_key.is_empty() {
         api_key = "none".to_string();
     }
@@ -359,7 +398,11 @@ pub(crate) async fn run_cli_quickstart_wizard(ai_service: &AIChatService) -> Opt
     let _ = reader.read_line(&mut alias_input);
     let raw_alias = alias_input.trim();
     let clean_alias = if raw_alias.is_empty() {
-        if let Ok(u) = url::Url::parse(&endpoint) {
+        if endpoint == crate::ai::storage::DEFAULT_OPENROUTER_ENDPOINT
+            || endpoint.contains("openrouter.ai")
+        {
+            "OpenRouter".to_string()
+        } else if let Ok(u) = url::Url::parse(&endpoint) {
             u.host_str().unwrap_or("Custom Provider").to_string()
         } else {
             "Custom Provider".to_string()
@@ -384,16 +427,23 @@ pub(crate) async fn run_cli_quickstart_wizard(ai_service: &AIChatService) -> Opt
         models.len()
     );
 
+    let default_idx = env_model
+        .as_ref()
+        .and_then(|m| models.iter().position(|name| name == m))
+        .unwrap_or(0);
+
     let selected_idx = terminal_interactive_select(
         "Pilih Main Model untuk Provider Ini:",
         &models,
-        0,
+        default_idx,
         true,
         None,
     );
 
     let active_model = if let Some(idx) = selected_idx {
         models[idx].clone()
+    } else if let Some(env_m) = env_model.as_ref().filter(|m| models.contains(m)) {
+        env_m.clone()
     } else {
         models
             .first()
@@ -467,19 +517,30 @@ pub(crate) async fn run_cli_quickstart_wizard(ai_service: &AIChatService) -> Opt
         println!("\n  \x1b[1;36mPilih Gateway:\x1b[0m");
         println!("    \x1b[1;32m❯ • Telegram\x1b[0m\n");
 
+        let env_token = get_configured_token();
         let (final_token, bot_username) = loop {
-            print!("  \x1b[1;37mTelegram Bot Token:\x1b[0m ");
+            if env_token.is_some() {
+                print!("  \x1b[1;37mTelegram Bot Token\x1b[0m \x1b[38;5;244m(Enter untuk memakai token dari environment):\x1b[0m ");
+            } else {
+                print!("  \x1b[1;37mTelegram Bot Token:\x1b[0m ");
+            }
             let _ = io::stdout().flush();
             let mut input = String::new();
             if reader.read_line(&mut input).is_err() {
                 println!("\n\x1b[38;5;244mSetup dibatalkan.\x1b[0m");
                 return None;
             }
-            let user_token = input.trim().to_string();
-            if user_token.is_empty() {
-                println!("  \x1b[31m✖ Error: Token tidak boleh kosong.\x1b[0m");
-                continue;
-            }
+            let trimmed = input.trim();
+            let user_token = if trimmed.is_empty() {
+                if let Some(ref tok) = env_token {
+                    tok.clone()
+                } else {
+                    println!("  \x1b[31m✖ Error: Token tidak boleh kosong.\x1b[0m");
+                    continue;
+                }
+            } else {
+                trimmed.to_string()
+            };
 
             let temp_bot = TelegramBotClient::new(&user_token);
             match temp_bot.get_me().await {
@@ -513,15 +574,26 @@ pub(crate) async fn run_cli_quickstart_wizard(ai_service: &AIChatService) -> Opt
             }
         };
 
+        let env_owner = get_configured_owner_id();
         let owner_user_id = loop {
-            print!("  \x1b[1;37mOwner User ID:\x1b[0m ");
+            if let Some(oid) = env_owner {
+                print!("  \x1b[1;37mOwner User ID\x1b[0m \x1b[38;5;244m[default: {oid}]:\x1b[0m ");
+            } else {
+                print!("  \x1b[1;37mOwner User ID:\x1b[0m ");
+            }
             let _ = io::stdout().flush();
             let mut input = String::new();
             if reader.read_line(&mut input).is_err() {
                 println!("\n\x1b[38;5;244mSetup dibatalkan.\x1b[0m");
                 return None;
             }
-            match input.trim().parse::<i64>() {
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
+                if let Some(oid) = env_owner {
+                    break oid;
+                }
+            }
+            match trimmed.parse::<i64>() {
                 Ok(value) if value > 0 => break value,
                 _ => {
                     println!("  \x1b[31m✖ Error: Owner User ID harus berupa angka positif.\x1b[0m")
@@ -1199,19 +1271,31 @@ pub(crate) async fn run_cli_provider_add(ai_service: &AIChatService) {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
 
-    print!("  \x1b[1;37mEndpoint URL:\x1b[0m ");
+    let default_ep = crate::ai::storage::DEFAULT_OPENROUTER_ENDPOINT;
+    print!("  \x1b[1;37mEndpoint URL\x1b[0m \x1b[38;5;244m[default: {default_ep}]:\x1b[0m ");
     let _ = io::stdout().flush();
     let mut endpoint_input = String::new();
     if reader.read_line(&mut endpoint_input).is_err() {
         return;
     }
-    let endpoint = endpoint_input.trim().trim_end_matches('/').to_string();
+    let trimmed_ep = endpoint_input.trim();
+    let endpoint = if trimmed_ep.is_empty() {
+        default_ep.to_string()
+    } else {
+        trimmed_ep.trim_end_matches('/').to_string()
+    };
     if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
         println!("  \x1b[31m✖ Error: Format Endpoint URL tidak valid!\x1b[0m\n");
         return;
     }
 
-    print!("  \x1b[1;37mAPI Key\x1b[0m \x1b[38;5;244m(Enter jika tanpa key):\x1b[0m ");
+    if endpoint == crate::ai::storage::DEFAULT_OPENROUTER_ENDPOINT
+        || endpoint.contains("openrouter.ai")
+    {
+        print!("  \x1b[1;37mAPI Key\x1b[0m \x1b[38;5;244m(dapatkan di https://openrouter.ai/keys):\x1b[0m ");
+    } else {
+        print!("  \x1b[1;37mAPI Key\x1b[0m \x1b[38;5;244m(Enter jika tanpa key):\x1b[0m ");
+    }
     let _ = io::stdout().flush();
     let mut key_input = String::new();
     if reader.read_line(&mut key_input).is_err() {
@@ -1230,7 +1314,11 @@ pub(crate) async fn run_cli_provider_add(ai_service: &AIChatService) {
     }
     let raw_alias = alias_input.trim();
     let alias = if raw_alias.is_empty() {
-        if let Ok(u) = url::Url::parse(&endpoint) {
+        if endpoint == crate::ai::storage::DEFAULT_OPENROUTER_ENDPOINT
+            || endpoint.contains("openrouter.ai")
+        {
+            "OpenRouter".to_string()
+        } else if let Ok(u) = url::Url::parse(&endpoint) {
             u.host_str().unwrap_or("Custom Provider").to_string()
         } else {
             "Custom Provider".to_string()

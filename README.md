@@ -98,14 +98,15 @@ Edit `.env` with your editor of choice:
 BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
 OWNER_USER_ID=987654321
 
-# OpenAI-Compatible AI Provider
-AI_ENDPOINT=http://127.0.0.1:8317/v1
-AI_API_KEY=xiao
-AI_MODEL=gemini-3.7-flash-high
+# Default AI Provider (OpenRouter)
+AI_ENDPOINT=https://openrouter.ai/api/v1
+AI_API_KEY=sk-or-v1-...
+AI_MODEL=google/gemini-2.0-flash-001
 ```
 
 > [!TIP]
-> You can also run the interactive onboarding wizard to configure the gateway and test connections:
+> **Zero-Prompt Headless Startup**: Populating `.env` allows `xiao start` to immediately auto-seed your AI provider and start the daemon with zero interactive prompts (ideal for Docker, systemd, or automated scripts).
+> Alternatively, you can run the interactive onboarding wizard anytime to configure the gateway and test connections visually:
 > ```bash
 > cargo run -- setup
 > ```
@@ -162,9 +163,9 @@ Settings can be defined in `.env` (or `~/.xiao.env`, `~/xiao/.env`) or managed d
 | `OWNER_USER_ID` | *Required* | Telegram numerical ID of the authorized owner. |
 | `ALLOWED_CHAT_IDS` | *Empty* | Comma-separated list of additional group chat IDs permitted to use the bot. |
 | `DEDICATED_CHAT_IDS` | *Empty* | Comma-separated list of forum supergroups configured as dedicated workspaces (answers all topics without mention). |
-| `AI_ENDPOINT` | `http://127.0.0.1:8317/v1` | Base URL for OpenAI-compatible completions and chat endpoints. |
-| `AI_API_KEY` | `xiao` | Bearer authentication token for the AI endpoint. |
-| `AI_MODEL` | `gemini-3.7-flash-high` | Default model identifier for conversation. |
+| `AI_ENDPOINT` | `https://openrouter.ai/api/v1` | Base URL for OpenAI-compatible completions and chat endpoints (defaults to OpenRouter). |
+| `AI_API_KEY` | *Required* | Bearer authentication token for the AI endpoint. |
+| `AI_MODEL` | `google/gemini-2.0-flash-001` | Default model identifier for conversation. |
 | `IMAGE_FALLBACK_PROVIDER` | `none` | Fallback provider for image generation (`none` or `pollinations`). |
 | `AI_PROVIDER_CONNECT_TIMEOUT_SECS` | `10` | Connect timeout for standard AI API requests. |
 | `IMAGE_GENERATION_TIMEOUT_SECS` | `120` | Request timeout for image generation endpoints. |
