@@ -2235,8 +2235,8 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                     blocks.push(RichBlock::Table {
                         cells,
                         has_header: has_hdr,
-                        is_bordered: true,
-                        is_striped: true,
+                        is_bordered: false,
+                        is_striped: false,
                         is_compact: true,
                         caption: Some(cap.to_string()),
                     });
@@ -2267,8 +2267,8 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
             blocks.push(RichBlock::Table {
                 cells,
                 has_header: has_hdr,
-                is_bordered: true,
-                is_striped: true,
+                is_bordered: false,
+                is_striped: false,
                 is_compact: true,
                 caption,
             });
@@ -2616,6 +2616,8 @@ Paragraf normal";
         let Some(RichBlock::Table {
             cells,
             is_compact,
+            is_bordered,
+            is_striped,
             caption,
             has_header,
             ..
@@ -2624,6 +2626,8 @@ Paragraf normal";
             panic!("expected rich table block");
         };
         assert!(*is_compact);
+        assert!(!*is_bordered);
+        assert!(!*is_striped);
         assert!(*has_header);
         assert_eq!(caption.as_deref(), Some("Perbandingan Spesifikasi"));
         assert_eq!(cells.len(), 3);
