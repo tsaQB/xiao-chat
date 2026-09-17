@@ -5,6 +5,9 @@ use crate::bot::models::{InputRichMessage, RichBlock};
 #[path = "parser/markdown.rs"]
 pub(crate) mod markdown;
 
+#[path = "parser/latex.rs"]
+pub(crate) mod latex;
+
 #[path = "parser/terminal.rs"]
 pub mod terminal;
 #[allow(unused_imports)]

@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use crate::bot::models::{
     InputRichMessage, Location, RichBlock, RichBlockCaption, RichBlockListItem, RichBlockTableCell,
 };
+use crate::parser::latex::sanitize_latex_for_telegram;
 
 static RE_HTML_SPOILER_TG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<tg-spoiler(?:\s+[^>]*)?>(.*?)</tg-spoiler>").unwrap());
@@ -258,9 +259,10 @@ pub fn parse_inline(input_str: &str) -> Value {
                 if end > 0 && !rest[1..].starts_with('$') {
                     let inner = rest[1..1 + end].trim();
                     if !inner.is_empty() {
+                        let sanitized = sanitize_latex_for_telegram(inner);
                         out.push(json!({
                             "type": "mathematical_expression",
-                            "expression": inner
+                            "expression": sanitized
                         }));
                         rest = &rest[1 + end + 1..];
                         continue;
@@ -274,9 +276,10 @@ pub fn parse_inline(input_str: &str) -> Value {
             if let Some(end) = rest[2..].find(r"\)") {
                 let inner = rest[2..2 + end].trim();
                 if !inner.is_empty() {
+                    let sanitized = sanitize_latex_for_telegram(inner);
                     out.push(json!({
                         "type": "mathematical_expression",
-                        "expression": inner
+                        "expression": sanitized
                     }));
                     rest = &rest[2 + end + 2..];
                     continue;
@@ -1924,9 +1927,16 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 }
             }
 
-            let expr = math_lines.join("\n").trim().to_string();
-            if !expr.is_empty() {
-                blocks.push(RichBlock::MathematicalExpression { expression: expr });
+            for line in math_lines {
+                let trimmed_line = line.trim();
+                if !trimmed_line.is_empty() {
+                    let sanitized = sanitize_latex_for_telegram(trimmed_line);
+                    if !sanitized.is_empty() {
+                        blocks.push(RichBlock::MathematicalExpression {
+                            expression: sanitized,
+                        });
+                    }
+                }
             }
             continue;
         }
@@ -1955,9 +1965,16 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 math_lines.push(curr_s.to_string());
                 i += 1;
             }
-            let expr = math_lines.join("\n").trim().to_string();
-            if !expr.is_empty() {
-                blocks.push(RichBlock::MathematicalExpression { expression: expr });
+            for line in math_lines {
+                let trimmed_line = line.trim();
+                if !trimmed_line.is_empty() {
+                    let sanitized = sanitize_latex_for_telegram(trimmed_line);
+                    if !sanitized.is_empty() {
+                        blocks.push(RichBlock::MathematicalExpression {
+                            expression: sanitized,
+                        });
+                    }
+                }
             }
             continue;
         }
@@ -2827,5 +2844,57 @@ Paragraf normal";
         assert!(s1.contains("🎵") && s1.contains("spotify.com") && s1.contains("Audio"));
         assert!(s2.contains("🖼️") && s2.contains("art.bmp") && s2.contains("Gambar Bitmap"));
         assert!(s3.contains("🖼️") && s3.contains("vector.svg") && s3.contains("Lihat Foto"));
+    }
+
+    #[test]
+    fn math_blocks_and_inline_math_are_sanitized_for_cross_platform_rendering() {
+        let md = r#"2. Teorema Pythagoras
+$$c = \sqrt{a^2 + b^2} = \sqrt{6^2 + 8^2}$$
+$$= \sqrt{36 + 64} = \sqrt{100} = 10\text{cm}$$
+
+Contoh inline: $44\text{cm}$ dan $7,5\text{hari}$."#;
+
+        let blocks = parse_markdown_to_rich_blocks(md);
+        let math_blocks: Vec<_> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                RichBlock::MathematicalExpression { expression } => Some(expression.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(math_blocks.len(), 2);
+        assert_eq!(math_blocks[0], r"c = \sqrt{a^2 + b^2} = \sqrt{6^2 + 8^2}");
+        assert_eq!(
+            math_blocks[1],
+            r"= \sqrt{36 + 64} = \sqrt{100} = 10\ \mathrm{cm}"
+        );
+
+        // Verify inline math serialization inside paragraph
+        let paragraph = blocks
+            .iter()
+            .find(|b| matches!(b, RichBlock::Paragraph { .. }))
+            .unwrap();
+        let serialized = serde_json::to_string(paragraph).unwrap();
+        assert!(serialized.contains(r"44\\ \\mathrm{cm}"));
+        assert!(serialized.contains(r"7.5\\ \\mathrm{hari}"));
+    }
+
+    #[test]
+    fn multiline_fenced_math_emits_individual_rich_blocks_per_line() {
+        let md = "$$\nc = \\sqrt{a^2 + b^2}\n= \\sqrt{36 + 64}\n= 10\\text{cm}\n$$";
+        let blocks = parse_markdown_to_rich_blocks(md);
+        let math_blocks: Vec<_> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                RichBlock::MathematicalExpression { expression } => Some(expression.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(math_blocks.len(), 3);
+        assert_eq!(math_blocks[0], r"c = \sqrt{a^2 + b^2}");
+        assert_eq!(math_blocks[1], r"= \sqrt{36 + 64}");
+        assert_eq!(math_blocks[2], r"= 10\ \mathrm{cm}");
     }
 }
