@@ -55,15 +55,15 @@ Xiao combines streaming draft responses, rich structured messages (AST blocks), 
                                  │         │
             ┌─────────────────┘        └─────────────────────┐
             ▼                                                        ▼
-┌───────────────────────────────┐                    ┌───────────────────────┐
-│       Model Role Router       │                    │   Three-Tier Memory   │
+┌──────────────────────────┐                    ┌────────────────────┐
+│       Model Role Router       │                    │   Three-Tier Memory    │
 │ ├─ Main (Canonical History)   │                    │ ├─ User Memories      │
 │ ├─ Vision (Transient Media)   │                    │ ├─ Topic Summaries    │
 │ ├─ Video (Bounded Frames)     │                    │ └─ Canonical Messages │
-│ ├─ Audio STT (Transcription)  │                    └───────────────────────┘
+│ ├─ Audio STT (Transcription)  │                    └────────────────────┘
 │ ├─ Image Gen (OpenAI/Fallback)│
 │ └─ Curator (Fact Extraction)  │
-└───────────────────────────────┘
+└──────────────────────────┘
 ```
 
 ---
