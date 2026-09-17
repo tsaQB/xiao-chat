@@ -11,3 +11,5 @@ picked_*.jpg
 preview_styles.py
 .crush/
 picoclaw/
+.agents/
+skills-lock.json
