@@ -311,22 +311,29 @@ fn read_text_entry_bounded<R: Read + ?Sized>(
         Ok(bytes_read) => {
             budget.total_uncompressed = budget.total_uncompressed.saturating_add(bytes_read);
             if bytes_read <= MAX_ARCHIVE_SINGLE_ENTRY_BYTES && is_valid_text_bytes(&buf) {
-                if let Ok(text) = String::from_utf8(buf) {
-                    if budget.total_extracted_chars.saturating_add(text.len())
-                        > MAX_ARCHIVE_OUTPUT_CHARS
-                    {
-                        budget.budget_exhausted = Some(
-                            "Batas kapasitas konteks teks tercapai; sisa berkas hanya dicatat pada struktur direktori."
-                                .to_string(),
-                        );
-                        (ArchiveEntryCategory::Text, None)
-                    } else {
-                        budget.total_extracted_chars =
-                            budget.total_extracted_chars.saturating_add(text.len());
-                        (ArchiveEntryCategory::Text, Some(text))
-                    }
+                let slice = if buf.starts_with(b"\xef\xbb\xbf") {
+                    &buf[3..]
                 } else {
-                    (ArchiveEntryCategory::Binary, None)
+                    &buf[..]
+                };
+                let text = match std::str::from_utf8(slice) {
+                    Ok(valid) => valid.trim_start_matches('\u{feff}').to_string(),
+                    Err(_) => String::from_utf8_lossy(slice)
+                        .trim_start_matches('\u{feff}')
+                        .to_string(),
+                };
+                if budget.total_extracted_chars.saturating_add(text.len())
+                    > MAX_ARCHIVE_OUTPUT_CHARS
+                {
+                    budget.budget_exhausted = Some(
+                        "Batas kapasitas konteks teks tercapai; sisa berkas hanya dicatat pada struktur direktori."
+                            .to_string(),
+                    );
+                    (ArchiveEntryCategory::Text, None)
+                } else {
+                    budget.total_extracted_chars =
+                        budget.total_extracted_chars.saturating_add(text.len());
+                    (ArchiveEntryCategory::Text, Some(text))
                 }
             } else {
                 (ArchiveEntryCategory::Binary, None)
@@ -390,6 +397,7 @@ fn extract_zip(
         let (category, text_content) = if initial_category == ArchiveEntryCategory::Text {
             read_text_entry_bounded(&mut file, size, &mut budget)
         } else {
+            budget.total_uncompressed = budget.total_uncompressed.saturating_add(size as usize);
             (initial_category, None)
         };
 
@@ -545,14 +553,8 @@ fn extract_7z(data: &[u8]) -> Result<(Vec<ExtractedArchiveItem>, ArchiveExtracti
 }
 
 fn is_valid_text_bytes(bytes: &[u8]) -> bool {
-    if bytes.is_empty() {
-        return true;
-    }
-    // Reject binary null bytes
-    if bytes.contains(&0) {
-        return false;
-    }
-    std::str::from_utf8(bytes).is_ok()
+    // Reject binary null bytes; non-null text streams are safely lossy-decoded
+    !bytes.contains(&0)
 }
 
 pub fn build_archive_text_output(
@@ -794,5 +796,41 @@ mod tests {
         assert!(result.contains("hello.rs"));
         assert!(result.contains("--- BERKAS: hello.rs ---"));
         assert!(result.contains("Halo Xiao"));
+    }
+
+    #[test]
+    fn archive_extracts_bom_and_lossy_text_while_rejecting_binary() {
+        let cursor = Cursor::new(Vec::<u8>::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        // File 1: Text with UTF-8 BOM
+        writer.start_file("bom.txt", options).unwrap();
+        writer.write_all(b"\xef\xbb\xbfHello with BOM").unwrap();
+
+        // File 2: Non-UTF8 text (Latin-1: "Caf\xe9")
+        writer.start_file("latin1.txt", options).unwrap();
+        writer.write_all(b"Caf\xe9 au lait").unwrap();
+
+        // File 3: File with unknown extension containing null byte (exercises runtime null-byte detection)
+        writer.start_file("binary.xyz", options).unwrap();
+        writer.write_all(b"abc\x00def").unwrap();
+
+        let bytes = writer.finish().unwrap().into_inner();
+        let result = extract_archive(&bytes, ArchiveKind::Zip, "test_encoding.zip").unwrap();
+
+        assert!(result.contains("bom.txt"));
+        assert!(result.contains("--- BERKAS: bom.txt ---"));
+        assert!(result.contains("Hello with BOM"));
+        assert!(!result.contains("\u{feff}"));
+
+        assert!(result.contains("latin1.txt"));
+        assert!(result.contains("--- BERKAS: latin1.txt ---"));
+        assert!(result.contains("Caf"));
+
+        assert!(result.contains("binary.xyz"));
+        assert!(result.contains("[Biner / Media]"));
+        assert!(!result.contains("--- BERKAS: binary.xyz ---"));
     }
 }

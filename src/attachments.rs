@@ -128,7 +128,6 @@ pub async fn delete_scoped_attachments(chat_id: i64, thread_id: i64) {
     let _ = tokio::fs::remove_dir_all(scope_dir(chat_id, thread_id)).await;
 }
 
-#[allow(dead_code)]
 pub async fn delete_session_attachments(user_id: i64, session_id: usize) {
     let base = attachment_root()
         .join(user_id.to_string())

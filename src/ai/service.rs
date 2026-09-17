@@ -2292,8 +2292,8 @@ impl AIChatService {
 
             if turn == 0 && supports_tools {
                 payload["tools"] = crate::ai::tools::get_tools_definition();
-            } else {
-                payload.as_object_mut().map(|m| m.remove("tools"));
+            } else if let Some(obj) = payload.as_object_mut() {
+                obj.remove("tools");
             }
 
             let mut response = None;
@@ -2354,7 +2354,9 @@ impl AIChatService {
                         warn!(
                             "Provider rejected tools parameter (HTTP 400); retrying without tools"
                         );
-                        payload.as_object_mut().unwrap().remove("tools");
+                        if let Some(obj) = payload.as_object_mut() {
+                            obj.remove("tools");
+                        }
                         continue;
                     }
                     Ok(resp) => {
@@ -2706,7 +2708,9 @@ impl AIChatService {
                 }));
 
                 payload["messages"] = json!(messages);
-                payload.as_object_mut().unwrap().remove("tools");
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.remove("tools");
+                }
 
                 if let Some(s) = sink {
                     s.on_action("Summarizing", Some(ProgressActivity::Summarizing));

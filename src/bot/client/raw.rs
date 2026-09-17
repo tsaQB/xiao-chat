@@ -123,6 +123,42 @@ impl TelegramBotClient {
         }
     }
 
+    fn apply_form_delivery_context(
+        mut form: Form,
+        reply_to_message_id: Option<i64>,
+        include_ephemeral: bool,
+    ) -> Form {
+        let context = Self::current_delivery_context();
+        if let Some(thread_id) = context.message_thread_id {
+            form = form.text("message_thread_id", thread_id.to_string());
+        }
+        if include_ephemeral {
+            if let Some(receiver_user_id) = context.receiver_user_id {
+                if let Ok(ephemeral) = serde_json::to_string(&EphemeralMessageParameters {
+                    receiver_user_id,
+                    callback_query_id: context.callback_query_id.clone(),
+                    replace_callback_query_message: None,
+                }) {
+                    form = form.text("ephemeral_message_parameters", ephemeral);
+                }
+            }
+        }
+        let reply_parameters = if include_ephemeral && context.source_ephemeral_message_id.is_some()
+        {
+            context
+                .source_ephemeral_message_id
+                .map(ReplyParameters::ephemeral)
+        } else {
+            reply_to_message_id.map(ReplyParameters::new)
+        };
+        if let Some(reply_parameters) = reply_parameters {
+            if let Ok(serialized) = serde_json::to_string(&reply_parameters) {
+                form = form.text("reply_parameters", serialized);
+            }
+        }
+        form
+    }
+
     pub fn new(token: impl Into<String>) -> Self {
         let token_str = token.into().trim().to_string();
         let base_url = format!("https://api.telegram.org/bot{}", token_str);
@@ -471,40 +507,16 @@ impl TelegramBotClient {
             .mime_str(mime_type)
             .map_err(|e| e.to_string())?;
 
-        let mut form = Form::new()
+        let form = Form::new()
             .text("chat_id", chat_id.to_string())
             .part("photo", part);
+        let mut form = Self::apply_form_delivery_context(form, reply_to_message_id, true);
 
         if let Some(cap) = caption {
             form = form.text("caption", cap.to_string());
         }
         if let Some(pm) = parse_mode {
             form = form.text("parse_mode", pm.to_string());
-        }
-        let delivery = Self::current_delivery_context();
-        if let Some(thread_id) = delivery.message_thread_id {
-            form = form.text("message_thread_id", thread_id.to_string());
-        }
-        if let Some(receiver_user_id) = delivery.receiver_user_id {
-            let ephemeral = serde_json::to_string(&EphemeralMessageParameters {
-                receiver_user_id,
-                callback_query_id: delivery.callback_query_id.clone(),
-                replace_callback_query_message: None,
-            })
-            .map_err(|e| e.to_string())?;
-            form = form.text("ephemeral_message_parameters", ephemeral);
-        }
-        let reply_parameters =
-            if let Some(ephemeral_message_id) = delivery.source_ephemeral_message_id {
-                Some(ReplyParameters::ephemeral(ephemeral_message_id))
-            } else {
-                reply_to_message_id.map(ReplyParameters::new)
-            };
-        if let Some(reply_parameters) = reply_parameters {
-            form = form.text(
-                "reply_parameters",
-                serde_json::to_string(&reply_parameters).map_err(|e| e.to_string())?,
-            );
         }
         if let Some(rm) = reply_markup {
             form = form.text("reply_markup", rm.to_string());
@@ -536,20 +548,49 @@ impl TelegramBotClient {
         url: &str,
         max_bytes: usize,
     ) -> Option<(Vec<u8>, String, String)> {
-        let resolved = resolve_download_url(url).await.ok()?;
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .resolve(&resolved.host, resolved.address)
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .build()
-            .ok()?;
+        let mut current_url_str = url.trim().to_string();
+        let mut redirect_count = 0;
+        const MAX_DOWNLOAD_REDIRECTS: usize = 5;
 
-        let resp = client.get(resolved.url).send().await.ok()?;
-        if !resp.status().is_success() {
-            return None;
-        }
+        let resp = loop {
+            let resolved = resolve_download_url(&current_url_str).await.ok()?;
+            let client = Client::builder()
+                .timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .no_proxy()
+                .resolve(&resolved.host, resolved.address)
+                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .build()
+                .ok()?;
+
+            let response = client.get(resolved.url.clone()).send().await.ok()?;
+            let status = response.status();
+            if matches!(
+                status,
+                reqwest::StatusCode::MOVED_PERMANENTLY
+                    | reqwest::StatusCode::FOUND
+                    | reqwest::StatusCode::TEMPORARY_REDIRECT
+                    | reqwest::StatusCode::PERMANENT_REDIRECT
+            ) {
+                if redirect_count >= MAX_DOWNLOAD_REDIRECTS {
+                    return None;
+                }
+                redirect_count += 1;
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|h| h.to_str().ok())?;
+                let next_url = resolved.url.join(location).ok()?;
+                current_url_str = next_url.to_string();
+                continue;
+            }
+
+            if !status.is_success() {
+                return None;
+            }
+
+            break response;
+        };
 
         let content_type = resp
             .headers()
@@ -643,27 +684,29 @@ impl TelegramBotClient {
 
         match self.post_json("sendPhoto", payload).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                if photo.starts_with("http://") || photo.starts_with("https://") {
-                    info!("sendPhoto direct URL failed ({e}); attempting download-and-upload...");
-                    if let Some((bytes, _, _)) = self
-                        .download_media_bytes(photo, MAX_TELEGRAM_DOWNLOAD_BYTES)
-                        .await
-                    {
-                        return self
-                            .send_photo_bytes(
-                                chat_id,
-                                bytes,
-                                caption,
-                                parse_mode,
-                                reply_markup,
-                                reply_to_message_id,
-                            )
-                            .await;
-                    }
+            Err(e)
+                if fallback_allowed_error(&e)
+                    && (photo.starts_with("http://") || photo.starts_with("https://")) =>
+            {
+                info!("sendPhoto direct URL failed ({e}); attempting download-and-upload...");
+                if let Some((bytes, _, _)) = self
+                    .download_media_bytes(photo, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                    .await
+                {
+                    return self
+                        .send_photo_bytes(
+                            chat_id,
+                            bytes,
+                            caption,
+                            parse_mode,
+                            reply_markup,
+                            reply_to_message_id,
+                        )
+                        .await;
                 }
                 Err(e)
             }
+            Err(e) => Err(e),
         }
     }
 
@@ -690,13 +733,9 @@ impl TelegramBotClient {
 
         match self.post_json("sendMediaGroup", payload).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                info!("sendMediaGroup direct URL failed ({e}); attempting multipart upload...");
-                let mut form = Form::new().text("chat_id", chat_id.to_string());
-                let delivery = Self::current_delivery_context();
-                if let Some(thread_id) = delivery.message_thread_id {
-                    form = form.text("message_thread_id", thread_id.to_string());
-                }
+            Err(e) if fallback_allowed_error(&e) => {
+                let form = Form::new().text("chat_id", chat_id.to_string());
+                let mut form = Self::apply_form_delivery_context(form, reply_to_message_id, false);
 
                 let mut updated_media = Vec::new();
                 let mut attachments = Vec::new();
@@ -771,6 +810,7 @@ impl TelegramBotClient {
                     )),
                 }
             }
+            Err(e) => Err(e),
         }
     }
 
@@ -817,50 +857,54 @@ impl TelegramBotClient {
 
         match self.post_json("sendAudio", payload).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                if audio.starts_with("http://") || audio.starts_with("https://") {
-                    info!("sendAudio direct URL failed ({e}); attempting download-and-upload...");
-                    if let Some((bytes, mime, fname)) = self
-                        .download_media_bytes(audio, MAX_TELEGRAM_DOWNLOAD_BYTES)
-                        .await
-                    {
-                        let url = format!("{}/sendAudio", self.base_url);
-                        let part = Part::bytes(bytes)
-                            .file_name(fname)
-                            .mime_str(&mime)
-                            .map_err(|e| e.to_string())?;
-                        let mut form = Form::new()
-                            .text("chat_id", chat_id.to_string())
-                            .part("audio", part);
-                        if let Some(cap) = caption {
-                            form = form.text("caption", cap.to_string());
-                        }
-                        if let Some(pm) = parse_mode {
-                            form = form.text("parse_mode", pm.to_string());
-                        }
-                        if let Some(t) = title {
-                            form = form.text("title", t.to_string());
-                        }
-                        if let Some(p) = performer {
-                            form = form.text("performer", p.to_string());
-                        }
-                        if let Some(d) = duration {
-                            form = form.text("duration", d.to_string());
-                        }
-                        if let Some(rm) = reply_markup {
-                            form = form.text("reply_markup", rm.to_string());
-                        }
-                        if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
-                            if let Ok(response) = resp.json::<Value>().await {
-                                if response.get("ok").and_then(Value::as_bool) == Some(true) {
-                                    return Ok(response);
-                                }
+            Err(e)
+                if fallback_allowed_error(&e)
+                    && (audio.starts_with("http://") || audio.starts_with("https://")) =>
+            {
+                info!("sendAudio direct URL failed ({e}); attempting download-and-upload...");
+                if let Some((bytes, mime, fname)) = self
+                    .download_media_bytes(audio, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                    .await
+                {
+                    let url = format!("{}/sendAudio", self.base_url);
+                    let part = Part::bytes(bytes)
+                        .file_name(fname)
+                        .mime_str(&mime)
+                        .map_err(|e| e.to_string())?;
+                    let form = Form::new()
+                        .text("chat_id", chat_id.to_string())
+                        .part("audio", part);
+                    let mut form =
+                        Self::apply_form_delivery_context(form, reply_to_message_id, true);
+                    if let Some(cap) = caption {
+                        form = form.text("caption", cap.to_string());
+                    }
+                    if let Some(pm) = parse_mode {
+                        form = form.text("parse_mode", pm.to_string());
+                    }
+                    if let Some(t) = title {
+                        form = form.text("title", t.to_string());
+                    }
+                    if let Some(p) = performer {
+                        form = form.text("performer", p.to_string());
+                    }
+                    if let Some(d) = duration {
+                        form = form.text("duration", d.to_string());
+                    }
+                    if let Some(rm) = reply_markup {
+                        form = form.text("reply_markup", rm.to_string());
+                    }
+                    if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
+                        if let Ok(response) = resp.json::<Value>().await {
+                            if response.get("ok").and_then(Value::as_bool) == Some(true) {
+                                return Ok(response);
                             }
                         }
                     }
                 }
                 Err(e)
             }
+            Err(e) => Err(e),
         }
     }
 
@@ -899,43 +943,47 @@ impl TelegramBotClient {
 
         match self.post_json("sendVoice", payload).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                if voice.starts_with("http://") || voice.starts_with("https://") {
-                    if let Some((bytes, mime, fname)) = self
-                        .download_media_bytes(voice, MAX_TELEGRAM_DOWNLOAD_BYTES)
-                        .await
-                    {
-                        let url = format!("{}/sendVoice", self.base_url);
-                        let part = Part::bytes(bytes)
-                            .file_name(fname)
-                            .mime_str(&mime)
-                            .map_err(|e| e.to_string())?;
-                        let mut form = Form::new()
-                            .text("chat_id", chat_id.to_string())
-                            .part("voice", part);
-                        if let Some(cap) = caption {
-                            form = form.text("caption", cap.to_string());
-                        }
-                        if let Some(pm) = parse_mode {
-                            form = form.text("parse_mode", pm.to_string());
-                        }
-                        if let Some(d) = duration {
-                            form = form.text("duration", d.to_string());
-                        }
-                        if let Some(rm) = reply_markup {
-                            form = form.text("reply_markup", rm.to_string());
-                        }
-                        if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
-                            if let Ok(response) = resp.json::<Value>().await {
-                                if response.get("ok").and_then(Value::as_bool) == Some(true) {
-                                    return Ok(response);
-                                }
+            Err(e)
+                if fallback_allowed_error(&e)
+                    && (voice.starts_with("http://") || voice.starts_with("https://")) =>
+            {
+                if let Some((bytes, mime, fname)) = self
+                    .download_media_bytes(voice, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                    .await
+                {
+                    let url = format!("{}/sendVoice", self.base_url);
+                    let part = Part::bytes(bytes)
+                        .file_name(fname)
+                        .mime_str(&mime)
+                        .map_err(|e| e.to_string())?;
+                    let form = Form::new()
+                        .text("chat_id", chat_id.to_string())
+                        .part("voice", part);
+                    let mut form =
+                        Self::apply_form_delivery_context(form, reply_to_message_id, true);
+                    if let Some(cap) = caption {
+                        form = form.text("caption", cap.to_string());
+                    }
+                    if let Some(pm) = parse_mode {
+                        form = form.text("parse_mode", pm.to_string());
+                    }
+                    if let Some(d) = duration {
+                        form = form.text("duration", d.to_string());
+                    }
+                    if let Some(rm) = reply_markup {
+                        form = form.text("reply_markup", rm.to_string());
+                    }
+                    if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
+                        if let Ok(response) = resp.json::<Value>().await {
+                            if response.get("ok").and_then(Value::as_bool) == Some(true) {
+                                return Ok(response);
                             }
                         }
                     }
                 }
                 Err(e)
             }
+            Err(e) => Err(e),
         }
     }
 
@@ -969,40 +1017,44 @@ impl TelegramBotClient {
 
         match self.post_json("sendVideo", payload).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                if video.starts_with("http://") || video.starts_with("https://") {
-                    if let Some((bytes, mime, fname)) = self
-                        .download_media_bytes(video, MAX_TELEGRAM_DOWNLOAD_BYTES)
-                        .await
-                    {
-                        let url = format!("{}/sendVideo", self.base_url);
-                        let part = Part::bytes(bytes)
-                            .file_name(fname)
-                            .mime_str(&mime)
-                            .map_err(|e| e.to_string())?;
-                        let mut form = Form::new()
-                            .text("chat_id", chat_id.to_string())
-                            .part("video", part);
-                        if let Some(cap) = caption {
-                            form = form.text("caption", cap.to_string());
-                        }
-                        if let Some(pm) = parse_mode {
-                            form = form.text("parse_mode", pm.to_string());
-                        }
-                        if let Some(rm) = reply_markup {
-                            form = form.text("reply_markup", rm.to_string());
-                        }
-                        if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
-                            if let Ok(response) = resp.json::<Value>().await {
-                                if response.get("ok").and_then(Value::as_bool) == Some(true) {
-                                    return Ok(response);
-                                }
+            Err(e)
+                if fallback_allowed_error(&e)
+                    && (video.starts_with("http://") || video.starts_with("https://")) =>
+            {
+                if let Some((bytes, mime, fname)) = self
+                    .download_media_bytes(video, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                    .await
+                {
+                    let url = format!("{}/sendVideo", self.base_url);
+                    let part = Part::bytes(bytes)
+                        .file_name(fname)
+                        .mime_str(&mime)
+                        .map_err(|e| e.to_string())?;
+                    let form = Form::new()
+                        .text("chat_id", chat_id.to_string())
+                        .part("video", part);
+                    let mut form =
+                        Self::apply_form_delivery_context(form, reply_to_message_id, true);
+                    if let Some(cap) = caption {
+                        form = form.text("caption", cap.to_string());
+                    }
+                    if let Some(pm) = parse_mode {
+                        form = form.text("parse_mode", pm.to_string());
+                    }
+                    if let Some(rm) = reply_markup {
+                        form = form.text("reply_markup", rm.to_string());
+                    }
+                    if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
+                        if let Ok(response) = resp.json::<Value>().await {
+                            if response.get("ok").and_then(Value::as_bool) == Some(true) {
+                                return Ok(response);
                             }
                         }
                     }
                 }
                 Err(e)
             }
+            Err(e) => Err(e),
         }
     }
 
@@ -1036,40 +1088,44 @@ impl TelegramBotClient {
 
         match self.post_json("sendAnimation", payload).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                if animation.starts_with("http://") || animation.starts_with("https://") {
-                    if let Some((bytes, mime, fname)) = self
-                        .download_media_bytes(animation, MAX_TELEGRAM_DOWNLOAD_BYTES)
-                        .await
-                    {
-                        let url = format!("{}/sendAnimation", self.base_url);
-                        let part = Part::bytes(bytes)
-                            .file_name(fname)
-                            .mime_str(&mime)
-                            .map_err(|e| e.to_string())?;
-                        let mut form = Form::new()
-                            .text("chat_id", chat_id.to_string())
-                            .part("animation", part);
-                        if let Some(cap) = caption {
-                            form = form.text("caption", cap.to_string());
-                        }
-                        if let Some(pm) = parse_mode {
-                            form = form.text("parse_mode", pm.to_string());
-                        }
-                        if let Some(rm) = reply_markup {
-                            form = form.text("reply_markup", rm.to_string());
-                        }
-                        if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
-                            if let Ok(response) = resp.json::<Value>().await {
-                                if response.get("ok").and_then(Value::as_bool) == Some(true) {
-                                    return Ok(response);
-                                }
+            Err(e)
+                if fallback_allowed_error(&e)
+                    && (animation.starts_with("http://") || animation.starts_with("https://")) =>
+            {
+                if let Some((bytes, mime, fname)) = self
+                    .download_media_bytes(animation, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                    .await
+                {
+                    let url = format!("{}/sendAnimation", self.base_url);
+                    let part = Part::bytes(bytes)
+                        .file_name(fname)
+                        .mime_str(&mime)
+                        .map_err(|e| e.to_string())?;
+                    let form = Form::new()
+                        .text("chat_id", chat_id.to_string())
+                        .part("animation", part);
+                    let mut form =
+                        Self::apply_form_delivery_context(form, reply_to_message_id, true);
+                    if let Some(cap) = caption {
+                        form = form.text("caption", cap.to_string());
+                    }
+                    if let Some(pm) = parse_mode {
+                        form = form.text("parse_mode", pm.to_string());
+                    }
+                    if let Some(rm) = reply_markup {
+                        form = form.text("reply_markup", rm.to_string());
+                    }
+                    if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
+                        if let Ok(response) = resp.json::<Value>().await {
+                            if response.get("ok").and_then(Value::as_bool) == Some(true) {
+                                return Ok(response);
                             }
                         }
                     }
                 }
                 Err(e)
             }
+            Err(e) => Err(e),
         }
     }
 
@@ -1136,40 +1192,44 @@ impl TelegramBotClient {
 
         match self.post_json("sendDocument", payload).await {
             Ok(res) => Ok(res),
-            Err(e) => {
-                if document.starts_with("http://") || document.starts_with("https://") {
-                    if let Some((bytes, mime, fname)) = self
-                        .download_media_bytes(document, MAX_TELEGRAM_DOWNLOAD_BYTES)
-                        .await
-                    {
-                        let url = format!("{}/sendDocument", self.base_url);
-                        let part = Part::bytes(bytes)
-                            .file_name(fname)
-                            .mime_str(&mime)
-                            .map_err(|e| e.to_string())?;
-                        let mut form = Form::new()
-                            .text("chat_id", chat_id.to_string())
-                            .part("document", part);
-                        if let Some(cap) = caption {
-                            form = form.text("caption", cap.to_string());
-                        }
-                        if let Some(pm) = parse_mode {
-                            form = form.text("parse_mode", pm.to_string());
-                        }
-                        if let Some(rm) = reply_markup {
-                            form = form.text("reply_markup", rm.to_string());
-                        }
-                        if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
-                            if let Ok(response) = resp.json::<Value>().await {
-                                if response.get("ok").and_then(Value::as_bool) == Some(true) {
-                                    return Ok(response);
-                                }
+            Err(e)
+                if fallback_allowed_error(&e)
+                    && (document.starts_with("http://") || document.starts_with("https://")) =>
+            {
+                if let Some((bytes, mime, fname)) = self
+                    .download_media_bytes(document, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                    .await
+                {
+                    let url = format!("{}/sendDocument", self.base_url);
+                    let part = Part::bytes(bytes)
+                        .file_name(fname)
+                        .mime_str(&mime)
+                        .map_err(|e| e.to_string())?;
+                    let form = Form::new()
+                        .text("chat_id", chat_id.to_string())
+                        .part("document", part);
+                    let mut form =
+                        Self::apply_form_delivery_context(form, reply_to_message_id, true);
+                    if let Some(cap) = caption {
+                        form = form.text("caption", cap.to_string());
+                    }
+                    if let Some(pm) = parse_mode {
+                        form = form.text("parse_mode", pm.to_string());
+                    }
+                    if let Some(rm) = reply_markup {
+                        form = form.text("reply_markup", rm.to_string());
+                    }
+                    if let Ok(resp) = self.client.post(&url).multipart(form).send().await {
+                        if let Ok(response) = resp.json::<Value>().await {
+                            if response.get("ok").and_then(Value::as_bool) == Some(true) {
+                                return Ok(response);
                             }
                         }
                     }
                 }
                 Err(e)
             }
+            Err(e) => Err(e),
         }
     }
 
