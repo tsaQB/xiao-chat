@@ -1195,9 +1195,39 @@ impl TelegramBotClient {
         can_stop: bool,
         keep_on_stop: bool,
     ) -> Result<Value, String> {
-        self.inner
-            .send_rich_message_draft(chat_id, draft_id, rich_message, can_stop, keep_on_stop)
-            .await
+        rich_message.validate()?;
+        let rich_json = serde_json::to_value(rich_message).map_err(|e| e.to_string())?;
+        let mut payload = json!({
+            "chat_id": chat_id,
+            "draft_id": draft_id,
+            "rich_message": rich_json,
+            "can_stop": can_stop,
+            "keep_on_stop": keep_on_stop,
+        });
+        Self::apply_delivery_context(&mut payload, false);
+
+        let res = self.post_json_raw("sendRichMessageDraft", payload).await?;
+        if res.get("ok").and_then(Value::as_bool) == Some(true) {
+            return Ok(res);
+        }
+
+        if !fallback_allowed_response(&res) {
+            return Err(Self::telegram_api_error("sendRichMessageDraft", &res));
+        }
+
+        let mut fallback_text = rich_message.extract_plain_text();
+        if fallback_text.trim().is_empty() {
+            fallback_text = "Thinking...".to_string();
+        }
+        self.send_message_draft(
+            chat_id,
+            draft_id,
+            &fallback_text,
+            Some("HTML"),
+            can_stop,
+            keep_on_stop,
+        )
+        .await
     }
 
     pub async fn send_message_draft(
@@ -1209,9 +1239,24 @@ impl TelegramBotClient {
         can_stop: bool,
         keep_on_stop: bool,
     ) -> Result<Value, String> {
-        self.inner
-            .send_message_draft(chat_id, draft_id, text, parse_mode, can_stop, keep_on_stop)
-            .await
+        let mut payload = json!({
+            "chat_id": chat_id,
+            "draft_id": draft_id,
+            "text": text,
+            "can_stop": can_stop,
+            "keep_on_stop": keep_on_stop,
+        });
+        if let Some(pm) = parse_mode {
+            payload["parse_mode"] = json!(pm);
+        }
+        Self::apply_delivery_context(&mut payload, false);
+
+        let res = self.post_json_raw("sendMessageDraft", payload).await?;
+        if res.get("ok").and_then(Value::as_bool) == Some(true) {
+            Ok(res)
+        } else {
+            Err(Self::telegram_api_error("sendMessageDraft", &res))
+        }
     }
 
     pub async fn send_rich_message(
@@ -1222,15 +1267,172 @@ impl TelegramBotClient {
         receiver_user_id: Option<i64>,
         reply_to_message_id: Option<i64>,
     ) -> Result<Value, String> {
-        self.inner
-            .send_rich_message(
-                chat_id,
-                rich_message,
-                reply_markup,
-                receiver_user_id,
-                reply_to_message_id,
-            )
-            .await
+        let validation = rich_message.validate();
+        if validation.is_ok() {
+            let rich_json = serde_json::to_value(rich_message).map_err(|e| e.to_string())?;
+            let mut payload = json!({
+                "chat_id": chat_id,
+                "rich_message": rich_json,
+            });
+            if let Some(ref rm) = reply_markup {
+                payload["reply_markup"] = rm.clone();
+            }
+            if let Some(recv) = receiver_user_id {
+                payload["ephemeral_message_parameters"] =
+                    serde_json::to_value(EphemeralMessageParameters {
+                        receiver_user_id: recv,
+                        callback_query_id: Self::current_delivery_context().callback_query_id,
+                        replace_callback_query_message: None,
+                    })
+                    .unwrap_or(json!({}));
+            }
+            if let Some(rep) = reply_to_message_id {
+                payload["reply_parameters"] =
+                    serde_json::to_value(ReplyParameters::new(rep)).unwrap_or(json!({}));
+            }
+            Self::apply_delivery_context(&mut payload, true);
+
+            match self.post_json_raw("sendRichMessage", payload).await {
+                Ok(res) if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) => {
+                    return Ok(res);
+                }
+                Ok(res) if !fallback_allowed_response(&res) => {
+                    return Err(Self::telegram_api_error("sendRichMessage", &res));
+                }
+                Ok(res) => {
+                    let desc = res
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    tracing::info!(
+                        "Telegram rejected Rich Message ({desc}); checking zero-download link conversion."
+                    );
+                }
+                Err(error) if !fallback_allowed_error(&error) => {
+                    return Err(error);
+                }
+                Err(error) => {
+                    tracing::info!(
+                        "Rich Message request failed ({error}); checking zero-download link conversion."
+                    );
+                }
+            }
+
+            if rich_message.has_media() {
+                let converted_msg = self.inner.convert_remote_media_to_rich_links(rich_message);
+                if let Ok(rich_json) = serde_json::to_value(&converted_msg) {
+                    let mut retry_payload = json!({
+                        "chat_id": chat_id,
+                        "rich_message": rich_json,
+                    });
+                    if let Some(ref rm) = reply_markup {
+                        retry_payload["reply_markup"] = rm.clone();
+                    }
+                    if let Some(recv) = receiver_user_id {
+                        retry_payload["ephemeral_message_parameters"] =
+                            serde_json::to_value(EphemeralMessageParameters {
+                                receiver_user_id: recv,
+                                callback_query_id: Self::current_delivery_context()
+                                    .callback_query_id,
+                                replace_callback_query_message: None,
+                            })
+                            .unwrap_or(json!({}));
+                    }
+                    if let Some(rep) = reply_to_message_id {
+                        retry_payload["reply_parameters"] =
+                            serde_json::to_value(ReplyParameters::new(rep)).unwrap_or(json!({}));
+                    }
+                    Self::apply_delivery_context(&mut retry_payload, true);
+                    match self.post_json_raw("sendRichMessage", retry_payload).await {
+                        Ok(res) if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) => {
+                            tracing::info!(
+                                "Zero-download link conversion sendRichMessage succeeded seamlessly."
+                            );
+                            return Ok(res);
+                        }
+                        Ok(res) if !fallback_allowed_response(&res) => {
+                            return Err(Self::telegram_api_error("sendRichMessage", &res));
+                        }
+                        Ok(res) => {
+                            let desc = res
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown");
+                            tracing::warn!(
+                                "Zero-download sendRichMessage retry rejected ({desc}); degrading to safe HTML."
+                            );
+                        }
+                        Err(err) if !fallback_allowed_error(&err) => {
+                            return Err(err);
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "Zero-download sendRichMessage retry request failed ({err}); degrading to safe HTML."
+                            );
+                        }
+                    }
+                }
+            }
+        } else if let Err(error) = validation {
+            if rich_message.blocks.is_empty() {
+                return Err(error);
+            }
+            tracing::info!("Rich Message validation required degradation: {error}");
+        }
+
+        let html_chunks = self
+            .inner
+            .render_blocks_to_html_chunks(&rich_message.blocks, 3800);
+        let total = html_chunks.len();
+        let mut html_last = json!({ "ok": true });
+        let mut html_failed = false;
+        for (idx, chunk) in html_chunks.into_iter().enumerate() {
+            let is_last = idx + 1 == total;
+            let is_first = idx == 0;
+            match self
+                .send_message(
+                    chat_id,
+                    &chunk,
+                    Some("HTML"),
+                    if is_last { reply_markup.clone() } else { None },
+                    receiver_user_id,
+                    if is_first { reply_to_message_id } else { None },
+                )
+                .await
+            {
+                Ok(response) => html_last = response,
+                Err(error) => {
+                    tracing::info!(
+                        "HTML fallback failed ({error}); degrading to semantic plain text."
+                    );
+                    html_failed = true;
+                    break;
+                }
+            }
+        }
+        if !html_failed {
+            return Ok(html_last);
+        }
+
+        let plain = rich_message.extract_plain_text();
+        let plain_chunks = self.inner.split_text_chunks(&plain, 3800);
+        let total = plain_chunks.len();
+        let mut last = json!({ "ok": true });
+        for (idx, chunk) in plain_chunks.into_iter().enumerate() {
+            let is_last = idx + 1 == total;
+            let is_first = idx == 0;
+            last = self
+                .send_message(
+                    chat_id,
+                    &chunk,
+                    None,
+                    if is_last { reply_markup.clone() } else { None },
+                    receiver_user_id,
+                    if is_first { reply_to_message_id } else { None },
+                )
+                .await?;
+        }
+        Ok(last)
     }
 
     pub async fn set_my_commands(&self, commands: &[BotCommand]) -> Result<Value, String> {

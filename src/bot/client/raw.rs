@@ -11,6 +11,10 @@ use super::models::{
     InputRichMessage, ReplyParameters, RichBlock, RichBlockCaption, RichBlockTableCell, Update,
     User,
 };
+use super::transport_policy::{
+    fallback_allowed_error, fallback_allowed_response, retry_delay_for_http_status,
+    retry_delay_from_error, retry_delay_from_response, MAX_TELEGRAM_ATTEMPTS,
+};
 use super::url_policy::resolve_download_url;
 use futures_util::StreamExt;
 
@@ -157,24 +161,77 @@ impl TelegramBotClient {
 
     async fn post_json_raw(&self, method: &str, payload: Value) -> Result<Value, String> {
         let url = format!("{}/{}", self.base_url, method);
-        match self.client.post(&url).json(&payload).send().await {
-            Ok(resp) => match read_bounded_json_response(resp, MAX_TELEGRAM_RESPONSE_BYTES).await {
-                Ok(json_res) => Ok(json_res),
-                Err(err_msg) => {
-                    error!("Failed to parse response JSON for {method}: {err_msg}");
-                    Err(format!(
-                        "Failed to parse response JSON for {method}: {err_msg}"
-                    ))
+        let mut last_error = None;
+        for attempt in 0..MAX_TELEGRAM_ATTEMPTS {
+            match self.client.post(&url).json(&payload).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let retry_after_header = resp
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|h| h.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok());
+
+                    if status.is_server_error() || status.as_u16() == 429 {
+                        if let Some(delay) = retry_delay_for_http_status(
+                            status.as_u16(),
+                            retry_after_header,
+                            attempt,
+                        ) {
+                            warn!(
+                                method,
+                                attempt = attempt + 1,
+                                delay_ms = delay.as_millis(),
+                                "Telegram raw request rate-limited/unavailable; retrying"
+                            );
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        }
+                    }
+
+                    match read_bounded_json_response(resp, MAX_TELEGRAM_RESPONSE_BYTES).await {
+                        Ok(json_res) => {
+                            if let Some(delay) = retry_delay_from_response(&json_res, attempt) {
+                                warn!(
+                                    method,
+                                    attempt = attempt + 1,
+                                    delay_ms = delay.as_millis(),
+                                    "Telegram raw response indicates rate limit; retrying"
+                                );
+                                tokio::time::sleep(delay).await;
+                                continue;
+                            }
+                            return Ok(json_res);
+                        }
+                        Err(err_msg) => {
+                            error!("Failed to parse response JSON for {method}: {err_msg}");
+                            return Err(format!(
+                                "Failed to parse response JSON for {method}: {err_msg}"
+                            ));
+                        }
+                    }
                 }
-            },
-            Err(e) => {
-                // Do not format reqwest::Error directly here: it can contain the full
-                // Telegram URL, and Telegram URLs contain the bot token.
-                let err_msg = format!("HTTP error for {method}: {}", reqwest_error_kind(&e));
-                error!("{err_msg}");
-                Err(err_msg)
+                Err(e) => {
+                    let err_msg = format!("HTTP error for {method}: {}", reqwest_error_kind(&e));
+                    let delay = retry_delay_from_error(&err_msg, attempt);
+                    if let Some(delay) = delay {
+                        warn!(
+                            method,
+                            attempt = attempt + 1,
+                            delay_ms = delay.as_millis(),
+                            "Transient transport error in raw client; retrying"
+                        );
+                        last_error = Some(err_msg);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    error!("{err_msg}");
+                    return Err(err_msg);
+                }
             }
         }
+        Err(last_error
+            .unwrap_or_else(|| format!("Telegram raw request [{method}] exhausted retries")))
     }
 
     async fn post_json(&self, method: &str, payload: Value) -> Result<Value, String> {
@@ -1745,12 +1802,18 @@ impl TelegramBotClient {
                 Ok(res) if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) => {
                     return Ok(res);
                 }
+                Ok(res) if !fallback_allowed_response(&res) => {
+                    return Err(Self::telegram_api_error("sendRichMessage", &res));
+                }
                 Ok(res) => {
                     let desc = res
                         .get("description")
                         .and_then(Value::as_str)
                         .unwrap_or("unknown");
                     info!("Telegram rejected Rich Message ({desc}); checking zero-download link conversion.");
+                }
+                Err(error) if !fallback_allowed_error(&error) => {
+                    return Err(error);
                 }
                 Err(error) => {
                     info!("Rich Message request failed ({error}); checking zero-download link conversion.");
@@ -1787,12 +1850,18 @@ impl TelegramBotClient {
                             info!("Zero-download link conversion sendRichMessage succeeded seamlessly.");
                             return Ok(res);
                         }
+                        Ok(res) if !fallback_allowed_response(&res) => {
+                            return Err(Self::telegram_api_error("sendRichMessage", &res));
+                        }
                         Ok(res) => {
                             let desc = res
                                 .get("description")
                                 .and_then(Value::as_str)
                                 .unwrap_or("unknown");
                             warn!("Zero-download sendRichMessage retry rejected ({desc}); degrading to safe HTML.");
+                        }
+                        Err(err) if !fallback_allowed_error(&err) => {
+                            return Err(err);
                         }
                         Err(err) => {
                             warn!("Zero-download sendRichMessage retry request failed ({err}); degrading to safe HTML.");

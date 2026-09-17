@@ -21,16 +21,40 @@ static RE_HTML_STYLE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<style.*?</style>").unwrap());
 static RE_HTML_HEAD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<head.*?</head>").unwrap());
+static RE_HTML_NOSCRIPT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<noscript.*?</noscript>").unwrap());
+static RE_HTML_BLOCK_BREAK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)</(?:p|div|section|article|blockquote|h[1-6]|tr|table|ul|ol)>|<br\s*/?>|<hr\s*/?>",
+    )
+    .unwrap()
+});
+static RE_HTML_LIST_ITEM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)<li\b[^>]*>").unwrap());
 static RE_HTML_TAGS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
-static RE_WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
+static RE_WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]+").unwrap());
 
 pub fn clean_html_to_text(html: &str) -> String {
     let no_script = RE_HTML_SCRIPT.replace_all(html, "");
     let no_style = RE_HTML_STYLE.replace_all(&no_script, "");
     let no_head = RE_HTML_HEAD.replace_all(&no_style, "");
-    let no_tags = RE_HTML_TAGS.replace_all(&no_head, " ");
+    let no_noscript = RE_HTML_NOSCRIPT.replace_all(&no_head, "");
+    let with_blocks = RE_HTML_BLOCK_BREAK.replace_all(&no_noscript, "\n\n");
+    let with_lists = RE_HTML_LIST_ITEM.replace_all(&with_blocks, "\n• ");
+    let no_tags = RE_HTML_TAGS.replace_all(&with_lists, " ");
     let decoded = html_escape::decode_html_entities(&no_tags);
-    RE_WHITESPACE.replace_all(&decoded, " ").trim().to_string()
+
+    let mut normalized = String::with_capacity(decoded.len());
+    for line in decoded.lines() {
+        let trimmed_line = RE_WHITESPACE.replace_all(line.trim(), " ");
+        if !trimmed_line.is_empty() {
+            normalized.push_str(&trimmed_line);
+            normalized.push('\n');
+        } else if !normalized.ends_with("\n\n") && !normalized.is_empty() {
+            normalized.push('\n');
+        }
+    }
+    normalized.trim().to_string()
 }
 
 pub fn get_tools_definition() -> Value {
@@ -175,6 +199,11 @@ pub async fn execute_web_search(query: &str) -> String {
     }
 }
 
+#[inline]
+fn format_search_item(index: usize, title: &str, url: &str, summary: &str) -> String {
+    format!("{index}. **{title}**\n   URL: {url}\n   Ringkasan: {summary}\n\n")
+}
+
 async fn search_brave(
     client: &reqwest::Client,
     api_key: &str,
@@ -219,13 +248,7 @@ async fn search_brave(
                 .get("description")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            out.push_str(&format!(
-                "{}. **{}**\n   URL: {}\n   Ringkasan: {}\n\n",
-                i + 1,
-                title,
-                url,
-                desc
-            ));
+            out.push_str(&format_search_item(i + 1, title, url, desc));
         }
     }
 
@@ -287,13 +310,7 @@ async fn search_tavily(
                 .unwrap_or("Tanpa Judul");
             let url = item.get("url").and_then(Value::as_str).unwrap_or("");
             let content = item.get("content").and_then(Value::as_str).unwrap_or("");
-            out.push_str(&format!(
-                "{}. **{}**\n   URL: {}\n   Ringkasan: {}\n\n",
-                i + 1,
-                title,
-                url,
-                content
-            ));
+            out.push_str(&format_search_item(i + 1, title, url, content));
         }
     }
 
@@ -353,13 +370,7 @@ async fn search_exa_api(
                 .and_then(Value::as_str)
                 .or_else(|| item.get("text").and_then(Value::as_str))
                 .unwrap_or("");
-            out.push_str(&format!(
-                "{}. **{}**\n   URL: {}\n   Ringkasan: {}\n\n",
-                i + 1,
-                title,
-                url,
-                highlight
-            ));
+            out.push_str(&format_search_item(i + 1, title, url, highlight));
         }
     }
 
@@ -377,12 +388,21 @@ async fn search_exa_api(
 }
 
 async fn search_exa_mcp(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     mcp_url: &str,
     query: &str,
 ) -> Result<String, String> {
+    let resolved = crate::bot::url_policy::resolve_download_url(mcp_url).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .resolve(&resolved.host, resolved.address)
+        .build()
+        .map_err(|e| format!("Gagal menginisialisasi client HTTP Exa MCP: {e}"))?;
+
     let resp = client
-        .post(mcp_url)
+        .post(resolved.url)
         .header(ACCEPT, "application/json, text/event-stream")
         .json(&json!({
             "jsonrpc": "2.0",
@@ -509,11 +529,11 @@ async fn search_duckduckgo(client: &reqwest::Client, query: &str) -> Result<Stri
         .collect();
 
     for i in 0..urls.len().min(snippets.len()) {
-        out.push_str(&format!(
-            "{}. **Hasil Pencarian**\n   URL: {}\n   Ringkasan: {}\n\n",
+        out.push_str(&format_search_item(
             i + 1,
-            urls[i],
-            snippets[i]
+            "Hasil Pencarian",
+            &urls[i],
+            &snippets[i],
         ));
     }
 
@@ -573,12 +593,11 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
                 "https://en.wikipedia.org/wiki/{}",
                 urlencoding::encode(title)
             );
-            out.push_str(&format!(
-                "{}. **{}**\n   URL: {}\n   Ringkasan: {}\n\n",
+            out.push_str(&format_search_item(
                 i + 1,
                 title,
-                page_url,
-                decoded_snippet
+                &page_url,
+                &decoded_snippet,
             ));
         }
     }
@@ -597,46 +616,72 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
 }
 
 const MAX_FETCH_HTML_BYTES: usize = 2 * 1024 * 1024;
+const MAX_FETCH_REDIRECTS: usize = 5;
 
 pub async fn fetch_web_content(url: &str) -> Result<String, String> {
-    let u = url.trim();
-    if !u.starts_with("http://") && !u.starts_with("https://") {
+    let mut current_url_str = url.trim().to_string();
+    if !current_url_str.starts_with("http://") && !current_url_str.starts_with("https://") {
         return Err("URL harus diawali dengan http:// atau https://".to_string());
     }
 
-    let resolved = crate::bot::url_policy::resolve_download_url(u).await?;
+    let mut redirect_count = 0;
+    let resp = loop {
+        let resolved = crate::bot::url_policy::resolve_download_url(&current_url_str).await?;
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .resolve(&resolved.host, resolved.address)
-        .build()
-        .map_err(|e| format!("Gagal menginisialisasi client HTTP: {e}"))?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .resolve(&resolved.host, resolved.address)
+            .build()
+            .map_err(|e| format!("Gagal menginisialisasi client HTTP: {e}"))?;
 
-    let resp = client
-        .get(resolved.url)
-        .header(
-            USER_AGENT,
-            concat!(
-                "xiao/",
-                env!("CARGO_PKG_VERSION"),
-                " (Telegram Bot Assistant)"
-            ),
-        )
-        .header(
-            ACCEPT,
-            "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5",
-        )
-        .header(ACCEPT_LANGUAGE, "id,en-US;q=0.9,en;q=0.8")
-        .send()
-        .await
-        .map_err(|e| format!("Gagal mengunduh halaman web: {e}"))?;
+        let response = client
+            .get(resolved.url.clone())
+            .header(
+                USER_AGENT,
+                concat!(
+                    "xiao/",
+                    env!("CARGO_PKG_VERSION"),
+                    " (Telegram Bot Assistant)"
+                ),
+            )
+            .header(
+                ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5",
+            )
+            .header(ACCEPT_LANGUAGE, "id,en-US;q=0.9,en;q=0.8")
+            .send()
+            .await
+            .map_err(|e| format!("Gagal mengunduh halaman web: {e}"))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        return Err(format!("Halaman web mengembalikan status HTTP {status}"));
-    }
+        let status = response.status();
+        if status.is_redirection() {
+            if redirect_count >= MAX_FETCH_REDIRECTS {
+                return Err("Terlalu banyak pengalihan (redirect loop).".to_string());
+            }
+            redirect_count += 1;
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|h| h.to_str().ok())
+                .ok_or_else(|| "Pengalihan tanpa header Location yang valid".to_string())?;
+
+            let next_url = resolved
+                .url
+                .join(location)
+                .map_err(|e| format!("URL pengalihan tidak valid: {e}"))?;
+
+            current_url_str = next_url.to_string();
+            continue;
+        }
+
+        if !status.is_success() {
+            return Err(format!("Halaman web mengembalikan status HTTP {status}"));
+        }
+
+        break response;
+    };
 
     if resp
         .content_length()
@@ -663,7 +708,7 @@ pub async fn fetch_web_content(url: &str) -> Result<String, String> {
     }
 
     let max_len = 8000;
-    if cleaned.len() > max_len {
+    if cleaned.chars().nth(max_len).is_some() {
         let truncated: String = cleaned.chars().take(max_len).collect();
         Ok(format!(
             "{}\n\n[...Konten web dipotong karena melebihi batas panjang teks xiao...]",
@@ -779,10 +824,13 @@ mod tests {
 
     #[test]
     fn test_html_cleaning_logic() {
-        let raw_html = "<html><head><style>body{color:red;}</style></head><body><h1>Hello &amp; Welcome</h1><script>alert(1);</script><p>This is a test.</p></body></html>";
+        let raw_html = "<html><head><style>body{color:red;}</style></head><body><h1>Hello &amp; Welcome</h1><script>alert(1);</script><p>This is a test.</p><ul><li>Item 1</li><li>Item 2</li></ul></body></html>";
         let cleaned = clean_html_to_text(raw_html);
 
-        assert_eq!(cleaned, "Hello & Welcome This is a test.");
+        assert_eq!(
+            cleaned,
+            "Hello & Welcome\n\nThis is a test.\n\n• Item 1\n• Item 2"
+        );
     }
 
     #[test]

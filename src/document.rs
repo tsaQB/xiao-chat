@@ -124,8 +124,17 @@ pub async fn extract_document(
         .iter()
         .any(|suffix| name_lower.ends_with(suffix))
     {
-        let text = String::from_utf8(data)
-            .map_err(|_| "Dokumen teks harus menggunakan encoding UTF-8.".to_string())?;
+        let slice = if data.starts_with(b"\xef\xbb\xbf") {
+            &data[3..]
+        } else {
+            &data[..]
+        };
+        let text = match std::str::from_utf8(slice) {
+            Ok(valid) => valid.trim_start_matches('\u{feff}').to_string(),
+            Err(_) => String::from_utf8_lossy(slice)
+                .trim_start_matches('\u{feff}')
+                .to_string(),
+        };
         return Ok(ExtractedDocument {
             text: Some(limit_text(text)),
             ..Default::default()
@@ -691,5 +700,23 @@ mod tests {
 
         let err = extract_docx_text(&bytes).unwrap_err();
         assert!(err.contains("melebihi batas ukuran dekompresi yang aman"));
+    }
+
+    #[tokio::test]
+    async fn text_document_strips_bom_and_tolerates_non_utf8() {
+        // UTF-8 with BOM
+        let mut bom_data = vec![0xEF, 0xBB, 0xBF];
+        bom_data.extend_from_slice(b"Hello from UTF-8 BOM file");
+        let doc = extract_document(bom_data, "text/plain", "test.txt")
+            .await
+            .expect("should decode BOM text");
+        assert_eq!(doc.text.as_deref(), Some("Hello from UTF-8 BOM file"));
+
+        // Non-UTF8 byte stream (e.g. Windows-1252 smart quote 0x93, 0x94)
+        let windows_1252 = vec![b'H', b'i', b' ', 0x93, b'Q', b'u', b'o', b't', b'e', 0x94];
+        let doc2 = extract_document(windows_1252, "text/plain", "legacy.txt")
+            .await
+            .expect("should decode lossy non-utf8");
+        assert!(doc2.text.unwrap().contains("Hi "));
     }
 }

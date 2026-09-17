@@ -123,22 +123,30 @@ fn strip_bot_mention(raw_text: &str, bot_username: &str) -> Option<String> {
         let is_boundary_before = if actual_pos == 0 {
             true
         } else {
-            let ch = raw_text[..actual_pos].chars().next_back().unwrap();
-            !ch.is_alphanumeric() && ch != '_'
+            raw_text[..actual_pos]
+                .chars()
+                .next_back()
+                .is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
         };
 
         if is_boundary_before && is_boundary_after {
             found = true;
             result.push_str(&raw_text[last_idx..actual_pos]);
-            // Skip a single space immediately following the mention if present
-            if raw_text[after_pos..].starts_with(' ') {
+            // Skip a single space following mention only if preceded by whitespace or at start
+            let preceded_by_whitespace = raw_text[..actual_pos].ends_with(char::is_whitespace);
+            if (actual_pos == 0 || preceded_by_whitespace) && raw_text[after_pos..].starts_with(' ')
+            {
                 last_idx = after_pos + 1;
             } else {
                 last_idx = after_pos;
             }
             search_from = last_idx;
         } else {
-            search_from = actual_pos + 1;
+            search_from = raw_text[actual_pos..]
+                .char_indices()
+                .nth(1)
+                .map(|(idx, _)| actual_pos + idx)
+                .unwrap_or(raw_text.len());
         }
     }
 
@@ -2196,6 +2204,26 @@ mod tests {
         assert!(!command_matches("/menux", "/menu"));
         assert!(!command_matches("/imagegen", "/image"));
         assert!(!command_matches("/startling", "/start"));
+    }
+
+    #[test]
+    fn strip_bot_mention_handles_unicode_and_boundaries() {
+        assert_eq!(
+            strip_bot_mention("halo @XiaoBot apa kabar?", "xiaobot"),
+            Some("halo apa kabar?".to_string())
+        );
+        assert_eq!(
+            strip_bot_mention("@XiaoBot halo dunia", "xiaobot"),
+            Some("halo dunia".to_string())
+        );
+        // Multi-byte Unicode character directly adjacent
+        assert_eq!(
+            strip_bot_mention("✨@XiaoBot halo", "xiaobot"),
+            Some("✨ halo".to_string())
+        );
+        // Substring mention that is part of a longer word shouldn't match
+        assert_eq!(strip_bot_mention("@xiaobot_extra halo", "xiaobot"), None);
+        assert_eq!(strip_bot_mention("halo dunia", "xiaobot"), None);
     }
 
     #[test]
