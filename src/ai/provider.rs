@@ -646,14 +646,7 @@ impl AIChatService {
         }
     }
 
-    pub(crate) fn effective_capability_state(
-        record: &CapabilityRecord,
-        capability: CapabilityKind,
-    ) -> CapabilityState {
-        record.effective_state_for(capability)
-    }
-
-    fn resolve_model_route_unchecked_from_snapshot(
+    pub(crate) fn resolve_model_route_from_snapshot(
         snapshot: &GenerationModelSnapshot,
         role: ModelRole,
     ) -> Result<ResolvedModelRoute, String> {
@@ -680,26 +673,29 @@ impl AIChatService {
         })
     }
 
-    pub(crate) fn resolve_model_route_from_snapshot(
-        snapshot: &GenerationModelSnapshot,
-        role: ModelRole,
-    ) -> Result<ResolvedModelRoute, String> {
-        Self::resolve_model_route_unchecked_from_snapshot(snapshot, role)
-    }
-
-    pub async fn resolve_model_route_unchecked(
-        &self,
-        role: ModelRole,
-    ) -> Result<ResolvedModelRoute, String> {
-        let snapshot = self.generation_model_snapshot().await;
-        Self::resolve_model_route_unchecked_from_snapshot(&snapshot, role)
-    }
-
     pub async fn resolve_model_route(&self, role: ModelRole) -> Result<ResolvedModelRoute, String> {
         let snapshot = self.generation_model_snapshot().await;
         Self::resolve_model_route_from_snapshot(&snapshot, role)
     }
+}
 
+fn apply_provider_auth_header(
+    builder: reqwest::RequestBuilder,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    let clean = api_key.trim();
+    if !clean.is_empty()
+        && !["none", "-", "no", "null"]
+            .iter()
+            .any(|value| clean.eq_ignore_ascii_case(value))
+    {
+        builder.header("Authorization", format!("Bearer {clean}"))
+    } else {
+        builder
+    }
+}
+
+impl AIChatService {
     async fn run_capability_probe_request(
         &self,
         provider: &ProviderConfig,
@@ -710,19 +706,13 @@ impl AIChatService {
             "{}/chat/completions",
             provider.endpoint.trim_end_matches('/')
         );
-        let mut req = self
+        let req = self
             .client
             .post(url)
             .header("Content-Type", "application/json")
             .json(&payload)
             .timeout(Duration::from_secs(20));
-        if !provider.api_key.is_empty()
-            && !["none", "-", "no", "null"]
-                .iter()
-                .any(|value| provider.api_key.eq_ignore_ascii_case(value))
-        {
-            req = req.header("Authorization", format!("Bearer {}", provider.api_key));
-        }
+        let req = apply_provider_auth_header(req, &provider.api_key);
 
         let response = match req.send().await {
             Ok(response) => response,
@@ -797,18 +787,12 @@ impl AIChatService {
         let form = Form::new()
             .part("file", part)
             .text("model", model.to_string());
-        let mut request = self
+        let request = self
             .client
             .post(url)
             .multipart(form)
             .timeout(Duration::from_secs(20));
-        if !provider.api_key.is_empty()
-            && !["none", "-", "no", "null"]
-                .iter()
-                .any(|value| provider.api_key.eq_ignore_ascii_case(value))
-        {
-            request = request.header("Authorization", format!("Bearer {}", provider.api_key));
-        }
+        let request = apply_provider_auth_header(request, &provider.api_key);
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) if error.is_timeout() => {
@@ -843,7 +827,7 @@ impl AIChatService {
             "{}/images/generations",
             provider.endpoint.trim_end_matches('/')
         );
-        let mut request = self
+        let request = self
             .client
             .post(url)
             .header("Content-Type", "application/json")
@@ -854,13 +838,7 @@ impl AIChatService {
                 "response_format": "b64_json"
             }))
             .timeout(Duration::from_secs(120));
-        if !provider.api_key.is_empty()
-            && !["none", "-", "no", "null"]
-                .iter()
-                .any(|value| provider.api_key.eq_ignore_ascii_case(value))
-        {
-            request = request.header("Authorization", format!("Bearer {}", provider.api_key));
-        }
+        let request = apply_provider_auth_header(request, &provider.api_key);
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) if error.is_timeout() => {
@@ -899,7 +877,7 @@ impl AIChatService {
                 "{}/chat/completions",
                 provider.endpoint.trim_end_matches('/')
             );
-            let mut chat_req = self
+            let chat_req = self
                 .client
                 .post(&chat_url)
                 .header("Content-Type", "application/json")
@@ -910,13 +888,7 @@ impl AIChatService {
                     "max_tokens": 4
                 }))
                 .timeout(Duration::from_secs(15));
-            if !provider.api_key.is_empty()
-                && !["none", "-", "no", "null"]
-                    .iter()
-                    .any(|value| provider.api_key.eq_ignore_ascii_case(value))
-            {
-                chat_req = chat_req.header("Authorization", format!("Bearer {}", provider.api_key));
-            }
+            let chat_req = apply_provider_auth_header(chat_req, &provider.api_key);
             if let Ok(chat_resp) = chat_req.send().await {
                 if chat_resp.status().is_success() {
                     return CapabilityProbeResponse::Success(json!({
@@ -936,7 +908,7 @@ impl AIChatService {
     where
         F: FnMut(ProbeEvent),
     {
-        let route = self.resolve_model_route_unchecked(role).await?;
+        let route = self.resolve_model_route(role).await?;
         observer(ProbeEvent::Started {
             capability: CapabilityKind::ImageGeneration,
         });
@@ -1482,7 +1454,7 @@ impl AIChatService {
     where
         F: FnMut(ProbeEvent),
     {
-        let route = self.resolve_model_route_unchecked(role).await?;
+        let route = self.resolve_model_route(role).await?;
         let record = self
             .probe_model_capabilities_with_plan_and_observer(
                 &route.provider,
@@ -1529,7 +1501,7 @@ impl AIChatService {
             .cloned();
         let mut capability = get_model_capabilities_with_meta(model, metadata.as_ref());
         if let Some(record) = self.capability_record(endpoint, model).await {
-            let vision = Self::effective_capability_state(&record, CapabilityKind::ImageInput);
+            let vision = record.effective_state_for(CapabilityKind::ImageInput);
             capability.vision = vision == CapabilityState::Supported;
             capability.vision_desc = match vision {
                 CapabilityState::Supported => {
@@ -1543,7 +1515,7 @@ impl AIChatService {
                 }
             };
 
-            let audio = Self::effective_capability_state(&record, CapabilityKind::AudioInput);
+            let audio = record.effective_state_for(CapabilityKind::AudioInput);
             capability.audio = audio == CapabilityState::Supported;
             capability.audio_desc = match audio {
                 CapabilityState::Supported => "✅ Fresh provider evidence".to_string(),
@@ -1553,7 +1525,7 @@ impl AIChatService {
                 }
             };
 
-            let video = Self::effective_capability_state(&record, CapabilityKind::VideoInput);
+            let video = record.effective_state_for(CapabilityKind::VideoInput);
             capability.video = video == CapabilityState::Supported;
             capability.video_desc = match video {
                 CapabilityState::Supported => "✅ Fresh provider evidence".to_string(),
@@ -1563,7 +1535,7 @@ impl AIChatService {
                 }
             };
 
-            let reasoning = Self::effective_capability_state(&record, CapabilityKind::Reasoning);
+            let reasoning = record.effective_state_for(CapabilityKind::Reasoning);
             capability.thinking = reasoning == CapabilityState::Supported;
             capability.thinking_desc = match reasoning {
                 CapabilityState::Supported => "✅ Fresh reasoning evidence".to_string(),
@@ -1586,15 +1558,8 @@ impl AIChatService {
         let clean_endpoint = endpoint.trim().trim_end_matches('/');
         let url = format!("{clean_endpoint}/models");
 
-        let mut req = self.client.get(&url).timeout(Duration::from_secs(15));
-        let trimmed_key = api_key.trim();
-        if !trimmed_key.is_empty()
-            && !["none", "-", "no", "null"]
-                .iter()
-                .any(|k| trimmed_key.eq_ignore_ascii_case(k))
-        {
-            req = req.header("Authorization", format!("Bearer {trimmed_key}"));
-        }
+        let req = self.client.get(&url).timeout(Duration::from_secs(15));
+        let req = apply_provider_auth_header(req, api_key);
 
         match req.send().await {
             Ok(resp) => {
@@ -2163,7 +2128,7 @@ mod tests {
             ..CapabilityRecord::default()
         };
         assert_eq!(
-            AIChatService::effective_capability_state(&record, CapabilityKind::ImageInput),
+            record.effective_state_for(CapabilityKind::ImageInput),
             CapabilityState::Unknown
         );
     }

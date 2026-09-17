@@ -870,7 +870,7 @@ async fn handle_image_generation(
 
     if clean_prompt.is_empty() {
         let route_text = match ai_service
-            .resolve_model_route_unchecked(ai::service::ModelRole::ImageGeneration)
+            .resolve_model_route(ai::service::ModelRole::ImageGeneration)
             .await
         {
             Ok(route) => format!("{} / {}", route.provider.name, route.model),

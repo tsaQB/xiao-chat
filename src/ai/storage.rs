@@ -570,14 +570,14 @@ fn hydrate_provider_store_in_dir(secrets_dir: &Path, mut store: ProviderStore) -
     store
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TopicScope {
     pub chat_id: i64,
     pub thread_id: i64,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 impl TopicScope {
     pub fn new(chat_id: i64, thread_id: i64) -> Self {
         Self { chat_id, thread_id }
@@ -986,6 +986,12 @@ fn create_session_and_activate_db(
 pub(super) struct RemoveSessionOutcome {
     pub new_active_id: usize,
     pub replacement: Option<ChatSession>,
+}
+
+impl RemoveSessionOutcome {
+    pub fn is_last_session_reset(&self) -> bool {
+        self.replacement.is_some()
+    }
 }
 
 fn remove_session_transaction_db(
@@ -1755,18 +1761,6 @@ pub enum EvidenceFreshness {
     Stale,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProbeRunStatus {
-    Waiting,
-    CheckingMetadata,
-    Probing,
-    Completed,
-    Skipped,
-    Failed,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProbeOutcome {
@@ -1803,25 +1797,6 @@ pub enum ProbeEvent {
         saved: bool,
     },
     Finished,
-}
-
-#[allow(dead_code)]
-impl ProbeEvent {
-    pub fn run_status(&self) -> ProbeRunStatus {
-        match self {
-            Self::Progress { message, .. } if message.starts_with("Checking provider metadata") => {
-                ProbeRunStatus::CheckingMetadata
-            }
-            Self::Progress { message, .. } if message.starts_with("Persisting") => {
-                ProbeRunStatus::Waiting
-            }
-            Self::Started { .. } | Self::Progress { .. } => ProbeRunStatus::Probing,
-            Self::Completed { .. } | Self::Finished => ProbeRunStatus::Completed,
-            Self::Skipped { .. } => ProbeRunStatus::Skipped,
-            Self::Persistence { saved: false } => ProbeRunStatus::Failed,
-            Self::Persistence { saved: true } => ProbeRunStatus::Completed,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -1243,7 +1243,9 @@ impl AIChatService {
             .write()
             .await
             .insert(user_id, outcome.new_active_id);
-        delete_session_attachments(user_id, session_id).await;
+        if outcome.is_last_session_reset() {
+            delete_session_attachments(user_id, session_id).await;
+        }
         true
     }
 
