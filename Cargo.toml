@@ -1,0 +1,42 @@
+[package]
+name = "xiao"
+version = "0.1.0"
+edition = "2021"
+authors = ["Assaqib <264941327+tsaQB@users.noreply.github.com>"]
+description = "xiao - hardened Telegram Bot API 10.3 AI assistant with Rich Messages, streaming drafts, sessions, and OpenAI-compatible providers"
+
+[[bin]]
+name = "xiao"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dotenvy = "0.15"
+futures-util = "0.3"
+tokio-stream = "0.1"
+regex = "1.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+base64 = "0.22"
+chrono = "0.4"
+rand = "0.8"
+urlencoding = "2.1"
+html-escape = "0.2"
+crossterm = "0.27"
+url = "2.5"
+rusqlite = { version = "0.32", features = ["bundled"] }
+lopdf = { version = "0.44", default-features = false }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+tar = { version = "0.4", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+sevenz_rust = { package = "sevenz-rust2", version = "0.22" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
