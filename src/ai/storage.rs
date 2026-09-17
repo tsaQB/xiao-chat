@@ -570,20 +570,6 @@ fn hydrate_provider_store_in_dir(secrets_dir: &Path, mut store: ProviderStore) -
     store
 }
 
-pub(super) async fn persist_provider_state(store: ProviderStore) -> bool {
-    match tokio::task::spawn_blocking(move || save_provider_state_db(&store)).await {
-        Ok(Ok(())) => true,
-        Ok(Err(err)) => {
-            warn!("Failed to persist provider state: {err}");
-            false
-        }
-        Err(err) => {
-            warn!("Provider persistence task failed: {err}");
-            false
-        }
-    }
-}
-
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TopicScope {

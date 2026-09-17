@@ -26,7 +26,6 @@ pub fn is_rtl_char(c: char) -> bool {
 
 /// Returns true if the character is an Eastern Arabic-Indic (Hindi) digit (٠..٩)
 /// or Extended Arabic-Indic (Persian/Urdu) digit (۰..۹).
-#[allow(dead_code)]
 pub fn is_eastern_arabic_digit(c: char) -> bool {
     matches!(c, '\u{0660}'..='\u{0669}' | '\u{06F0}'..='\u{06F9}')
 }
@@ -49,7 +48,8 @@ pub fn is_strong_ltr_char(c: char) -> bool {
 
 /// Returns true if the string contains at least one RTL character or Eastern Arabic digit.
 pub fn has_rtl_characters(text: &str) -> bool {
-    text.chars().any(is_rtl_char)
+    text.chars()
+        .any(|c| is_rtl_char(c) || is_eastern_arabic_digit(c))
 }
 
 /// Returns true if the string contains at least one Eastern Arabic-Indic (Hindi) digit.

@@ -2104,10 +2104,26 @@ async fn main() {
     let mut offset = ai::storage::load_telegram_offset_async().await;
     info!("Memulai polling pesan dengan durable control/generation queues...");
 
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| warn!("Gagal mendaftarkan SIGTERM handler: {e}"))
+        .ok();
+
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                println!("\n🛑 Menerima sinyal berhenti. Bot dimatikan secara aman.");
+                println!("\n🛑 Menerima sinyal berhenti (SIGINT). Bot dimatikan secara aman.");
+                break;
+            }
+            _ = async {
+                #[cfg(unix)]
+                if let Some(ref mut sig) = sigterm {
+                    sig.recv().await;
+                    return;
+                }
+                std::future::pending::<()>().await;
+            } => {
+                println!("\n🛑 Menerima sinyal terminasi (SIGTERM). Bot dimatikan secara aman.");
                 break;
             }
             updates_res = bot.get_updates(

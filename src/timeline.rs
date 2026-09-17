@@ -203,6 +203,14 @@ struct TimelineInner {
     sync_lock: Mutex<()>,
 }
 
+impl TimelineInner {
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, TimelineState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 #[derive(Clone)]
 pub struct ExecutionTimeline {
     inner: Arc<TimelineInner>,
@@ -237,12 +245,13 @@ impl ExecutionTimeline {
         }
     }
 
-    pub fn with_mode(
+    pub fn new(
         bot: TelegramBotClient,
         chat_id: i64,
         max_items: usize,
         mode: TimelineMode,
         reply_to_message_id: Option<i64>,
+        delivery_context: TelegramDeliveryContext,
     ) -> Self {
         Self {
             inner: Arc::new(TimelineInner {
@@ -252,11 +261,28 @@ impl ExecutionTimeline {
                 mode,
                 reply_to_message_id,
                 start_time: Instant::now(),
-                delivery_context: TelegramBotClient::current_delivery_context(),
+                delivery_context,
                 state: std::sync::Mutex::new(TimelineState::new()),
                 sync_lock: Mutex::new(()),
             }),
         }
+    }
+
+    pub fn with_mode(
+        bot: TelegramBotClient,
+        chat_id: i64,
+        max_items: usize,
+        mode: TimelineMode,
+        reply_to_message_id: Option<i64>,
+    ) -> Self {
+        Self::new(
+            bot,
+            chat_id,
+            max_items,
+            mode,
+            reply_to_message_id,
+            TelegramBotClient::current_delivery_context(),
+        )
     }
 
     #[cfg(test)]
@@ -269,36 +295,37 @@ impl ExecutionTimeline {
         self.inner.reply_to_message_id
     }
 
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, TimelineState> {
+        self.inner.lock_state()
+    }
+
     #[cfg(test)]
     pub fn placeholder_message_id(&self) -> Option<i64> {
-        self.inner.state.lock().unwrap().placeholder_message_id
+        self.lock_state().placeholder_message_id
     }
 
     pub async fn add_action(&self, label: impl Into<String>, activity: Option<ProgressActivity>) {
         let lbl = label.into();
-        self.inner
-            .state
-            .lock()
-            .unwrap()
+        self.lock_state()
             .add_action(lbl, activity, self.inner.max_items);
     }
 
     pub async fn fail_current(&self) {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.lock_state();
         state.fail_current();
         state.stopped = true;
     }
 
     pub fn stop_ticker(&self) {
-        self.inner.state.lock().unwrap().stopped = true;
+        self.lock_state().stopped = true;
     }
 
     pub fn is_stopped(&self) -> bool {
-        self.inner.state.lock().unwrap().stopped
+        self.lock_state().stopped
     }
 
     pub fn start_ticker(&self) {
-        self.inner.state.lock().unwrap().stopped = false;
+        self.lock_state().stopped = false;
         let timeline = self.clone();
 
         // 1. Private chat draft ticker: animate draft every 1000ms
@@ -329,7 +356,7 @@ impl ExecutionTimeline {
                     break;
                 }
                 let action = {
-                    let state = tl.inner.state.lock().unwrap();
+                    let state = tl.lock_state();
                     let act = state.items.last().map(|it| it.activity);
                     match act {
                         Some(ProgressActivity::Drawing) => "upload_photo",
@@ -370,7 +397,7 @@ impl ExecutionTimeline {
 
         let now = Instant::now();
         let (status, partial, placeholder_msg_id) = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.lock_state();
             if state.stopped && !force {
                 return;
             }
@@ -465,7 +492,7 @@ impl ExecutionTimeline {
                                         .and_then(Value::as_i64)
                                 });
                             if let Some(id) = msg_id {
-                                let mut state = self.inner.state.lock().unwrap();
+                                let mut state = self.lock_state();
                                 if state.stopped {
                                     let bot = self.inner.bot.clone();
                                     let chat_id = self.inner.chat_id;
@@ -499,7 +526,7 @@ impl ExecutionTimeline {
     pub async fn finalize_answer(&self, full_rich_msg: &InputRichMessage) -> Result<Value, String> {
         let _sync_guard = self.inner.sync_lock.lock().await;
         let (placeholder_msg_id, is_failed) = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.lock_state();
             state.stopped = true;
             (state.placeholder_message_id.take(), state.is_failed)
         };
@@ -556,7 +583,7 @@ impl ExecutionTimeline {
     pub async fn delete_placeholder(&self) {
         let _sync_guard = self.inner.sync_lock.lock().await;
         let placeholder_msg_id = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.lock_state();
             state.stopped = true;
             state.placeholder_message_id.take()
         };
@@ -574,7 +601,7 @@ impl ExecutionTimeline {
 impl GenerationProgressSink for ExecutionTimeline {
     fn on_action(&self, label: &str, activity: Option<ProgressActivity>) {
         {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.lock_state();
             state.partial_answer.clear();
             state.add_action(label.to_string(), activity, self.inner.max_items);
         }
@@ -583,7 +610,7 @@ impl GenerationProgressSink for ExecutionTimeline {
 
     fn on_partial_answer(&self, text: &str) {
         let (should_sync, is_first_writing) = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.lock_state();
             let is_already_writing = state.items.last().is_some_and(|it| {
                 it.activity == ProgressActivity::Writing && it.state == ProgressState::Active
             });
@@ -625,7 +652,7 @@ impl GenerationProgressSink for ExecutionTimeline {
 
     fn on_failure(&self, error: &str, force_sync: bool) {
         let (placeholder_msg_id, is_group) = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.lock_state();
             state.fail_current();
             state.stopped = true;
             state.is_failed = true;
@@ -674,11 +701,7 @@ impl GenerationProgressSink for ExecutionTimeline {
     }
 
     fn on_complete(&self) {
-        self.inner
-            .state
-            .lock()
-            .unwrap()
-            .finish_all(ProgressState::Done);
+        self.inner.lock_state().finish_all(ProgressState::Done);
     }
 }
 

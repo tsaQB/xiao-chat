@@ -12,16 +12,14 @@ pub enum ModelRole {
 }
 
 impl ModelRole {
-    #[allow(dead_code)]
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "main" => Some(Self::Main),
             "vision" => Some(Self::Vision),
             "video" => Some(Self::Video),
             "audio_stt" | "audio-stt" | "stt" | "audio" => Some(Self::AudioStt),
-            "image_gen" | "image-gen" | "image_generation" | "image-generation" | "image" => {
-                Some(Self::ImageGeneration)
-            }
+            "image_gen" | "image-gen" | "image_generation" | "image-generation" | "image"
+            | "img" => Some(Self::ImageGeneration),
             "curator" | "judge" | "memory_curator" | "memory-curator" => Some(Self::Curator),
             _ => None,
         }

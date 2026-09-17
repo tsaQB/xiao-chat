@@ -2489,27 +2489,23 @@ pub(crate) async fn run_cli_ai_hub(
                 run_cli_probe_all_active(ai_service).await;
                 print_press_enter();
             }
-            Some("vision") => {
-                run_cli_probe_test_role(ai_service, ModelRole::Vision).await;
-                print_press_enter();
+            Some(role_str) => {
+                if let Some(role) = ModelRole::parse(role_str) {
+                    if role == ModelRole::ImageGeneration {
+                        run_cli_probe_test_image_gen(ai_service).await;
+                    } else if role == ModelRole::Main {
+                        println!("\x1b[33mMain Model diuji melalui peran spesialis atau chat langsung.\x1b[0m");
+                    } else {
+                        run_cli_probe_test_role(ai_service, role).await;
+                    }
+                    print_press_enter();
+                } else {
+                    println!("\x1b[31mPeran model '{role_str}' tidak dikenal.\x1b[0m");
+                    println!("Pilihan: vision, video, stt, image, curator, all");
+                    print_press_enter();
+                }
             }
-            Some("video") => {
-                run_cli_probe_test_role(ai_service, ModelRole::Video).await;
-                print_press_enter();
-            }
-            Some("stt") | Some("audio") => {
-                run_cli_probe_test_role(ai_service, ModelRole::AudioStt).await;
-                print_press_enter();
-            }
-            Some("image") | Some("img") => {
-                run_cli_probe_test_image_gen(ai_service).await;
-                print_press_enter();
-            }
-            Some("curator") | Some("judge") => {
-                run_cli_probe_test_role(ai_service, ModelRole::Curator).await;
-                print_press_enter();
-            }
-            _ => {
+            None => {
                 run_cli_probe_menu(ai_service).await;
             }
         },

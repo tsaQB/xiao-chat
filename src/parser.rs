@@ -14,14 +14,8 @@ pub(crate) mod rtl;
 #[path = "parser/terminal.rs"]
 pub mod terminal;
 #[allow(unused_imports)]
-pub use rtl::{
-    apply_rtl_direction, blocks_contain_rtl, has_eastern_arabic_digits, has_rtl_characters,
-    is_rtl_text,
-};
-#[allow(unused_imports)]
 pub use terminal::render_terminal_markdown;
 
-#[allow(dead_code)]
 pub fn parse_streaming_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
     let mut blocks = markdown::parse_streaming_markdown_to_rich_blocks(text);
     normalize_bot_api_10_3_media(&mut blocks);
@@ -35,7 +29,6 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
     blocks
 }
 
-#[allow(dead_code)]
 pub fn build_full_rich_message(answer_text: &str, footer_text: Option<&str>) -> InputRichMessage {
     let mut message = markdown::build_full_rich_message(answer_text, footer_text);
     normalize_bot_api_10_3_media(&mut message.blocks);

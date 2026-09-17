@@ -108,10 +108,9 @@ use super::routing::{
 };
 use super::service::{decode_generated_image_base64, download_generated_image, AIChatService};
 use super::storage::{
-    load_provider_store, persist_capability_registry, persist_model_routing,
-    persist_provider_state, CapabilityEvidence, CapabilityEvidenceSource, CapabilityKind,
-    CapabilityRecord, CapabilityRegistry, CapabilityState, ProbeEvent, ProbeOutcome,
-    ProviderConfig, ProviderStore,
+    load_provider_store, persist_capability_registry, persist_model_routing, CapabilityEvidence,
+    CapabilityEvidenceSource, CapabilityKind, CapabilityRecord, CapabilityRegistry,
+    CapabilityState, ProbeEvent, ProbeOutcome, ProviderConfig, ProviderStore,
 };
 
 #[derive(Debug)]
@@ -130,12 +129,6 @@ impl CapabilityProbeResponse {
             (Self::Success(_), None) => ProbeOutcome::Inconclusive,
         }
     }
-}
-
-#[allow(dead_code)]
-fn catalog_presence_text_chat_claim() -> Option<bool> {
-    // Being present in GET /models is catalog evidence only.
-    None
 }
 
 fn normalized_modalities(value: &Value) -> Option<String> {
@@ -707,57 +700,6 @@ impl AIChatService {
         Self::resolve_model_route_from_snapshot(&snapshot, role)
     }
 
-    #[allow(dead_code)]
-    pub async fn get_provider_model_by_index(
-        &self,
-        _user_id: i64,
-        provider_id: &str,
-        index: usize,
-    ) -> Option<String> {
-        let store = self.provider_store.read().await;
-        store
-            .providers
-            .iter()
-            .find(|provider| provider.id == provider_id)?
-            .models
-            .get(index)
-            .cloned()
-    }
-
-    #[allow(dead_code)]
-    pub async fn set_provider_model(
-        &self,
-        _user_id: i64,
-        provider_id: &str,
-        model_name: &str,
-    ) -> bool {
-        let candidate = {
-            let store = self.provider_store.read().await;
-            let mut candidate = store.clone();
-            let Some(provider) = candidate
-                .providers
-                .iter_mut()
-                .find(|provider| provider.id == provider_id)
-            else {
-                return false;
-            };
-            if !provider.models.is_empty()
-                && !provider.models.iter().any(|model| model == model_name)
-            {
-                return false;
-            }
-            provider.active_model = model_name.to_string();
-            candidate.active_id = Some(provider_id.to_string());
-            candidate
-        };
-
-        if !persist_provider_state(candidate.clone()).await {
-            return false;
-        }
-        *self.provider_store.write().await = candidate;
-        true
-    }
-
     async fn run_capability_probe_request(
         &self,
         provider: &ProviderConfig,
@@ -984,156 +926,6 @@ impl AIChatService {
             }
         }
         classify_probe_http_failure(CapabilityKind::ImageGeneration, status, &body)
-    }
-
-    #[allow(dead_code)]
-    pub async fn test_model_role(&self, role: ModelRole) -> Result<String, String> {
-        if role == ModelRole::Main {
-            return Err("Main Model is not an addon route".to_string());
-        }
-
-        let route = self.resolve_model_route_unchecked(role).await?;
-        let target = format!("{} / {}", route.provider.name, route.model);
-
-        match role {
-            ModelRole::Vision => {
-                let red_probe = self
-                    .run_capability_probe_request(
-                        &route.provider,
-                        CapabilityKind::ImageInput,
-                        vision_probe_payload(&route.model, RED_PNG_BASE64),
-                    )
-                    .await;
-                let blue_probe = self
-                    .run_capability_probe_request(
-                        &route.provider,
-                        CapabilityKind::ImageInput,
-                        vision_probe_payload(&route.model, BLUE_PNG_BASE64),
-                    )
-                    .await;
-                let red = validate_color_probe(&red_probe, "red");
-                let blue = validate_color_probe(&blue_probe, "blue");
-                match combine_vision_probe_results(red, blue) {
-                    Some(true) => Ok(format!(
-                        "Vision route {target} passed red/blue semantic image samples"
-                    )),
-                    Some(false) => Err(format!(
-                        "Vision route {target} rejected or failed a semantic image sample"
-                    )),
-                    None => Err(format!(
-                        "Vision route {target} was inconclusive: red={:?}, blue={:?}",
-                        red_probe.outcome(red),
-                        blue_probe.outcome(blue)
-                    )),
-                }
-            }
-            ModelRole::Video => {
-                let probe = self
-                    .run_capability_probe_request(
-                        &route.provider,
-                        CapabilityKind::VideoInput,
-                        video_probe_payload(&route.model),
-                    )
-                    .await;
-                let validated = validate_color_probe(&probe, "red");
-                match validated {
-                    Some(true) => Ok(format!(
-                        "Video route {target} passed the bounded red-MP4 semantic sample"
-                    )),
-                    Some(false) => Err(format!(
-                        "Video route {target} rejected or failed the semantic video sample"
-                    )),
-                    None => Err(format!(
-                        "Video route {target} was inconclusive: {:?}",
-                        probe.outcome(validated)
-                    )),
-                }
-            }
-            ModelRole::AudioStt => {
-                if route.route_origin == RouteOrigin::MainModel {
-                    let native = self
-                        .run_audio_input_probe_request(&route.provider, &route.model)
-                        .await;
-                    let native_validated = validate_native_audio_probe(&native);
-                    if native_validated == Some(true) {
-                        return Ok(format!(
-                            "Audio route {target} passed the native Main audio sample"
-                        ));
-                    }
-
-                    let transcription = self
-                        .run_transcription_probe_request(&route.provider, &route.model)
-                        .await;
-                    let transcription_validated = validate_transcription_probe(&transcription);
-                    if transcription_validated == Some(true) {
-                        return Ok(format!(
-                            "Audio route {target} passed the semantic spoken transcription sample"
-                        ));
-                    }
-                    if transcription_validated == Some(false) {
-                        return Err(format!(
-                            "Audio route {target} rejected transcription as unsupported"
-                        ));
-                    }
-
-                    Err(format!(
-                        "Audio route {target} was not functionally verified: native={:?}, stt={:?}",
-                        native.outcome(native_validated),
-                        transcription.outcome(transcription_validated)
-                    ))
-                } else {
-                    let transcription = self
-                        .run_transcription_probe_request(&route.provider, &route.model)
-                        .await;
-                    let validated = validate_transcription_probe(&transcription);
-                    if validated == Some(true) {
-                        Ok(format!(
-                            "Audio STT route {target} passed the semantic spoken transcription sample"
-                        ))
-                    } else if validated == Some(false) {
-                        Err(format!(
-                            "Audio STT route {target} rejected transcription as unsupported"
-                        ))
-                    } else {
-                        Err(format!(
-                            "Audio STT route {target} was not functionally verified: {:?}",
-                            transcription.outcome(validated)
-                        ))
-                    }
-                }
-            }
-            ModelRole::ImageGeneration => Err(
-                "Image Generation uses the explicit credit-consuming image test path".to_string(),
-            ),
-            ModelRole::Curator => {
-                let probe = self
-                    .run_capability_probe_request(
-                        &route.provider,
-                        CapabilityKind::TextChat,
-                        json!({
-                            "model": &route.model,
-                            "messages": [{"role": "user", "content": "Reply with exactly OK."}],
-                            "stream": false,
-                            "max_tokens": 4
-                        }),
-                    )
-                    .await;
-                let validated = validate_text_probe(&probe);
-                match validated {
-                    Some(true) => Ok(format!(
-                        "Curator route {target} passed the text evaluation check"
-                    )),
-                    Some(false) => Err(format!(
-                        "Curator route {target} failed the text evaluation check"
-                    )),
-                    None => Err(format!(
-                        "Curator route {target} was inconclusive: {:?}",
-                        probe.outcome(validated)
-                    )),
-                }
-            }
-            ModelRole::Main => unreachable!(),
-        }
     }
 
     pub async fn probe_image_generation_active_with_observer<F>(
@@ -2328,6 +2120,11 @@ mod tests {
             validate_structured_probe(&CapabilityProbeResponse::Rejected),
             Some(false)
         );
+    }
+
+    fn catalog_presence_text_chat_claim() -> Option<bool> {
+        // Being present in GET /models is catalog evidence only.
+        None
     }
 
     #[test]

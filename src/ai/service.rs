@@ -16,7 +16,6 @@ use crate::attachments::{
     decode_user_content, delete_session_attachments, encode_user_content, load_attachment,
     persist_attachment,
 };
-use crate::bot::url_policy::is_unsafe_remote_ip;
 use crate::util::{truncate_chars, truncate_chars_with_ellipsis};
 
 use super::http::{is_retryable_status, retry_delay, MAX_PROVIDER_ATTEMPTS};
@@ -482,6 +481,7 @@ pub(super) fn decode_generated_image_base64(
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn parse_generated_image_url(url: &str) -> Result<url::Url, ImageGenerationError> {
     let parsed = url::Url::parse(url).map_err(|_| {
         ImageGenerationError::new(
@@ -531,35 +531,9 @@ fn cancelled_chat_result(
 }
 
 pub(super) async fn download_generated_image(url: &str) -> Result<Vec<u8>, ImageGenerationError> {
-    let parsed = parse_generated_image_url(url)?;
-    let host = parsed.host_str().ok_or_else(|| {
-        ImageGenerationError::new(
-            ImageGenerationErrorKind::UnsafeImageUrl,
-            "provider image URL has no host",
-        )
-    })?;
-    let port = parsed.port_or_known_default().ok_or_else(|| {
-        ImageGenerationError::new(
-            ImageGenerationErrorKind::UnsafeImageUrl,
-            "provider image URL has no usable port",
-        )
-    })?;
-
-    let resolved = tokio::net::lookup_host((host, port))
+    let resolved = crate::bot::url_policy::resolve_download_url(url)
         .await
-        .map_err(|_| {
-            ImageGenerationError::new(
-                ImageGenerationErrorKind::UnsafeImageUrl,
-                "provider image host could not be resolved",
-            )
-        })?
-        .collect::<Vec<_>>();
-    if resolved.is_empty() || resolved.iter().any(|addr| is_unsafe_remote_ip(addr.ip())) {
-        return Err(ImageGenerationError::new(
-            ImageGenerationErrorKind::UnsafeImageUrl,
-            "provider image URL resolved to a blocked network address",
-        ));
-    }
+        .map_err(|err| ImageGenerationError::new(ImageGenerationErrorKind::UnsafeImageUrl, err))?;
 
     let client = reqwest::Client::builder()
         .connect_timeout(timeout_from_env(IMAGE_PROVIDER_CONNECT_TIMEOUT_ENV, 10))
@@ -569,7 +543,7 @@ pub(super) async fn download_generated_image(url: &str) -> Result<Vec<u8>, Image
         // trusted public URL from pivoting into a private network address.
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
-        .resolve(host, resolved[0])
+        .resolve(&resolved.host, resolved.address)
         .build()
         .map_err(|_| {
             ImageGenerationError::new(
@@ -577,7 +551,7 @@ pub(super) async fn download_generated_image(url: &str) -> Result<Vec<u8>, Image
                 "failed to build bounded image downloader",
             )
         })?;
-    let response = client.get(parsed).send().await.map_err(|error| {
+    let response = client.get(resolved.url).send().await.map_err(|error| {
         if error.is_timeout() {
             ImageGenerationError::new(
                 ImageGenerationErrorKind::DownloadTimeout,
@@ -3386,178 +3360,12 @@ impl AIChatService {
             primary_failure: Some(primary_failure),
         })
     }
-
-    #[allow(dead_code)]
-    async fn generate_image_via_chat_completion(
-        &self,
-        route: &ResolvedModelRoute,
-        prompt: &str,
-        cancel_rx: &mut watch::Receiver<bool>,
-    ) -> Result<GeneratedImage, ImageGenerationError> {
-        let chat_url = provider_url(&route.provider.endpoint, "chat/completions");
-        let messages = vec![json!({
-            "role": "user",
-            "content": format!(
-                "Generate an image for: {prompt}. Output the image directly as a markdown image link, direct URL, or inline data URL."
-            )
-        })];
-
-        let mut req = self
-            .client
-            .post(&chat_url)
-            .header("Content-Type", "application/json")
-            .json(&json!({
-                "model": route.model,
-                "messages": messages,
-                "stream": false,
-            }))
-            .timeout(Duration::from_secs(90));
-
-        if !route.provider.api_key.is_empty()
-            && !["none", "-", "no"]
-                .iter()
-                .any(|key| route.provider.api_key.eq_ignore_ascii_case(key))
-        {
-            req = req.header(
-                "Authorization",
-                format!("Bearer {}", route.provider.api_key),
-            );
-        }
-
-        let response = tokio::select! {
-            changed = cancel_rx.changed() => {
-                if changed.is_ok() && *cancel_rx.borrow() {
-                    return Err(ImageGenerationError::new(
-                        ImageGenerationErrorKind::Cancelled,
-                        "Pembuatan gambar dibatalkan.",
-                    ));
-                }
-                return Err(ImageGenerationError::new(
-                    ImageGenerationErrorKind::Provider,
-                    "Kanal pembatalan image generation ditutup.",
-                ));
-            }
-            res = req.send() => res.map_err(|e| {
-                ImageGenerationError::new(
-                    ImageGenerationErrorKind::Provider,
-                    format!("Chat image generation request gagal: {e}"),
-                )
-            })?
-        };
-
-        if !response.status().is_success() {
-            let status = response.status();
-            return Err(ImageGenerationError::new(
-                ImageGenerationErrorKind::HttpStatus,
-                format!("Chat image generation mengembalikan HTTP {status}"),
-            ));
-        }
-
-        let body = read_bounded_json(response).await.map_err(|e| {
-            ImageGenerationError::new(
-                ImageGenerationErrorKind::InvalidResponse,
-                format!("Respons JSON tidak valid: {e}"),
-            )
-        })?;
-
-        let reply_text = assistant_text_from_value(&body).unwrap_or_default();
-
-        if let Some(data_pos) = reply_text.find("data:image/") {
-            if let Some(comma_pos) = reply_text[data_pos..].find(',') {
-                let after_comma = &reply_text[data_pos + comma_pos + 1..];
-                let b64_end = after_comma
-                    .find(|c: char| {
-                        c.is_whitespace() || c == ')' || c == '"' || c == '\'' || c == ']'
-                    })
-                    .unwrap_or(after_comma.len());
-                let b64_str = after_comma[..b64_end].trim();
-                if let Ok(bytes) = decode_generated_image_base64(b64_str) {
-                    return Ok(GeneratedImage {
-                        bytes,
-                        provider_name: route.provider.name.clone(),
-                        model: route.model.clone(),
-                        used_external_fallback: false,
-                        primary_failure: None,
-                    });
-                }
-            }
-        }
-
-        if let Some(url) = extract_image_url(&reply_text) {
-            if let Ok(bytes) = download_generated_image(&url).await {
-                return Ok(GeneratedImage {
-                    bytes,
-                    provider_name: route.provider.name.clone(),
-                    model: route.model.clone(),
-                    used_external_fallback: false,
-                    primary_failure: None,
-                });
-            }
-        }
-
-        Err(ImageGenerationError::new(
-            ImageGenerationErrorKind::InvalidResponse,
-            format!(
-                "Model tidak mengembalikan gambar valid: {}",
-                truncate_chars(&reply_text, 160)
-            ),
-        ))
-    }
-}
-
-fn assistant_text_from_value(body: &Value) -> Option<String> {
-    let choices = body.get("choices")?.as_array()?;
-    let first = choices.first()?;
-    let content = first.get("message")?.get("content")?;
-    if let Some(text) = content.as_str() {
-        return Some(text.to_string());
-    }
-    if let Some(arr) = content.as_array() {
-        let text = arr
-            .iter()
-            .filter_map(|p| p.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("");
-        return Some(text);
-    }
-    None
-}
-
-fn extract_image_url(text: &str) -> Option<String> {
-    if let Some(start) = text.find("![") {
-        if let Some(paren_start) = text[start..].find("](") {
-            let after_paren = &text[start + paren_start + 2..];
-            if let Some(paren_end) = after_paren.find(')') {
-                let url = after_paren[..paren_end].trim();
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    return Some(url.to_string());
-                }
-            }
-        }
-    }
-    for word in text.split_whitespace() {
-        let clean = word.trim_matches(|c: char| {
-            c == '(' || c == ')' || c == '"' || c == '\'' || c == '<' || c == '>'
-        });
-        if clean.starts_with("https://") || clean.starts_with("http://") {
-            let lower = clean.to_ascii_lowercase();
-            if lower.ends_with(".png")
-                || lower.ends_with(".jpg")
-                || lower.ends_with(".jpeg")
-                || lower.ends_with(".webp")
-                || lower.contains("googleusercontent.com")
-                || lower.contains("oaidalleapiprodscus.blob.core.windows.net")
-            {
-                return Some(clean.to_string());
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bot::url_policy::is_unsafe_remote_ip;
 
     fn session(id: usize) -> ChatSession {
         ChatSession {
