@@ -7,6 +7,7 @@ use crate::bot::models::{
     InputRichMessage, Location, RichBlock, RichBlockCaption, RichBlockListItem, RichBlockTableCell,
 };
 use crate::parser::latex::sanitize_latex_for_telegram;
+use crate::parser::rtl;
 
 static RE_HTML_SPOILER_TG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<tg-spoiler(?:\s+[^>]*)?>(.*?)</tg-spoiler>").unwrap());
@@ -1379,6 +1380,34 @@ pub fn extract_thinking_and_answer(raw: &str) -> (Option<String>, String) {
     (thinking, answer)
 }
 
+fn compute_column_rtl_flags(rows: &[Vec<&str>]) -> Vec<bool> {
+    let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let mut col_is_rtl = vec![false; col_count];
+    for row in rows {
+        for (col_idx, cell) in row.iter().enumerate() {
+            if col_idx < col_is_rtl.len() && rtl::has_rtl_characters(cell) {
+                col_is_rtl[col_idx] = true;
+            }
+        }
+    }
+    col_is_rtl
+}
+
+fn resolve_table_cell_align<'a>(
+    explicit: Option<&'a str>,
+    col_is_rtl: bool,
+    cell_text: &str,
+) -> &'a str {
+    if let Some(align) = explicit {
+        return align;
+    }
+    if col_is_rtl || rtl::has_rtl_characters(cell_text) {
+        "right"
+    } else {
+        "left"
+    }
+}
+
 fn try_parse_table(
     lines: &[String],
     i: usize,
@@ -1408,14 +1437,16 @@ fn try_parse_table(
             });
 
         if is_sep {
-            let mut aligns: Vec<&str> = Vec::new();
+            let mut explicit_aligns: Vec<Option<&str>> = Vec::new();
             for c in &sep_cells {
                 if c.starts_with(':') && c.ends_with(':') {
-                    aligns.push("center");
+                    explicit_aligns.push(Some("center"));
                 } else if c.ends_with(':') {
-                    aligns.push("right");
+                    explicit_aligns.push(Some("right"));
+                } else if c.starts_with(':') {
+                    explicit_aligns.push(Some("left"));
                 } else {
-                    aligns.push("left");
+                    explicit_aligns.push(None);
                 }
             }
 
@@ -1427,16 +1458,7 @@ fn try_parse_table(
                 .map(|c| c.trim().replace(unescaped_marker, "|"))
                 .collect();
 
-            let header_row: Vec<RichBlockTableCell> = header_raw
-                .into_iter()
-                .enumerate()
-                .map(|(idx, h)| {
-                    let align = aligns.get(idx).copied().unwrap_or("left");
-                    RichBlockTableCell::new(parse_inline(&h), true, Some(align))
-                })
-                .collect();
-
-            let mut table_cells = vec![header_row];
+            let mut raw_rows: Vec<Vec<String>> = Vec::new();
             let mut idx_line = i + 2;
 
             while idx_line < n {
@@ -1451,17 +1473,43 @@ fn try_parse_table(
                     .map(|c| c.trim().replace(unescaped_marker, "|"))
                     .collect();
 
+                raw_rows.push(row_raw);
+                idx_line += 1;
+            }
+
+            let col_is_rtl = {
+                let mut all_rows: Vec<Vec<&str>> = Vec::with_capacity(raw_rows.len() + 1);
+                all_rows.push(header_raw.iter().map(|s| s.as_str()).collect());
+                for r in &raw_rows {
+                    all_rows.push(r.iter().map(|s| s.as_str()).collect());
+                }
+                compute_column_rtl_flags(&all_rows)
+            };
+
+            let header_row: Vec<RichBlockTableCell> = header_raw
+                .into_iter()
+                .enumerate()
+                .map(|(idx, h)| {
+                    let explicit = explicit_aligns.get(idx).copied().flatten();
+                    let is_rtl = col_is_rtl.get(idx).copied().unwrap_or(false);
+                    let align = resolve_table_cell_align(explicit, is_rtl, &h);
+                    RichBlockTableCell::new(parse_inline(&h), true, Some(align))
+                })
+                .collect();
+
+            let mut table_cells = vec![header_row];
+            for row_raw in raw_rows {
                 let data_row: Vec<RichBlockTableCell> = row_raw
                     .into_iter()
                     .enumerate()
                     .map(|(idx, c)| {
-                        let align = aligns.get(idx).copied().unwrap_or("left");
+                        let explicit = explicit_aligns.get(idx).copied().flatten();
+                        let is_rtl = col_is_rtl.get(idx).copied().unwrap_or(false);
+                        let align = resolve_table_cell_align(explicit, is_rtl, &c);
                         RichBlockTableCell::new(parse_inline(&c), false, Some(align))
                     })
                     .collect();
-
                 table_cells.push(data_row);
-                idx_line += 1;
             }
 
             return (Some(table_cells), true, idx_line);
@@ -1502,7 +1550,7 @@ fn try_parse_table(
         }
 
         if table_lines.len() >= 2 {
-            let mut table_cells = Vec::new();
+            let mut raw_rows = Vec::new();
             let mut has_header = false;
             let mut first_row_done = false;
 
@@ -1523,25 +1571,32 @@ fn try_parse_table(
                     .collect();
 
                 if !cols.is_empty() && cols.iter().any(|c| !c.is_empty()) {
-                    let row: Vec<RichBlockTableCell> = cols
-                        .into_iter()
-                        .map(|c| RichBlockTableCell::new(parse_inline(c), false, Some("left")))
-                        .collect();
-                    table_cells.push(row);
+                    raw_rows.push(cols);
                     first_row_done = true;
                 }
             }
 
-            if let Some(first_row) = table_cells.first_mut() {
-                if has_header {
-                    for cell in first_row.iter_mut() {
-                        cell.is_header = Some(true);
-                    }
-                }
-            }
+            if !raw_rows.is_empty() {
+                let col_is_rtl = compute_column_rtl_flags(&raw_rows);
+                let mut table_cells = Vec::with_capacity(raw_rows.len());
 
-            if table_cells.len() >= 2 || (!table_cells.is_empty() && has_header) {
-                return (Some(table_cells), has_header, curr_i);
+                for (r_idx, row_cols) in raw_rows.into_iter().enumerate() {
+                    let is_hdr = r_idx == 0 && has_header;
+                    let row: Vec<RichBlockTableCell> = row_cols
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, c)| {
+                            let is_rtl = col_is_rtl.get(idx).copied().unwrap_or(false);
+                            let align = resolve_table_cell_align(None, is_rtl, c);
+                            RichBlockTableCell::new(parse_inline(c), is_hdr, Some(align))
+                        })
+                        .collect();
+                    table_cells.push(row);
+                }
+
+                if table_cells.len() >= 2 || (!table_cells.is_empty() && has_header) {
+                    return (Some(table_cells), has_header, curr_i);
+                }
             }
         }
     }
@@ -1559,11 +1614,7 @@ fn try_parse_table(
             .collect();
 
         if cols_hdr.len() >= 2 {
-            let header_row: Vec<RichBlockTableCell> = cols_hdr
-                .into_iter()
-                .map(|c| RichBlockTableCell::new(parse_inline(c), true, Some("left")))
-                .collect();
-            let mut table_cells = vec![header_row];
+            let mut raw_rows: Vec<Vec<&str>> = vec![cols_hdr];
             let mut curr_i = i + 2;
 
             while curr_i < n {
@@ -1581,16 +1632,29 @@ fn try_parse_table(
                     .filter(|c| !c.is_empty())
                     .collect();
                 if !data_cols.is_empty() {
-                    let row: Vec<RichBlockTableCell> = data_cols
-                        .into_iter()
-                        .map(|c| RichBlockTableCell::new(parse_inline(c), false, Some("left")))
-                        .collect();
-                    table_cells.push(row);
+                    raw_rows.push(data_cols);
                 }
                 curr_i += 1;
             }
 
-            if table_cells.len() >= 2 {
+            if raw_rows.len() >= 2 {
+                let col_is_rtl = compute_column_rtl_flags(&raw_rows);
+                let mut table_cells = Vec::with_capacity(raw_rows.len());
+
+                for (r_idx, row_cols) in raw_rows.into_iter().enumerate() {
+                    let is_hdr = r_idx == 0;
+                    let row: Vec<RichBlockTableCell> = row_cols
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, c)| {
+                            let is_rtl = col_is_rtl.get(idx).copied().unwrap_or(false);
+                            let align = resolve_table_cell_align(None, is_rtl, c);
+                            RichBlockTableCell::new(parse_inline(c), is_hdr, Some(align))
+                        })
+                        .collect();
+                    table_cells.push(row);
+                }
+
                 return (Some(table_cells), true, curr_i);
             }
         }
@@ -2370,7 +2434,9 @@ pub fn build_full_rich_message(answer_text: &str, footer_text: Option<&str>) -> 
             text: parse_inline(footer),
         });
     }
-    InputRichMessage::new(blocks)
+    let mut message = InputRichMessage::new(blocks);
+    rtl::apply_rtl_direction(&mut message, answer_text);
+    message
 }
 
 #[cfg(test)]
@@ -2900,5 +2966,57 @@ Contoh inline: $44\text{cm}$ dan $7,5\text{hari}$."#;
         assert_eq!(math_blocks[0], r"c = \sqrt{a^2 + b^2}");
         assert_eq!(math_blocks[1], r"= \sqrt{36 + 64}");
         assert_eq!(math_blocks[2], r"= 10\ \mathrm{cm}");
+    }
+
+    #[test]
+    fn rtl_markdown_table_with_hindi_numerals_defaults_to_right_alignment_and_sets_is_rtl() {
+        let md = "| الرقم | الاسم |\n| --- | --- |\n| ١ | أحمد |\n| ٢ | فاطمة |";
+        let message = build_full_rich_message(md, None);
+        assert_eq!(message.is_rtl, Some(true));
+
+        let Some(RichBlock::Table { cells, .. }) = message.blocks.first() else {
+            panic!("expected table block");
+        };
+
+        // All cells in RTL table with unspecified separator default to "right"
+        assert_eq!(cells[0][0].align.as_deref(), Some("right"));
+        assert_eq!(cells[0][1].align.as_deref(), Some("right"));
+        assert_eq!(cells[1][0].align.as_deref(), Some("right"));
+        assert_eq!(cells[1][1].align.as_deref(), Some("right"));
+    }
+
+    #[test]
+    fn rtl_table_honors_explicit_column_alignment() {
+        let md = "| الرقم | الاسم | النتيجة |\n| :--- | :---: | ---: |\n| ١ | أحمد | ممتاز |";
+        let blocks = parse_markdown_to_rich_blocks(md);
+        let Some(RichBlock::Table { cells, .. }) = blocks.first() else {
+            panic!("expected table block");
+        };
+
+        assert_eq!(cells[0][0].align.as_deref(), Some("left"));
+        assert_eq!(cells[0][1].align.as_deref(), Some("center"));
+        assert_eq!(cells[0][2].align.as_deref(), Some("right"));
+
+        assert_eq!(cells[1][0].align.as_deref(), Some("left"));
+        assert_eq!(cells[1][1].align.as_deref(), Some("center"));
+        assert_eq!(cells[1][2].align.as_deref(), Some("right"));
+    }
+
+    #[test]
+    fn unicode_box_table_with_rtl_header_defaults_column_to_right_alignment() {
+        let input =
+            "┌──────┬──────┐\n│ الرقم │ Score│\n├──────┼──────┤\n│ 123  │ 98   │\n└──────┴──────┘";
+        let blocks = parse_markdown_to_rich_blocks(input);
+        let Some(RichBlock::Table { cells, .. }) = blocks.first() else {
+            panic!("expected table block");
+        };
+
+        // Col 0 has RTL header "الرقم", so even though cell is ASCII "123", it defaults to "right"
+        assert_eq!(cells[0][0].align.as_deref(), Some("right"));
+        assert_eq!(cells[1][0].align.as_deref(), Some("right"));
+
+        // Col 1 is pure Latin "Score" / "98", so it remains "left"
+        assert_eq!(cells[0][1].align.as_deref(), Some("left"));
+        assert_eq!(cells[1][1].align.as_deref(), Some("left"));
     }
 }

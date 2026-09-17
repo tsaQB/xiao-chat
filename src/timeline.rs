@@ -423,7 +423,8 @@ impl ExecutionTimeline {
                 text: Value::String(status),
             });
         }
-        let rich_message = InputRichMessage::new(blocks);
+        let mut rich_message = InputRichMessage::new(blocks);
+        crate::parser::rtl::apply_rtl_direction(&mut rich_message, &partial);
 
         match &self.inner.mode {
             TimelineMode::PrivateDraft { draft_id, can_stop } => {
@@ -845,5 +846,22 @@ mod tests {
         assert!(res.is_ok());
         let val = res.unwrap();
         assert_eq!(val.get("failed").and_then(Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn draft_input_rich_message_detects_rtl_streaming_content() {
+        let partial = "مرحبا بالعالم";
+        let mut rich_message = InputRichMessage::new(vec![RichBlock::Paragraph {
+            text: Value::String(partial.to_string()),
+        }]);
+        crate::parser::rtl::apply_rtl_direction(&mut rich_message, partial);
+        assert_eq!(rich_message.is_rtl, Some(true));
+
+        let ltr_partial = "Hello world";
+        let mut ltr_msg = InputRichMessage::new(vec![RichBlock::Paragraph {
+            text: Value::String(ltr_partial.to_string()),
+        }]);
+        crate::parser::rtl::apply_rtl_direction(&mut ltr_msg, ltr_partial);
+        assert!(ltr_msg.is_rtl.is_none());
     }
 }

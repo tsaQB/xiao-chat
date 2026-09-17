@@ -8,7 +8,7 @@ Xiao combines streaming draft responses, rich structured messages (AST blocks), 
 
 ## Highlights
 
-- **Telegram Bot API 10.3 Native**: Implements streaming drafts (`sendRichMessageDraft`, `sendMessageDraft`), native stop controls (`stopped_message_generation`), and rich AST layout blocks (expandable blockquotes, multi-column tables, buttons, collages, slideshows, maps, and thinking blocks).
+- **Telegram Bot API 10.3 Native**: Implements streaming drafts (`sendRichMessageDraft`, `sendMessageDraft`), native stop controls (`stopped_message_generation`), bidirectional RTL layout support (`is_rtl`), and rich AST layout blocks (expandable blockquotes, multi-column tables with right-aligned RTL/Hindi number support, buttons, collages, slideshows, maps, and thinking blocks).
 - **Hardened Single-Owner Security**: Strictly enforces `OWNER_USER_ID`. Non-owner messages and unauthorized groups are dropped silently at the network boundary without acknowledgment or leakage.
 - **Zero-Slash Gateway**: Runs with empty command menus (`set_my_commands(&[])`). Interacts naturally through conversational intent, context-aware mentions, media attachments, or dedicated workspaces.
 - **Modular Multi-Role Routing**: Separates roles for `Main`, `Vision`, `Video`, `Audio STT`, `Image Generation`, and `Curator`. Specialist models receive minimal transient payloads to prevent context pollution and token exhaustion.

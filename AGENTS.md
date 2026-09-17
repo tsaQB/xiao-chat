@@ -150,6 +150,8 @@ cargo run -- setup
 - `src/timeline.rs`: Real-time streaming draft management with progress spinner and activity state indicators.
 - `src/parser/`:
   - `markdown.rs`: Converts extended markdown to Telegram Bot API 10.3 `RichBlock` AST representations.
+  - `latex.rs`: Sanitizes mathematical expressions for cross-platform Android and iOS rendering.
+  - `rtl.rs`: Detects Right-to-Left (RTL) scripts (Arabic, Hebrew, Persian, Urdu, etc.) and Eastern Arabic numerals, automatically setting layout direction and right-aligned table cells.
   - `terminal.rs`: ANSI terminal rendering for CLI chat and logs.
 
 ---
@@ -243,3 +245,6 @@ Configuration is loaded via `get_config_path()` in `src/main.rs`:
 4. **Git Commits & Formatting**:
    - Always run `cargo fmt --all -- --check` and `cargo clippy --locked --all-targets --all-features -- -D warnings` before committing.
    - Commit messages must follow project conventions: clear, descriptive, under 72 characters on the first line, focusing on why the change exists.
+5. **RTL & Bidirectional Layout (Bot API 10.3)**:
+   - When text or rich block contents contain RTL scripts (Arabic, Hebrew, Persian, Urdu) or Eastern Arabic-Indic / Hindi numerals (`٠..٩` / `\u0660..\u0669`), `InputRichMessage.is_rtl` must be set to `Some(true)`.
+   - Markdown and Unicode box tables automatically detect RTL content in headers and cells, defaulting unspecified column alignments to `"right"` so Telegram mirrors and renders them naturally from right to left.

@@ -304,3 +304,56 @@ fn chat_member_deserializes_and_validates_admin_status() {
         serde_json::from_str(member_json).expect("member ChatMember must deserialize");
     assert!(!member.is_admin_or_creator());
 }
+
+#[test]
+fn input_rich_message_serializes_is_rtl_true_when_set() {
+    let mut msg = models::InputRichMessage::new(vec![models::RichBlock::Paragraph {
+        text: serde_json::Value::String("مرحبا".to_string()),
+    }]);
+    msg.is_rtl = Some(true);
+    let val = serde_json::to_value(&msg).expect("rich message should serialize");
+    assert_eq!(val["is_rtl"], true);
+}
+
+#[test]
+fn input_rich_message_omits_is_rtl_when_none() {
+    let msg = models::InputRichMessage::new(vec![models::RichBlock::Paragraph {
+        text: serde_json::Value::String("Hello".to_string()),
+    }]);
+    let val = serde_json::to_value(&msg).expect("rich message should serialize");
+    assert!(val.get("is_rtl").is_none());
+}
+
+#[test]
+fn parser_emits_is_rtl_and_right_aligned_cells_for_arabic_table_with_hindi_numerals() {
+    let table_md = "| الرقم | الاسم |\n| --- | --- |\n| ١ | أحمد |\n| ٢ | فاطمة |";
+    let rich_msg = parser::build_full_rich_message(table_md, None);
+    assert_eq!(rich_msg.is_rtl, Some(true));
+
+    let Some(models::RichBlock::Table { cells, .. }) = rich_msg.blocks.first() else {
+        panic!("expected rich table block");
+    };
+
+    assert_eq!(cells[0][0].align.as_deref(), Some("right"));
+    assert_eq!(cells[0][1].align.as_deref(), Some("right"));
+    assert_eq!(cells[1][0].align.as_deref(), Some("right"));
+    assert_eq!(cells[1][1].align.as_deref(), Some("right"));
+
+    let val = serde_json::to_value(&rich_msg).expect("serialization must succeed");
+    assert_eq!(val["is_rtl"], true);
+    assert_eq!(val["blocks"][0]["type"], "table");
+    assert_eq!(val["blocks"][0]["cells"][0][0]["align"], "right");
+}
+
+#[test]
+fn parser_honors_explicit_column_alignments_in_contract_wire_format() {
+    let md = "| A | B | C |\n| :--- | :---: | ---: |\n| 1 | 2 | 3 |";
+    let rich_msg = parser::build_full_rich_message(md, None);
+    let val = serde_json::to_value(&rich_msg).expect("serialization must succeed");
+    assert_eq!(val["blocks"][0]["cells"][0][0]["align"], "left");
+    assert_eq!(val["blocks"][0]["cells"][0][1]["align"], "center");
+    assert_eq!(val["blocks"][0]["cells"][0][2]["align"], "right");
+    assert_eq!(val["blocks"][0]["cells"][1][0]["align"], "left");
+    assert_eq!(val["blocks"][0]["cells"][1][1]["align"], "center");
+    assert_eq!(val["blocks"][0]["cells"][1][2]["align"], "right");
+}

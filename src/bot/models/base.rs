@@ -616,6 +616,12 @@ impl RichBlockTableCell {
     pub fn text_only(text: &str, is_header: bool, align: Option<&str>) -> Self {
         Self::new(Value::String(text.to_string()), is_header, align)
     }
+
+    pub fn plain_text(&self) -> String {
+        let mut out = String::new();
+        value_to_text(&self.text, &mut out);
+        out
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1044,7 +1050,7 @@ fn value_text_chars(value: &Value) -> usize {
     }
 }
 
-fn value_to_text(value: &Value, out: &mut String) {
+pub(crate) fn value_to_text(value: &Value, out: &mut String) {
     match value {
         Value::String(text) => out.push_str(text),
         Value::Array(values) => {
