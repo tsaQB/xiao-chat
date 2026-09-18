@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::warn;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TelegramInboxRecord {
     pub update_id: i64,
     pub payload_json: String,
+    pub attempts: i64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -638,6 +639,9 @@ fn session_db_path() -> std::path::PathBuf {
     xiao_data_dir().join("xiaoai.db")
 }
 
+// PRAGMA table_info is safe against SQL injection here because `table` is
+// strictly an internal hardcoded compile-time identifier passed within this
+// storage module, never derived from untrusted user input.
 fn ensure_column(
     conn: &Connection,
     table: &str,
@@ -732,6 +736,12 @@ fn ensure_database_initialized(conn: &Connection, path: &Path) -> rusqlite::Resu
         "messages",
         "thread_id",
         "ALTER TABLE messages ADD COLUMN thread_id INTEGER NOT NULL DEFAULT 0;",
+    )?;
+    ensure_column(
+        conn,
+        "telegram_inbox",
+        "attempts",
+        "ALTER TABLE telegram_inbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;",
     )?;
     let _ = conn.execute(
         "UPDATE messages SET chat_id = user_id WHERE chat_id = 0 AND user_id != 0;",
@@ -1240,7 +1250,7 @@ fn pending_telegram_updates_after_on_conn(
     limit: usize,
 ) -> rusqlite::Result<Vec<TelegramInboxRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT update_id,payload_json
+        "SELECT update_id,payload_json,attempts
          FROM telegram_inbox
          WHERE status='pending' AND update_id>?1
          ORDER BY update_id
@@ -1250,6 +1260,7 @@ fn pending_telegram_updates_after_on_conn(
         Ok(TelegramInboxRecord {
             update_id: row.get(0)?,
             payload_json: row.get(1)?,
+            attempts: row.get(2)?,
         })
     })?;
     rows.collect()
@@ -1264,23 +1275,76 @@ fn recover_telegram_processing_on_conn(conn: &Connection) -> rusqlite::Result<us
     )
 }
 
-fn mark_telegram_processing_db(update_id: i64) -> rusqlite::Result<bool> {
-    let conn = open_session_db()?;
-    mark_telegram_processing_on_conn(&conn, update_id)
-}
-
-fn mark_telegram_processing_on_conn(conn: &Connection, update_id: i64) -> rusqlite::Result<bool> {
+fn mark_telegram_processing_claim_on_conn(
+    conn: &Connection,
+    update_id: i64,
+) -> rusqlite::Result<Option<i64>> {
     // Keep the payload until the handler reaches its completed checkpoint. If
     // XiaoAI crashes immediately after this claim, startup recovery can safely
     // make the update pending again instead of losing it forever. This gives
     // the inbox explicit at-least-once processing semantics; a crash after an
     // external side effect but before completion can still repeat that effect.
-    Ok(conn.execute(
+    let affected = conn.execute(
         "UPDATE telegram_inbox
          SET status='processing',attempts=attempts+1,last_error=NULL
          WHERE update_id=?1 AND status='pending'",
         params![update_id],
+    )?;
+    if affected == 0 {
+        return Ok(None);
+    }
+    let attempts: i64 = conn.query_row(
+        "SELECT attempts FROM telegram_inbox WHERE update_id=?1",
+        params![update_id],
+        |row| row.get(0),
+    )?;
+    Ok(Some(attempts))
+}
+
+fn mark_telegram_processing_claim_db(update_id: i64) -> rusqlite::Result<Option<i64>> {
+    let conn = open_session_db()?;
+    mark_telegram_processing_claim_on_conn(&conn, update_id)
+}
+
+#[cfg(test)]
+fn mark_telegram_processing_on_conn(conn: &Connection, update_id: i64) -> rusqlite::Result<bool> {
+    Ok(mark_telegram_processing_claim_on_conn(conn, update_id)?.is_some())
+}
+
+fn mark_telegram_processing_retry_on_conn(
+    conn: &Connection,
+    update_id: i64,
+    reason: &str,
+) -> rusqlite::Result<bool> {
+    Ok(conn.execute(
+        "UPDATE telegram_inbox
+         SET status='pending',last_error=?2
+         WHERE update_id=?1 AND status='processing'",
+        params![update_id, reason],
     )? == 1)
+}
+
+fn mark_telegram_processing_retry_db(update_id: i64, reason: &str) -> rusqlite::Result<bool> {
+    let conn = open_session_db()?;
+    mark_telegram_processing_retry_on_conn(&conn, update_id, reason)
+}
+
+fn mark_telegram_processing_failed_on_conn(
+    conn: &Connection,
+    update_id: i64,
+    reason: &str,
+) -> rusqlite::Result<bool> {
+    Ok(conn.execute(
+        "UPDATE telegram_inbox
+         SET status='failed',last_error=?2
+         WHERE update_id=?1 AND status='processing'",
+        params![update_id, reason],
+    )? == 1)
+}
+
+fn mark_telegram_processing_failed_db(update_id: i64, reason: &str) -> rusqlite::Result<bool> {
+    let conn = open_session_db()?;
+    mark_telegram_processing_failed_on_conn(&conn, update_id, reason)
 }
 
 fn mark_telegram_processed_db(update_id: i64) -> rusqlite::Result<bool> {
@@ -1338,9 +1402,33 @@ pub(crate) async fn recover_telegram_processing_async() -> usize {
     .unwrap_or_default()
 }
 
+pub(crate) async fn mark_telegram_processing_claim_async(update_id: i64) -> Option<i64> {
+    run_db("mark_telegram_processing_claim", move || {
+        mark_telegram_processing_claim_db(update_id)
+    })
+    .await
+    .flatten()
+}
+
 pub(crate) async fn mark_telegram_processing_async(update_id: i64) -> bool {
-    run_db("mark_telegram_processing", move || {
-        mark_telegram_processing_db(update_id)
+    mark_telegram_processing_claim_async(update_id)
+        .await
+        .is_some()
+}
+
+pub(crate) async fn mark_telegram_processing_retry_async(update_id: i64, reason: &str) -> bool {
+    let reason = reason.to_string();
+    run_db("mark_telegram_processing_retry", move || {
+        mark_telegram_processing_retry_db(update_id, &reason)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+pub(crate) async fn mark_telegram_processing_failed_async(update_id: i64, reason: &str) -> bool {
+    let reason = reason.to_string();
+    run_db("mark_telegram_processing_failed", move || {
+        mark_telegram_processing_failed_db(update_id, &reason)
     })
     .await
     .unwrap_or(false)
@@ -2551,6 +2639,39 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn telegram_inbox_attempts_increment_on_claim_and_retry_preserves_count() {
+        let mut conn = session_test_conn();
+        assert!(enqueue_telegram_update_on_conn(&mut conn, 100, r#"{"update_id":100}"#).unwrap());
+
+        // First claim: attempts becomes 1
+        assert_eq!(
+            mark_telegram_processing_claim_on_conn(&conn, 100).unwrap(),
+            Some(1)
+        );
+
+        // Mark retry: status becomes pending again
+        assert!(mark_telegram_processing_retry_on_conn(&conn, 100, "transient error").unwrap());
+
+        let pending = pending_telegram_updates_after_on_conn(&conn, 99, 10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].update_id, 100);
+        assert_eq!(pending[0].attempts, 1);
+
+        // Second claim: attempts becomes 2
+        assert_eq!(
+            mark_telegram_processing_claim_on_conn(&conn, 100).unwrap(),
+            Some(2)
+        );
+
+        // Mark failed (quarantine): status becomes failed
+        assert!(mark_telegram_processing_failed_on_conn(&conn, 100, "poison pill").unwrap());
+
+        // Failed records do not show in pending
+        let pending_after_fail = pending_telegram_updates_after_on_conn(&conn, 99, 10).unwrap();
+        assert!(pending_after_fail.is_empty());
     }
 
     #[test]

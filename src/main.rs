@@ -1306,6 +1306,201 @@ fn command_args<'a>(text: &'a str, command: &str) -> Option<&'a str> {
     Some(mention[mention_end..].trim_start())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ScopeKey {
+    pub(crate) chat_id: i64,
+    pub(crate) thread_id: i64,
+}
+
+impl ScopeKey {
+    pub(crate) fn from_update(update: &Update) -> Self {
+        if let Some(msg) = update.message.as_ref() {
+            Self {
+                chat_id: msg.chat.id,
+                thread_id: msg.message_thread_id.unwrap_or(0),
+            }
+        } else if let Some(cb) = update.callback_query.as_ref() {
+            if let Some(msg) = cb.message.as_ref() {
+                Self {
+                    chat_id: msg.chat.id,
+                    thread_id: msg.message_thread_id.unwrap_or(0),
+                }
+            } else {
+                Self {
+                    chat_id: cb.from.id,
+                    thread_id: 0,
+                }
+            }
+        } else if let Some(stopped) = update.stopped_message_generation.as_ref() {
+            Self {
+                chat_id: stopped.chat.id,
+                thread_id: 0,
+            }
+        } else {
+            Self {
+                chat_id: 0,
+                thread_id: 0,
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WorkerContext {
+    bot: TelegramBotClient,
+    ai_service: Arc<AIChatService>,
+    user_last_image_prompt: UserLastImagePrompt,
+    route_scope: Arc<ChatRouteScope>,
+}
+
+type ActiveScopes = Arc<tokio::sync::Mutex<HashMap<ScopeKey, tokio::sync::mpsc::Sender<Update>>>>;
+
+async fn scoped_chat_worker(
+    scope_key: ScopeKey,
+    mut rx: tokio::sync::mpsc::Receiver<Update>,
+    active_scopes: ActiveScopes,
+    global_concurrency: Arc<tokio::sync::Semaphore>,
+    ctx: WorkerContext,
+) {
+    loop {
+        let update_opt = tokio::select! {
+            msg = rx.recv() => msg,
+            _ = tokio::time::sleep(Duration::from_secs(30)) => None,
+        };
+
+        match update_opt {
+            Some(update) => {
+                process_scoped_update(&global_concurrency, &ctx, update).await;
+            }
+            None => {
+                let mut scopes = active_scopes.lock().await;
+                match rx.try_recv() {
+                    Ok(late_update) => {
+                        drop(scopes);
+                        process_scoped_update(&global_concurrency, &ctx, late_update).await;
+                        continue;
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                        scopes.remove(&scope_key);
+                        break;
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        scopes.remove(&scope_key);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn process_scoped_update(
+    global_concurrency: &Arc<tokio::sync::Semaphore>,
+    ctx: &WorkerContext,
+    update: Update,
+) {
+    let update_id = update.update_id;
+    let current_update = update;
+
+    loop {
+        // Acquire global permit only while actively executing
+        let permit = match global_concurrency.acquire().await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        // Seed/read attempt count directly from SQLite durable claim
+        let attempt = match ai::storage::mark_telegram_processing_claim_async(update_id).await {
+            Some(a) => a,
+            None => {
+                drop(permit);
+                return;
+            }
+        };
+
+        if attempt > 2 {
+            warn!(
+                "Update {update_id} melebihi batas percobaan ({attempt} attempts); mengarantina sebagai failed"
+            );
+            let _ = ai::storage::mark_telegram_processing_failed_async(
+                update_id,
+                "quarantined after exceeding max attempts (attempts > 2)",
+            )
+            .await;
+            drop(permit);
+            return;
+        }
+
+        let worker_bot = ctx.bot.clone();
+        let worker_ai = Arc::clone(&ctx.ai_service);
+        let worker_last_image = Arc::clone(&ctx.user_last_image_prompt);
+        let worker_route = Arc::clone(&ctx.route_scope);
+        let update_clone = current_update.clone();
+
+        let join_res = tokio::spawn(async move {
+            let delivery_context = delivery_context_for_update(&update_clone);
+            TelegramBotClient::with_delivery_context(
+                delivery_context,
+                handle_update(
+                    &worker_bot,
+                    &worker_ai,
+                    &worker_last_image,
+                    &worker_route,
+                    update_clone,
+                ),
+            )
+            .await;
+        })
+        .await;
+
+        match join_res {
+            Ok(()) => {
+                if !ai::storage::mark_telegram_processed_async(update_id).await {
+                    warn!("Gagal menyelesaikan durable Telegram inbox update {update_id}");
+                }
+                drop(permit);
+                return;
+            }
+            Err(join_err) if join_err.is_panic() => {
+                // REQUIREMENT 1: RELEASE PERMIT BEFORE BACKOFF SLEEP
+                drop(permit);
+
+                if attempt < 2 {
+                    warn!(
+                        "Update {update_id} panic pada percobaan {attempt}/2. Menandai retry dan backoff 1.5s (permit dilepas)..."
+                    );
+                    let _ = ai::storage::mark_telegram_processing_retry_async(
+                        update_id,
+                        "transient panic during processing, scheduled for retry",
+                    )
+                    .await;
+
+                    // Backoff without holding any concurrency permit
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+                    // Next iteration re-acquires permit and re-claims via mark_telegram_processing_claim_async
+                    continue;
+                } else {
+                    error!(
+                        "Update {update_id} gagal setelah {attempt} kali percobaan (poison pill). Mengarantina sebagai failed."
+                    );
+                    let _ = ai::storage::mark_telegram_processing_failed_async(
+                        update_id,
+                        "quarantined after 2 consecutive panics",
+                    )
+                    .await;
+                    return;
+                }
+            }
+            Err(join_err) => {
+                drop(permit);
+                warn!("Update {update_id} task cancelled or aborted: {join_err}");
+                return;
+            }
+        }
+    }
+}
+
 async fn process_durable_update(
     bot: &TelegramBotClient,
     ai_service: &AIChatService,
@@ -2054,21 +2249,73 @@ async fn main() {
     }
 
     let (update_tx, mut update_rx) = tokio::sync::mpsc::channel::<Update>(64);
+    let active_scopes: ActiveScopes = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let global_concurrency = Arc::new(tokio::sync::Semaphore::new(8));
 
-    let worker_bot = bot.clone();
-    let worker_ai = Arc::clone(&ai_service);
-    let worker_last_image = Arc::clone(&user_last_image_prompt);
-    let worker_route_scope = Arc::clone(&route_scope);
+    let worker_ctx = WorkerContext {
+        bot: bot.clone(),
+        ai_service: Arc::clone(&ai_service),
+        user_last_image_prompt: Arc::clone(&user_last_image_prompt),
+        route_scope: Arc::clone(&route_scope),
+    };
+    let worker_active_scopes = Arc::clone(&active_scopes);
+    let worker_global_concurrency = Arc::clone(&global_concurrency);
+
     let update_worker = tokio::spawn(async move {
         while let Some(update) = update_rx.recv().await {
-            process_durable_update(
-                &worker_bot,
-                &worker_ai,
-                &worker_last_image,
-                &worker_route_scope,
-                update,
-            )
-            .await;
+            if update.stopped_message_generation.is_some() {
+                // Native Stop bypasses worker queues for immediate zero-latency cancellation
+                process_durable_update(
+                    &worker_ctx.bot,
+                    &worker_ctx.ai_service,
+                    &worker_ctx.user_last_image_prompt,
+                    &worker_ctx.route_scope,
+                    update,
+                )
+                .await;
+                continue;
+            }
+
+            let scope_key = ScopeKey::from_update(&update);
+            let mut scopes = worker_active_scopes.lock().await;
+
+            if let Some(sender) = scopes.get(&scope_key) {
+                match sender.try_send(update) {
+                    Ok(()) => continue,
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(rejected)) => {
+                        warn!(
+                            "Scope {:?} backlog penuh (>32 pesan); update {} dipertahankan berstatus pending di SQLite inbox",
+                            scope_key, rejected.update_id
+                        );
+                        continue;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(rejected)) => {
+                        scopes.remove(&scope_key);
+                        let (tx, rx) = tokio::sync::mpsc::channel::<Update>(32);
+                        let _ = tx.try_send(rejected);
+                        scopes.insert(scope_key, tx);
+                        tokio::spawn(scoped_chat_worker(
+                            scope_key,
+                            rx,
+                            Arc::clone(&worker_active_scopes),
+                            Arc::clone(&worker_global_concurrency),
+                            worker_ctx.clone(),
+                        ));
+                        continue;
+                    }
+                }
+            }
+
+            let (tx, rx) = tokio::sync::mpsc::channel::<Update>(32);
+            let _ = tx.try_send(update);
+            scopes.insert(scope_key, tx);
+            tokio::spawn(scoped_chat_worker(
+                scope_key,
+                rx,
+                Arc::clone(&worker_active_scopes),
+                Arc::clone(&worker_global_concurrency),
+                worker_ctx.clone(),
+            ));
         }
     });
 
@@ -2088,6 +2335,18 @@ async fn main() {
         }
         for record in replay_batch {
             replay_after_update_id = record.update_id;
+            if record.attempts >= 2 {
+                warn!(
+                    "Durable Telegram update {} sudah mencapai batas percobaan ({} attempts) saat startup; mengarantina sebagai failed",
+                    record.update_id, record.attempts
+                );
+                let _ = ai::storage::mark_telegram_processing_failed_async(
+                    record.update_id,
+                    "quarantined after exceeding max attempts across restarts",
+                )
+                .await;
+                continue;
+            }
             match serde_json::from_str::<Update>(&record.payload_json) {
                 Ok(update) => {
                     if update.stopped_message_generation.is_some() {
@@ -3143,5 +3402,107 @@ mod tests {
 
         assert!(doc_guard.contains("document_images"));
         assert!(doc_guard.contains("is_none_or(|pages| pages.is_empty())"));
+    }
+
+    #[test]
+    fn scope_key_extraction_for_messages_threads_and_callbacks() {
+        use super::ScopeKey;
+        use crate::bot::models::Update;
+
+        // 1. Direct message (no thread)
+        let update_direct: Update = serde_json::from_str(
+            r#"{
+                "update_id": 1,
+                "message": {
+                    "message_id": 10,
+                    "date": 1234567,
+                    "chat": {"id": 12345, "type": "private"},
+                    "text": "hello"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ScopeKey::from_update(&update_direct),
+            ScopeKey {
+                chat_id: 12345,
+                thread_id: 0
+            }
+        );
+
+        // 2. Forum topic message (with thread)
+        let update_topic: Update = serde_json::from_str(
+            r#"{
+                "update_id": 2,
+                "message": {
+                    "message_id": 11,
+                    "message_thread_id": 99,
+                    "date": 1234567,
+                    "chat": {"id": -100123456, "type": "supergroup"},
+                    "text": "in topic"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ScopeKey::from_update(&update_topic),
+            ScopeKey {
+                chat_id: -100123456,
+                thread_id: 99
+            }
+        );
+
+        // 3. Callback query with message
+        let update_cb: Update = serde_json::from_str(
+            r#"{
+                "update_id": 3,
+                "callback_query": {
+                    "id": "cb1",
+                    "from": {"id": 555, "is_bot": false, "first_name": "Test"},
+                    "message": {
+                        "message_id": 12,
+                        "message_thread_id": 77,
+                        "date": 1234567,
+                        "chat": {"id": -100789, "type": "supergroup"}
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ScopeKey::from_update(&update_cb),
+            ScopeKey {
+                chat_id: -100789,
+                thread_id: 77
+            }
+        );
+    }
+
+    #[test]
+    fn process_scoped_update_drops_permit_before_backoff_sleep() {
+        let source = include_str!("main.rs");
+        let func_start = source
+            .find("async fn process_scoped_update(")
+            .expect("process_scoped_update definition");
+        let func_end = source[func_start..]
+            .find("async fn process_durable_update(")
+            .map(|offset| func_start + offset)
+            .expect("process_durable_update definition");
+        let func_body = &source[func_start..func_end];
+
+        let panic_match = func_body
+            .find("Err(join_err) if join_err.is_panic() =>")
+            .expect("panic handler branch");
+        let drop_permit = func_body[panic_match..]
+            .find("drop(permit);")
+            .expect("drop permit in panic branch");
+        let sleep_backoff = func_body[panic_match..]
+            .find("tokio::time::sleep(")
+            .expect("sleep in panic branch");
+
+        assert!(
+            drop_permit < sleep_backoff,
+            "Permit must be dropped BEFORE tokio::time::sleep backoff"
+        );
     }
 }
