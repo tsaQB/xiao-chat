@@ -551,6 +551,33 @@ impl TelegramBotClient {
         url: &str,
         max_bytes: usize,
     ) -> Option<(Vec<u8>, String, String)> {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            self.download_media_bytes_inner(url, max_bytes).await
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    pub(crate) async fn download_media_bytes_with_budget(
+        &self,
+        url: &str,
+        max_bytes: usize,
+        budget: Duration,
+    ) -> Option<(Vec<u8>, String, String)> {
+        tokio::time::timeout(budget, async {
+            self.download_media_bytes_inner(url, max_bytes).await
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    async fn download_media_bytes_inner(
+        &self,
+        url: &str,
+        max_bytes: usize,
+    ) -> Option<(Vec<u8>, String, String)> {
         let mut current_url_str = url.trim().to_string();
         let mut redirect_count = 0;
         const MAX_DOWNLOAD_REDIRECTS: usize = 5;
@@ -3090,5 +3117,46 @@ mod tests {
         assert!(!html.contains("<blockquote"));
         assert!(!html.contains("Thinking:"));
         assert!(html.contains("🧩 Thinking\n1s •"));
+    }
+
+    #[tokio::test]
+    async fn download_media_bytes_stops_within_bounded_time_when_budget_expires() {
+        let client = TelegramBotClient::new("test-token");
+        let start = std::time::Instant::now();
+        let res = client
+            .download_media_bytes_with_budget(
+                "https://1.1.1.1/slow-download.bin",
+                1024,
+                Duration::from_millis(15),
+            )
+            .await;
+        let elapsed = start.elapsed();
+        assert!(res.is_none(), "timed-out download must return None");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "download must abort within bounded time, took {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn download_media_bytes_wraps_in_total_30s_timeout_budget() {
+        let source = include_str!("raw.rs");
+        let start = source
+            .find("pub async fn download_media_bytes")
+            .expect("download_media_bytes must exist");
+        let tail = &source[start..];
+        let end = tail
+            .find("pub async fn send_photo(")
+            .expect("send_photo must follow");
+        let body = &tail[..end];
+        assert!(
+            body.contains("tokio::time::timeout(Duration::from_secs(30)"),
+            "download_media_bytes must wrap redirect loop and streaming in a 30s total budget"
+        );
+        assert!(
+            body.contains(".flatten()"),
+            "elapsed timeout must return None via .ok().flatten()"
+        );
     }
 }
