@@ -159,10 +159,20 @@ cargo run -- setup
   - `transport_policy.rs`: Retry backoff logic, HTTP 429 rate limit parsing, and Bad Request fallback gates.
   - `url_policy.rs`: Outbound SSRF firewall preventing requests to private, loopback, link-local, and SIIT/NAT64 translated IP ranges.
 - `src/ai/`:
-  - `service.rs`: Primary orchestration for text chat, streaming responses, multimodal routing, tool execution, and image generation.
+  - `service/`: Modular AI orchestration engine:
+    - `session.rs`: Session state transitions, active generation tracking, and cancellation signals.
+    - `context.rs`: Token budget estimation, sliding-window message context assembly, and conversation trimming.
+    - `generation.rs`: Streaming SSE lifecycle, provider HTTP dispatch, retry backoff, and tool execution loops.
+    - `image.rs`: Image generation providers, prompt translation, and base64/download resolution.
+    - `multimodal.rs`: Specialist inputs (Vision, Video, Audio STT) and observation turn formatting.
+  - `storage/`: Modular SQLite (WAL mode) persistence layer and secret store:
+    - `secrets.rs`: Atomic filesystem secret vault (`0o600`/`0o700`), encrypted references (`secret://`), and application settings.
+    - `inbox.rs`: Durable Telegram inbox queue, state transitions, in-flight processing claims, and crash recovery.
+    - `session.rs`: Chat sessions, scoped conversation turns, thread context queries, and topic summaries.
+    - `memory.rs`: Tier-1 persistent user profile facts (key-value memory operations).
+    - `provider.rs`: AI provider configurations, model registry, capability probe records, and specialist routes.
   - `routing.rs`: Specialist model role resolution (`ModelRole`: Main, Vision, Video, AudioStt, ImageGeneration, Curator).
   - `capability.rs` / `provider.rs`: Live model probe harness and capability verification (e.g. confirming whether an endpoint actually supports vision or tool calling).
-  - `storage.rs`: SQLite persistence layer (WAL mode) for messages, sessions, user memories, scoped summaries, and encrypted/private credentials.
   - `stream.rs`: UTF-8 chunk-safe Server-Sent Events (SSE) streaming decoder.
   - `tools.rs`: Function calling engine (`web_search` with keyless Exa MCP protocol, Tavily/Brave API, and DuckDuckGo/Wikipedia fallbacks; and `fetch_url`).
 - `src/document.rs` & `src/document/archive.rs`: In-memory safe extraction of text, archives (ZIP, TAR, TAR.GZ, 7Z), Office files (DOCX, XLSX), and PDF page extraction/rendering.

@@ -4,11 +4,54 @@ pub mod provider;
 pub mod secrets;
 pub mod session;
 
-pub use inbox::*;
-pub use memory::*;
-pub use provider::*;
-pub use secrets::*;
-pub use session::*;
+#[allow(unused_imports)]
+pub use inbox::{
+    enqueue_telegram_update_async, load_telegram_offset_async, mark_telegram_processed_async,
+    mark_telegram_processing_async, mark_telegram_processing_claim_async,
+    mark_telegram_processing_failed_async, mark_telegram_processing_retry_async,
+    pending_telegram_updates_after_async, recover_telegram_processing_async, TelegramInboxRecord,
+};
+#[allow(unused_imports)]
+pub use memory::{
+    clear_user_memories, clear_user_memories_async, delete_user_memory, delete_user_memory_async,
+    get_user_memories, get_user_memories_async, save_user_memory, save_user_memory_async,
+};
+#[allow(unused_imports)]
+pub use provider::{
+    get_capability_registry_path, get_providers_store_path, load_capability_registry,
+    load_model_routing, load_provider_store, parse_auto_seed_endpoint, save_capability_registry,
+    save_model_routing, save_provider_store, seed_default_provider_from_env_if_empty,
+    CapabilityEvidence, CapabilityEvidenceSource, CapabilityKind, CapabilityRecord,
+    CapabilityRegistry, CapabilityState, ProbeEvent, ProbeOutcome, ProviderConfig, ProviderStore,
+    DEFAULT_OPENROUTER_ENDPOINT, DEFAULT_OPENROUTER_MODEL,
+};
+#[allow(unused_imports)]
+pub(crate) use provider::{persist_capability_registry, persist_model_routing};
+#[allow(unused_imports)]
+pub use secrets::{load_app_setting, save_app_setting};
+#[allow(unused_imports)]
+pub use session::{
+    clear_scoped_messages, clear_scoped_messages_async, count_scoped_messages,
+    count_scoped_messages_async, get_scoped_summary, get_scoped_summary_async,
+    load_scoped_messages, load_scoped_messages_async, save_scoped_message,
+    save_scoped_message_async, save_scoped_summary, save_scoped_summary_async, ChatMessage,
+    ChatSession,
+};
+#[allow(unused_imports)]
+pub(crate) use session::{
+    compute_next_session_id, create_session_and_activate_db_async,
+    ensure_session_identity_v2_db_async, legacy_active_session_id, load_active_session_id_db_async,
+    load_sessions_db_async, remove_session_transaction_db_async,
+    replace_session_messages_if_revision_db_async, switch_active_session_db_async,
+    RemoveSessionOutcome,
+};
+
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use provider::EvidenceFreshness;
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use session::TopicScope;
 
 use rusqlite::Connection;
 use std::path::Path;
