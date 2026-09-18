@@ -83,6 +83,11 @@ cargo run -- ai test [role]
 cargo run -- mcp
 cargo run -- mcp url <URL>
 cargo run -- mcp test [query]
+cargo run -- mcp search <query>
+cargo run -- mcp tools
+cargo run -- mcp brave [KEY|rm]
+cargo run -- mcp tavily [KEY|rm]
+cargo run -- mcp exa [KEY|rm]
 cargo run -- mcp reset
 
 # Telegram Gateway & Owner Configuration

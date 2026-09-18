@@ -357,3 +357,26 @@ fn parser_honors_explicit_column_alignments_in_contract_wire_format() {
     assert_eq!(val["blocks"][0]["cells"][1][1]["align"], "center");
     assert_eq!(val["blocks"][0]["cells"][1][2]["align"], "right");
 }
+
+#[test]
+fn ephemeral_message_parameters_serializes_replace_callback_query_message() {
+    let params = models::EphemeralMessageParameters {
+        receiver_user_id: 123456,
+        callback_query_id: Some("cq_1".to_string()),
+        replace_callback_query_message: Some(true),
+    };
+    let val = serde_json::to_value(&params).expect("serialization must succeed");
+    assert_eq!(val["receiver_user_id"], 123456);
+    assert_eq!(val["callback_query_id"], "cq_1");
+    assert_eq!(val["replace_callback_query_message"], true);
+
+    let params_without = models::EphemeralMessageParameters {
+        receiver_user_id: 123456,
+        callback_query_id: None,
+        replace_callback_query_message: None,
+    };
+    let val_without = serde_json::to_value(&params_without).expect("serialization must succeed");
+    assert_eq!(val_without["receiver_user_id"], 123456);
+    assert!(val_without.get("callback_query_id").is_none());
+    assert!(val_without.get("replace_callback_query_message").is_none());
+}

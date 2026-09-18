@@ -1258,6 +1258,7 @@ fn delivery_context_for_update(update: &Update) -> TelegramDeliveryContext {
                 .and_then(|_| message.from.as_ref().map(|user| user.id)),
             source_ephemeral_message_id: message.ephemeral_message_id,
             callback_query_id: None,
+            replace_callback_query_message: None,
         };
     }
     if let Some(callback) = update.callback_query.as_ref() {
@@ -1268,6 +1269,7 @@ fn delivery_context_for_update(update: &Update) -> TelegramDeliveryContext {
             receiver_user_id: source_ephemeral_message_id.map(|_| callback.from.id),
             source_ephemeral_message_id,
             callback_query_id: source_ephemeral_message_id.map(|_| callback.id.clone()),
+            replace_callback_query_message: None,
         };
     }
     if let Some(stopped) = update.stopped_message_generation.as_ref() {
@@ -1886,8 +1888,46 @@ async fn main() {
             return;
         }
         "context" => {
-            let chat_arg = args.get(2).and_then(|s| s.parse::<i64>().ok());
-            let thread_arg = args.get(3).and_then(|s| s.parse::<i64>().ok());
+            if let Some(arg) = args.get(2) {
+                if arg == "help" || arg == "--help" || arg == "-h" {
+                    println!(
+                        "\n\x1b[1;36mxiao context — Context Window & Token Breakdown\x1b[0m\n"
+                    );
+                    println!("\x1b[1;37mUsage:\x1b[0m");
+                    println!("  xiao context [chat_id] [thread_id]\n");
+                    println!("Displays token consumption, sliding window turns, memory facts count, and visual gauge.");
+                    println!("If omitted, defaults to the owner's private chat session.\n");
+                    return;
+                }
+            }
+            let chat_arg = if let Some(s) = args.get(2) {
+                match s.parse::<i64>() {
+                    Ok(id) => Some(id),
+                    Err(_) => {
+                        println!(
+                            "\x1b[31m✖ Error: Chat ID '{s}' harus berupa angka (integer).\x1b[0m"
+                        );
+                        println!("  Jalankan 'xiao context help' untuk panduan penggunaan.\n");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+            let thread_arg = if let Some(s) = args.get(3) {
+                match s.parse::<i64>() {
+                    Ok(id) => Some(id),
+                    Err(_) => {
+                        println!(
+                            "\x1b[31m✖ Error: Thread ID '{s}' harus berupa angka (integer).\x1b[0m"
+                        );
+                        println!("  Jalankan 'xiao context help' untuk panduan penggunaan.\n");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
             run_cli_context(&ai_service, chat_arg, thread_arg).await;
             return;
         }
@@ -1956,12 +1996,12 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let Some(token) = get_or_prompt_token(&ai_service).await else {
-        return;
+        std::process::exit(1);
     };
 
     let Some(owner_user_id) = get_configured_owner_id() else {
         error!("OWNER_USER_ID belum dikonfigurasi. Jalankan `xiao gateway` atau `xiao setup`.");
-        return;
+        std::process::exit(1);
     };
 
     let bot = TelegramBotClient::new(token);
@@ -1972,7 +2012,7 @@ async fn main() {
         Ok(resp) if resp.ok => {
             let Some(bot_info) = resp.result else {
                 error!("Telegram getMe returned ok=true without a result");
-                return;
+                std::process::exit(1);
             };
             println!(
                 "\n🚀 xiao @{} online menggunakan Telegram Bot API 10.3!",
@@ -1987,11 +2027,11 @@ async fn main() {
                 "Gagal terhubung ke Telegram Bot API: {:?}",
                 resp.description
             );
-            return;
+            std::process::exit(1);
         }
         Err(e) => {
             error!("HTTP connection error: {e}");
-            return;
+            std::process::exit(1);
         }
     };
 

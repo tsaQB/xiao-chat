@@ -96,18 +96,42 @@ pub fn get_tools_definition() -> Value {
     ])
 }
 
-pub fn get_search_engine_status() -> (String, String) {
-    let exa_key = env::var("EXA_API_KEY")
-        .or_else(|_| env::var("EXA_KEY"))
+pub fn get_brave_key() -> Option<String> {
+    env::var("BRAVE_API_KEY")
         .ok()
-        .filter(|s| !s.trim().is_empty());
-    let tavily_key = env::var("TAVILY_API_KEY")
+        .or_else(|| crate::ai::service::load_app_setting("BRAVE_API_KEY"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub fn get_tavily_key() -> Option<String> {
+    env::var("TAVILY_API_KEY")
         .or_else(|_| env::var("TAVILY_KEY"))
         .ok()
-        .filter(|s| !s.trim().is_empty());
-    let brave_key = env::var("BRAVE_API_KEY")
+        .or_else(|| {
+            crate::ai::service::load_app_setting("TAVILY_API_KEY")
+                .or_else(|| crate::ai::service::load_app_setting("TAVILY_KEY"))
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub fn get_exa_key() -> Option<String> {
+    env::var("EXA_API_KEY")
+        .or_else(|_| env::var("EXA_KEY"))
         .ok()
-        .filter(|s| !s.trim().is_empty());
+        .or_else(|| {
+            crate::ai::service::load_app_setting("EXA_API_KEY")
+                .or_else(|| crate::ai::service::load_app_setting("EXA_KEY"))
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub fn get_search_engine_status() -> (String, String) {
+    let exa_key = get_exa_key();
+    let tavily_key = get_tavily_key();
+    let brave_key = get_brave_key();
 
     let engine_name = if brave_key.is_some() {
         "Brave Search (API Key Active)".to_string()
@@ -143,38 +167,27 @@ pub async fn execute_web_search(query: &str) -> String {
         .unwrap_or_default();
 
     // 1. Check Brave Search API
-    if let Ok(brave_key) = env::var("BRAVE_API_KEY") {
-        let key = brave_key.trim();
-        if !key.is_empty() {
-            info!("Using Brave Search API for query: {q}");
-            match search_brave(&client, key, q).await {
-                Ok(res) => return res,
-                Err(e) => warn!("Brave search failed ({e}), falling back to other providers"),
-            }
+    if let Some(brave_key) = get_brave_key() {
+        info!("Using Brave Search API for query: {q}");
+        match search_brave(&client, &brave_key, q).await {
+            Ok(res) => return res,
+            Err(e) => warn!("Brave search failed ({e}), falling back to other providers"),
         }
     }
 
     // 2. Check Tavily API
-    let tavily_key = env::var("TAVILY_API_KEY")
-        .or_else(|_| env::var("TAVILY_KEY"))
-        .unwrap_or_default();
-    let key = tavily_key.trim();
-    if !key.is_empty() {
+    if let Some(tavily_key) = get_tavily_key() {
         info!("Using Tavily API for query: {q}");
-        match search_tavily(&client, key, q).await {
+        match search_tavily(&client, &tavily_key, q).await {
             Ok(res) => return res,
             Err(e) => warn!("Tavily search failed ({e}), falling back to other providers"),
         }
     }
 
     // 3. Check Exa REST API
-    let exa_key = env::var("EXA_API_KEY")
-        .or_else(|_| env::var("EXA_KEY"))
-        .unwrap_or_default();
-    let key = exa_key.trim();
-    if !key.is_empty() {
+    if let Some(exa_key) = get_exa_key() {
         info!("Using Exa API for query: {q}");
-        match search_exa_api(&client, key, q).await {
+        match search_exa_api(&client, &exa_key, q).await {
             Ok(res) => return res,
             Err(e) => warn!("Exa API search failed ({e}), falling back to other providers"),
         }
@@ -888,5 +901,13 @@ mod tests {
         assert!(!is_suppressed_tool_preamble_stream(
             "Saya adalah asisten AI pribadi Anda."
         ));
+    }
+
+    #[test]
+    fn test_search_engine_status_and_resolvers() {
+        let (status, mcp_url) = get_search_engine_status();
+        assert!(!status.is_empty());
+        assert!(!mcp_url.is_empty());
+        assert!(mcp_url.starts_with("http"));
     }
 }

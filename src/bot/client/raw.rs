@@ -27,6 +27,7 @@ pub struct TelegramDeliveryContext {
     pub receiver_user_id: Option<i64>,
     pub source_ephemeral_message_id: Option<i64>,
     pub callback_query_id: Option<String>,
+    pub replace_callback_query_message: Option<bool>,
 }
 
 tokio::task_local! {
@@ -108,7 +109,7 @@ impl TelegramBotClient {
                 serde_json::to_value(EphemeralMessageParameters {
                     receiver_user_id: context.receiver_user_id.unwrap_or_default(),
                     callback_query_id: context.callback_query_id.clone(),
-                    replace_callback_query_message: None,
+                    replace_callback_query_message: context.replace_callback_query_message,
                 })
                 .unwrap_or(json!({}));
         }
@@ -137,7 +138,7 @@ impl TelegramBotClient {
                 if let Ok(ephemeral) = serde_json::to_string(&EphemeralMessageParameters {
                     receiver_user_id,
                     callback_query_id: context.callback_query_id.clone(),
-                    replace_callback_query_message: None,
+                    replace_callback_query_message: context.replace_callback_query_message,
                 }) {
                     form = form.text("ephemeral_message_parameters", ephemeral);
                 }
@@ -430,11 +431,12 @@ impl TelegramBotClient {
                     }
                 }
                 if let Some(recv) = receiver_user_id {
+                    let ctx = Self::current_delivery_context();
                     payload["ephemeral_message_parameters"] =
                         serde_json::to_value(EphemeralMessageParameters {
                             receiver_user_id: recv,
-                            callback_query_id: None,
-                            replace_callback_query_message: None,
+                            callback_query_id: ctx.callback_query_id,
+                            replace_callback_query_message: ctx.replace_callback_query_message,
                         })
                         .unwrap_or(json!({}));
                 }
@@ -461,11 +463,12 @@ impl TelegramBotClient {
             payload["reply_markup"] = rm;
         }
         if let Some(recv) = receiver_user_id {
+            let ctx = Self::current_delivery_context();
             payload["ephemeral_message_parameters"] =
                 serde_json::to_value(EphemeralMessageParameters {
                     receiver_user_id: recv,
-                    callback_query_id: None,
-                    replace_callback_query_message: None,
+                    callback_query_id: ctx.callback_query_id,
+                    replace_callback_query_message: ctx.replace_callback_query_message,
                 })
                 .unwrap_or(json!({}));
         }
@@ -1424,11 +1427,12 @@ impl TelegramBotClient {
                 payload["reply_markup"] = rm.clone();
             }
             if let Some(recv) = receiver_user_id {
+                let ctx = Self::current_delivery_context();
                 payload["ephemeral_message_parameters"] =
                     serde_json::to_value(EphemeralMessageParameters {
                         receiver_user_id: recv,
-                        callback_query_id: Self::current_delivery_context().callback_query_id,
-                        replace_callback_query_message: None,
+                        callback_query_id: ctx.callback_query_id,
+                        replace_callback_query_message: ctx.replace_callback_query_message,
                     })
                     .unwrap_or(json!({}));
             }
@@ -1460,7 +1464,7 @@ impl TelegramBotClient {
             let ephemeral = serde_json::to_string(&EphemeralMessageParameters {
                 receiver_user_id,
                 callback_query_id: delivery.callback_query_id.clone(),
-                replace_callback_query_message: None,
+                replace_callback_query_message: delivery.replace_callback_query_message,
             })
             .map_err(|e| e.to_string())?;
             form = form.text("ephemeral_message_parameters", ephemeral);
@@ -1844,11 +1848,12 @@ impl TelegramBotClient {
                 payload["reply_markup"] = rm.clone();
             }
             if let Some(recv) = receiver_user_id {
+                let ctx = Self::current_delivery_context();
                 payload["ephemeral_message_parameters"] =
                     serde_json::to_value(EphemeralMessageParameters {
                         receiver_user_id: recv,
-                        callback_query_id: Self::current_delivery_context().callback_query_id,
-                        replace_callback_query_message: None,
+                        callback_query_id: ctx.callback_query_id,
+                        replace_callback_query_message: ctx.replace_callback_query_message,
                     })
                     .unwrap_or(json!({}));
             }
@@ -1891,12 +1896,12 @@ impl TelegramBotClient {
                         retry_payload["reply_markup"] = rm.clone();
                     }
                     if let Some(recv) = receiver_user_id {
+                        let ctx = Self::current_delivery_context();
                         retry_payload["ephemeral_message_parameters"] =
                             serde_json::to_value(EphemeralMessageParameters {
                                 receiver_user_id: recv,
-                                callback_query_id: Self::current_delivery_context()
-                                    .callback_query_id,
-                                replace_callback_query_message: None,
+                                callback_query_id: ctx.callback_query_id,
+                                replace_callback_query_message: ctx.replace_callback_query_message,
                             })
                             .unwrap_or(json!({}));
                     }

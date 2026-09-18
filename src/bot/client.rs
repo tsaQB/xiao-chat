@@ -21,10 +21,6 @@ pub use raw::TelegramDeliveryContext;
 const MAX_TELEGRAM_DOWNLOAD_BYTES: usize = 20 * 1024 * 1024;
 const MAX_TELEGRAM_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
-tokio::task_local! {
-    static REPLACE_CALLBACK_QUERY_MESSAGE: bool;
-}
-
 enum HttpResponseOutcome {
     Success(Value),
     Retry { delay: Duration, error: String },
@@ -47,6 +43,7 @@ impl Deref for TelegramBotClient {
     }
 }
 
+// Extended Telegram Bot API 10.3 transport methods
 #[allow(dead_code)]
 impl TelegramBotClient {
     pub fn new(token: impl Into<String>) -> Self {
@@ -65,10 +62,6 @@ impl TelegramBotClient {
         }
     }
 
-    pub fn token(&self) -> &str {
-        &self.token
-    }
-
     pub async fn with_delivery_context<F, T>(context: TelegramDeliveryContext, future: F) -> T
     where
         F: std::future::Future<Output = T>,
@@ -76,19 +69,12 @@ impl TelegramBotClient {
         raw::TelegramBotClient::with_delivery_context(context, future).await
     }
 
-    pub async fn with_replace_callback_query_message<F, T>(replace: bool, future: F) -> T
-    where
-        F: std::future::Future<Output = T>,
-    {
-        REPLACE_CALLBACK_QUERY_MESSAGE.scope(replace, future).await
-    }
-
     pub fn current_delivery_context() -> TelegramDeliveryContext {
         raw::TelegramBotClient::current_delivery_context()
     }
 
     fn replace_callback_query_message() -> Option<bool> {
-        REPLACE_CALLBACK_QUERY_MESSAGE.try_with(|value| *value).ok()
+        Self::current_delivery_context().replace_callback_query_message
     }
 
     fn telegram_api_error(method: &str, response: &Value) -> String {
@@ -496,14 +482,6 @@ impl TelegramBotClient {
             last = self.post_json("sendMessage", payload).await?;
         }
         Ok(last)
-    }
-
-    pub async fn download_media_bytes(
-        &self,
-        url: &str,
-        max_bytes: usize,
-    ) -> Option<(Vec<u8>, String, String)> {
-        self.inner.download_media_bytes(url, max_bytes).await
     }
 
     pub async fn send_photo_bytes(

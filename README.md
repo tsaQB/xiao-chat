@@ -140,7 +140,7 @@ xiao <command> [arguments]
 | `ai use <model>` | Switch the active Main model directly. |
 | `ai addon` | Configure multimodal specialist roles (`Vision`, `Video`, `Audio STT`, `Image Generation`, `Curator`). |
 | `ai test [role]` | Run live diagnostic capability probes against active endpoints. |
-| `mcp [action]` | Manage Model Context Protocol search endpoints (`xiao mcp`, `xiao mcp url <URL>`, `xiao mcp test`, `xiao mcp reset`). |
+| `mcp [action]` | Manage Model Context Protocol search endpoints (`xiao mcp`, `xiao mcp url <URL>`, `xiao mcp test`, `xiao mcp search`, `xiao mcp tools`, `xiao mcp [brave|tavily|exa]`, `xiao mcp reset`). |
 | `gateway` | Manage Telegram Bot Token connectivity and verify `OWNER_USER_ID`. |
 | `version` | Display version information. |
 | `help` | Display command-line help. |
