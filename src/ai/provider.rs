@@ -1814,12 +1814,14 @@ mod tests {
             providers: vec![provider("main-a", "model-a"), provider("main-b", "model-b")],
         };
         let routing = ModelRoutingConfig::default();
-        let (_, model, origin) = select_model_route(&store, &routing, ModelRole::Vision).unwrap();
+        let (_, model, origin) = select_model_route(&store, &routing, ModelRole::Vision)
+            .expect("select_model_route succeeds");
         assert_eq!(model, "model-a");
         assert_eq!(origin, RouteOrigin::MainModel);
 
         store.active_id = Some("main-b".to_string());
-        let (_, model, origin) = select_model_route(&store, &routing, ModelRole::Vision).unwrap();
+        let (_, model, origin) = select_model_route(&store, &routing, ModelRole::Vision)
+            .expect("select_model_route succeeds");
         assert_eq!(model, "model-b");
         assert_eq!(origin, RouteOrigin::MainModel);
     }
@@ -1842,7 +1844,7 @@ mod tests {
                     model: "vision-v1".to_string(),
                 },
             )
-            .unwrap();
+            .expect("set_route succeeds");
         assert!(select_model_route(&store, &routing, ModelRole::Vision)
             .unwrap_err()
             .contains("not found"));
@@ -1855,7 +1857,7 @@ mod tests {
                     model: "vision-v2".to_string(),
                 },
             )
-            .unwrap();
+            .expect("set_route succeeds");
         assert!(select_model_route(&store, &routing, ModelRole::Vision)
             .unwrap_err()
             .contains("no longer present"));
@@ -1947,14 +1949,14 @@ mod tests {
                     {
                         let resolved =
                             AIChatService::resolve_model_route_from_snapshot(&snapshot, role)
-                                .unwrap();
+                                .expect("resolve_model_route succeeds");
                         assert_eq!(resolved.model, "model");
                         assert_eq!(resolved.provider.endpoint, provider.endpoint);
                         if role != ModelRole::Main {
                             snapshot
                                 .routing
                                 .set_route(role, ModelRoute::Disabled)
-                                .unwrap();
+                                .expect("set_route succeeds");
                             assert!(AIChatService::resolve_model_route_from_snapshot(
                                 &snapshot, role,
                             )
@@ -1968,7 +1970,7 @@ mod tests {
                                         model: "model".into(),
                                     },
                                 )
-                                .unwrap();
+                                .expect("set_route succeeds");
                             assert!(AIChatService::resolve_model_route_from_snapshot(
                                 &snapshot, role,
                             )
@@ -2051,11 +2053,13 @@ mod tests {
             .and_then(|part| part.get("image_url"))
             .and_then(|image_url| image_url.get("url"))
             .and_then(Value::as_str)
-            .unwrap();
-        let encoded = url.strip_prefix("data:video/mp4;base64,").unwrap();
+            .expect("url string present");
+        let encoded = url
+            .strip_prefix("data:video/mp4;base64,")
+            .expect("video/mp4 data url prefix");
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .unwrap();
+            .expect("decode base64 succeeds");
         assert!(bytes.len() < 2 * 1024);
         assert_eq!(&bytes[4..8], b"ftyp");
     }
@@ -2106,7 +2110,7 @@ mod tests {
             "architecture": {"modality": "text+image"},
             "top_provider": {"max_completion_tokens": 8192}
         }))
-        .unwrap();
+        .expect("normalize metadata succeeds");
         assert_eq!(metadata.id, "model-a");
         assert_eq!(metadata.context_length, Some(131072));
         assert_eq!(metadata.modalities.as_deref(), Some("text+image"));
@@ -2116,7 +2120,7 @@ mod tests {
             "id": "model-b",
             "modalities": ["text", "audio", "video"]
         }))
-        .unwrap();
+        .expect("normalize metadata succeeds");
         assert_eq!(metadata.modalities.as_deref(), Some("text,audio,video"));
     }
 
@@ -2495,17 +2499,19 @@ mod tests {
         };
 
         let initial_main =
-            AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Main).unwrap();
+            AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Main)
+                .expect("resolve_model_route succeeds");
         live_store.active_id = Some("main-b".to_string());
 
         for role in [ModelRole::Vision, ModelRole::Video, ModelRole::AudioStt] {
-            let inherited =
-                AIChatService::resolve_model_route_from_snapshot(&snapshot, role).unwrap();
+            let inherited = AIChatService::resolve_model_route_from_snapshot(&snapshot, role)
+                .expect("resolve_model_route succeeds");
             assert_eq!(inherited.provider.id, "main-a");
             assert_eq!(inherited.model, "model-a");
         }
         let final_main =
-            AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Main).unwrap();
+            AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Main)
+                .expect("resolve_model_route succeeds");
         assert_eq!(initial_main.provider.id, "main-a");
         assert_eq!(final_main.provider.id, "main-a");
         assert_eq!(live_store.active_id.as_deref(), Some("main-b"));
@@ -2532,13 +2538,14 @@ mod tests {
 
         let image_route =
             AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::ImageGeneration)
-                .unwrap();
+                .expect("resolve_model_route succeeds");
         assert_eq!(image_route.provider.id, "main-a");
 
         live_store.active_id = Some("main-b".to_string());
 
         let explanation_route =
-            AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Main).unwrap();
+            AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Main)
+                .expect("resolve_model_route succeeds");
         assert_eq!(explanation_route.provider.id, "main-a");
 
         let next_request = GenerationModelSnapshot {
@@ -2548,7 +2555,7 @@ mod tests {
         };
         let next_main =
             AIChatService::resolve_model_route_from_snapshot(&next_request, ModelRole::Main)
-                .unwrap();
+                .expect("resolve_model_route succeeds");
         assert_eq!(next_main.provider.id, "main-b");
     }
 
@@ -2571,10 +2578,10 @@ mod tests {
                     model: "vision-b".to_string(),
                 },
             )
-            .unwrap();
+            .expect("set_route succeeds");
         routing
             .set_route(ModelRole::Video, ModelRoute::Disabled)
-            .unwrap();
+            .expect("set_route succeeds");
         let capabilities = live_store
             .providers
             .iter()
@@ -2589,15 +2596,15 @@ mod tests {
         };
 
         live_store.active_id = Some("main-c".to_string());
-        let vision =
-            AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Vision).unwrap();
+        let vision = AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Vision)
+            .expect("resolve_model_route succeeds");
         assert_eq!(vision.provider.id, "vision-b");
         assert_eq!(vision.model, "vision-b");
         assert!(
             AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Video).is_err()
         );
-        let main =
-            AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Main).unwrap();
+        let main = AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::Main)
+            .expect("resolve_model_route succeeds");
         assert_eq!(main.provider.id, "main-a");
     }
 

@@ -193,7 +193,7 @@ mod tests {
                     model: "flux".into(),
                 },
             )
-            .unwrap();
+            .expect("set_route succeeds");
         assert_eq!(
             config.roles_using_provider("together"),
             vec![ModelRole::ImageGeneration]
@@ -209,7 +209,7 @@ mod tests {
         };
         config
             .set_route(ModelRole::Vision, specific.clone())
-            .unwrap();
+            .expect("set_route succeeds");
         assert_eq!(config.route(ModelRole::Vision), Some(&specific));
     }
 
@@ -218,7 +218,7 @@ mod tests {
         let mut config = ModelRoutingConfig::default();
         config
             .set_route(ModelRole::Video, ModelRoute::Disabled)
-            .unwrap();
+            .expect("set_route succeeds");
         assert_eq!(config.route(ModelRole::Video), Some(&ModelRoute::Disabled));
     }
 
@@ -242,7 +242,7 @@ mod tests {
                     model: "llama-3.1-8b-instant".into(),
                 },
             )
-            .unwrap();
+            .expect("set_route succeeds");
         assert_eq!(
             config.route(ModelRole::Curator),
             Some(&ModelRoute::Specific {

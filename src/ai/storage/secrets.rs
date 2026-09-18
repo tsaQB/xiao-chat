@@ -326,15 +326,15 @@ mod tests {
 
     #[test]
     fn legacy_bot_token_migration_is_lossless_and_removes_plaintext_only_after_reference() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().expect("open_in_memory succeeds");
         conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
-            .unwrap();
+            .expect("execute_batch succeeds");
         let token = "123456:test-secret-token";
         conn.execute(
             "INSERT INTO settings(key,value) VALUES('app:BOT_TOKEN',?1)",
             params![token],
         )
-        .unwrap();
+        .expect("insert setting succeeds");
 
         let dir = std::env::temp_dir().join(format!(
             "xiaoai-secret-migration-{}-{:x}",
@@ -343,7 +343,7 @@ mod tests {
         ));
         let migrated =
             migrate_legacy_secret_setting_on_conn(&mut conn, &dir, "BOT_TOKEN", "telegram", token)
-                .unwrap();
+                .expect("migration succeeds");
         assert_eq!(migrated, token);
 
         let raw_count: usize = conn
@@ -352,7 +352,7 @@ mod tests {
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query raw count succeeds");
         assert_eq!(raw_count, 0);
         let secret_ref: String = conn
             .query_row(
@@ -360,9 +360,12 @@ mod tests {
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query secret ref succeeds");
         assert!(secret_ref.starts_with("secret://telegram/"));
-        assert_eq!(read_secret_in_dir(&dir, &secret_ref).unwrap(), token);
+        assert_eq!(
+            read_secret_in_dir(&dir, &secret_ref).expect("read secret succeeds"),
+            token
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -376,11 +379,19 @@ mod tests {
             rand::random::<u64>()
         ));
         let secret_ref = "secret://test/mode-check";
-        write_secret_in_dir(&dir, secret_ref, "secret").unwrap();
-        let path = secret_path_in_dir(&dir, secret_ref).unwrap();
+        write_secret_in_dir(&dir, secret_ref, "secret").expect("write secret succeeds");
+        let path = secret_path_in_dir(&dir, secret_ref).expect("secret path succeeds");
 
-        let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
-        let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let dir_mode = std::fs::metadata(&dir)
+            .expect("metadata succeeds")
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(&path)
+            .expect("metadata succeeds")
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(dir_mode, 0o700);
         assert_eq!(file_mode, 0o600);
         let _ = std::fs::remove_dir_all(dir);
@@ -393,7 +404,7 @@ mod tests {
             std::process::id(),
             rand::random::<u64>()
         ));
-        std::fs::write(&invalid_dir, b"not a directory").unwrap();
+        std::fs::write(&invalid_dir, b"not a directory").expect("write dummy file succeeds");
         let secret_ref = "secret://test/fail-check";
         let res = write_secret_in_dir(&invalid_dir, secret_ref, "test");
         assert!(res.is_err());

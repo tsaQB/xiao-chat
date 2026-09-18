@@ -273,7 +273,7 @@ mod tests {
     use super::*;
 
     fn inbox_test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open_in_memory().expect("open_in_memory succeeds");
         conn.execute_batch(
             "CREATE TABLE telegram_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE telegram_inbox (
@@ -281,7 +281,7 @@ mod tests {
                 attempts INTEGER NOT NULL DEFAULT 0, received_at TEXT NOT NULL, last_error TEXT
             );",
         )
-        .unwrap();
+        .expect("execute_batch succeeds");
         conn
     }
 
@@ -289,39 +289,55 @@ mod tests {
     fn telegram_claim_crash_is_recoverable_and_completed_updates_deduplicate() {
         let mut conn = inbox_test_conn();
         let payload = r#"{"update_id":42,"message":{"text":"hello"}}"#;
-        assert!(enqueue_telegram_update_on_conn(&mut conn, 42, payload).unwrap());
-        assert!(mark_telegram_processing_on_conn(&conn, 42).unwrap());
+        assert!(enqueue_telegram_update_on_conn(&mut conn, 42, payload)
+            .expect("enqueue_telegram_update succeeds"));
+        assert!(
+            mark_telegram_processing_on_conn(&conn, 42).expect("mark_telegram_processing succeeds")
+        );
         let claimed: (String, String) = conn
             .query_row(
                 "SELECT status,payload_json FROM telegram_inbox WHERE update_id=42",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .unwrap();
+            .expect("query status,payload_json succeeds");
         assert_eq!(claimed.0, "processing");
         assert_eq!(claimed.1, payload);
 
-        assert_eq!(recover_telegram_processing_on_conn(&conn).unwrap(), 1);
+        assert_eq!(
+            recover_telegram_processing_on_conn(&conn)
+                .expect("recover_telegram_processing succeeds"),
+            1
+        );
         let recovered: String = conn
             .query_row(
                 "SELECT status FROM telegram_inbox WHERE update_id=42",
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query status succeeds");
         assert_eq!(recovered, "pending");
 
-        assert!(mark_telegram_processing_on_conn(&conn, 42).unwrap());
-        assert!(mark_telegram_processed_on_conn(&conn, 42).unwrap());
-        assert_eq!(recover_telegram_processing_on_conn(&conn).unwrap(), 0);
-        assert!(!enqueue_telegram_update_on_conn(&mut conn, 42, payload).unwrap());
+        assert!(
+            mark_telegram_processing_on_conn(&conn, 42).expect("mark_telegram_processing succeeds")
+        );
+        assert!(
+            mark_telegram_processed_on_conn(&conn, 42).expect("mark_telegram_processed succeeds")
+        );
+        assert_eq!(
+            recover_telegram_processing_on_conn(&conn)
+                .expect("recover_telegram_processing succeeds"),
+            0
+        );
+        assert!(!enqueue_telegram_update_on_conn(&mut conn, 42, payload)
+            .expect("enqueue_telegram_update succeeds"));
         let completed: (String, String) = conn
             .query_row(
                 "SELECT status,payload_json FROM telegram_inbox WHERE update_id=42",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .unwrap();
+            .expect("query status,payload_json succeeds");
         assert_eq!(completed.0, "completed");
         assert!(!completed.1.contains("hello"));
     }
@@ -331,15 +347,20 @@ mod tests {
         let mut conn = inbox_test_conn();
         for update_id in 1..=501 {
             let payload = format!(r#"{{"update_id":{update_id}}}"#);
-            assert!(enqueue_telegram_update_on_conn(&mut conn, update_id, &payload).unwrap());
+            assert!(
+                enqueue_telegram_update_on_conn(&mut conn, update_id, &payload)
+                    .expect("enqueue_telegram_update succeeds")
+            );
         }
 
-        let first = pending_telegram_updates_after_on_conn(&conn, i64::MIN, 500).unwrap();
+        let first = pending_telegram_updates_after_on_conn(&conn, i64::MIN, 500)
+            .expect("pending_telegram_updates_after succeeds");
         assert_eq!(first.len(), 500);
         assert_eq!(first.first().map(|record| record.update_id), Some(1));
         assert_eq!(first.last().map(|record| record.update_id), Some(500));
 
-        let second = pending_telegram_updates_after_on_conn(&conn, 500, 500).unwrap();
+        let second = pending_telegram_updates_after_on_conn(&conn, 500, 500)
+            .expect("pending_telegram_updates_after succeeds");
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].update_id, 501);
     }
@@ -347,24 +368,35 @@ mod tests {
     #[test]
     fn telegram_pending_updates_replayed_and_marked_processing_then_processed() {
         let mut conn = inbox_test_conn();
-        assert!(enqueue_telegram_update_on_conn(&mut conn, 10, r#"{"update_id":10}"#).unwrap());
-        assert!(enqueue_telegram_update_on_conn(&mut conn, 11, r#"{"update_id":11}"#).unwrap());
+        assert!(
+            enqueue_telegram_update_on_conn(&mut conn, 10, r#"{"update_id":10}"#)
+                .expect("enqueue_telegram_update succeeds")
+        );
+        assert!(
+            enqueue_telegram_update_on_conn(&mut conn, 11, r#"{"update_id":11}"#)
+                .expect("enqueue_telegram_update succeeds")
+        );
 
-        let pending = pending_telegram_updates_after_on_conn(&conn, i64::MIN, 10).unwrap();
+        let pending = pending_telegram_updates_after_on_conn(&conn, i64::MIN, 10)
+            .expect("pending_telegram_updates_after succeeds");
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].update_id, 10);
         assert_eq!(pending[1].update_id, 11);
 
-        assert!(mark_telegram_processing_on_conn(&conn, 10).unwrap());
-        let pending_after_first =
-            pending_telegram_updates_after_on_conn(&conn, i64::MIN, 10).unwrap();
+        assert!(
+            mark_telegram_processing_on_conn(&conn, 10).expect("mark_telegram_processing succeeds")
+        );
+        let pending_after_first = pending_telegram_updates_after_on_conn(&conn, i64::MIN, 10)
+            .expect("pending_telegram_updates_after succeeds");
         assert_eq!(pending_after_first.len(), 1);
         assert_eq!(pending_after_first[0].update_id, 11);
 
-        assert!(mark_telegram_processed_on_conn(&conn, 10).unwrap());
+        assert!(
+            mark_telegram_processed_on_conn(&conn, 10).expect("mark_telegram_processed succeeds")
+        );
         assert_eq!(
             pending_telegram_updates_after_on_conn(&conn, i64::MIN, 10)
-                .unwrap()
+                .expect("pending_telegram_updates_after succeeds")
                 .len(),
             1
         );
@@ -373,33 +405,46 @@ mod tests {
     #[test]
     fn telegram_inbox_attempts_increment_on_claim_and_retry_preserves_count() {
         let mut conn = inbox_test_conn();
-        assert!(enqueue_telegram_update_on_conn(&mut conn, 100, r#"{"update_id":100}"#).unwrap());
+        assert!(
+            enqueue_telegram_update_on_conn(&mut conn, 100, r#"{"update_id":100}"#)
+                .expect("enqueue_telegram_update succeeds")
+        );
 
         // First claim: attempts becomes 1
         assert_eq!(
-            mark_telegram_processing_claim_on_conn(&conn, 100).unwrap(),
+            mark_telegram_processing_claim_on_conn(&conn, 100)
+                .expect("mark_telegram_processing_claim succeeds"),
             Some(1)
         );
 
         // Mark retry: status becomes pending again
-        assert!(mark_telegram_processing_retry_on_conn(&conn, 100, "transient error").unwrap());
+        assert!(
+            mark_telegram_processing_retry_on_conn(&conn, 100, "transient error")
+                .expect("mark_telegram_processing_retry succeeds")
+        );
 
-        let pending = pending_telegram_updates_after_on_conn(&conn, 99, 10).unwrap();
+        let pending = pending_telegram_updates_after_on_conn(&conn, 99, 10)
+            .expect("pending_telegram_updates_after succeeds");
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].update_id, 100);
         assert_eq!(pending[0].attempts, 1);
 
         // Second claim: attempts becomes 2
         assert_eq!(
-            mark_telegram_processing_claim_on_conn(&conn, 100).unwrap(),
+            mark_telegram_processing_claim_on_conn(&conn, 100)
+                .expect("mark_telegram_processing_claim succeeds"),
             Some(2)
         );
 
         // Mark failed (quarantine): status becomes failed
-        assert!(mark_telegram_processing_failed_on_conn(&conn, 100, "poison pill").unwrap());
+        assert!(
+            mark_telegram_processing_failed_on_conn(&conn, 100, "poison pill")
+                .expect("mark_telegram_processing_failed succeeds")
+        );
 
         // Failed records do not show in pending
-        let pending_after_fail = pending_telegram_updates_after_on_conn(&conn, 99, 10).unwrap();
+        let pending_after_fail = pending_telegram_updates_after_on_conn(&conn, 99, 10)
+            .expect("pending_telegram_updates_after succeeds");
         assert!(pending_after_fail.is_empty());
     }
 }

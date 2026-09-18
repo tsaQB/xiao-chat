@@ -227,7 +227,7 @@ fn ensure_database_initialized(conn: &Connection, path: &Path) -> rusqlite::Resu
 pub(crate) fn open_session_db() -> rusqlite::Result<Connection> {
     let path = session_db_path();
     if DB_INIT.get().is_none() {
-        let _guard = DB_INIT_MUTEX.lock().unwrap();
+        let _guard = DB_INIT_MUTEX.lock().expect("DB_INIT_MUTEX poisoned");
         if DB_INIT.get().is_none() {
             if let Some(parent) = path.parent() {
                 if let Err(err) = std::fs::create_dir_all(parent) {
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn xiao_data_dir_honors_env_override() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
         let original = std::env::var("XIAO_DATA_DIR").ok();
         let custom_dir = "/tmp/test_xiao_custom_dir";
         std::env::set_var("XIAO_DATA_DIR", custom_dir);

@@ -830,7 +830,7 @@ mod tests {
             active_id: Some("p1".to_string()),
             providers: vec![provider.clone()],
         })
-        .unwrap();
+        .expect("serialize provider store succeeds");
         assert!(!json.contains(secret));
         assert!(json.contains("secret://provider/p1/ref"));
         assert!(!format!("{provider:?}").contains(secret));
@@ -850,8 +850,8 @@ mod tests {
 
     #[test]
     fn valid_model_routing_does_not_request_rewrite() {
-        let json =
-            serde_json::to_string(&crate::ai::routing::ModelRoutingConfig::default()).unwrap();
+        let json = serde_json::to_string(&crate::ai::routing::ModelRoutingConfig::default())
+            .expect("serialize default model routing succeeds");
         let (_, needs_persist) = decode_model_routing(Some(&json));
         assert!(!needs_persist);
     }
@@ -1053,7 +1053,8 @@ mod tests {
             "supports_video": false,
             "supports_file_input": true
         });
-        let record: CapabilityRecord = serde_json::from_value(legacy).unwrap();
+        let record: CapabilityRecord =
+            serde_json::from_value(legacy).expect("deserialize capability record succeeds");
 
         assert_eq!(record.supports_text_chat, Some(true));
         assert_eq!(record.supports_image_input, Some(true));
@@ -1240,9 +1241,9 @@ mod tests {
     }
 
     fn settings_test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open_in_memory().expect("open_in_memory succeeds");
         conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
-            .unwrap();
+            .expect("execute_batch succeeds");
         conn
     }
 
@@ -1254,7 +1255,7 @@ mod tests {
     ) where
         F: FnOnce(&mut Connection, &Path),
     {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
         let _guard = EnvCleanupGuard {
             vars: vec![
                 ("AI_ENDPOINT", std::env::var("AI_ENDPOINT").ok()),
@@ -1316,10 +1317,12 @@ mod tests {
                 let secret_ref = p.api_key_ref.as_ref().expect("api_key_ref populated");
                 assert!(secret_ref.starts_with("secret://provider/env-default/"));
 
-                let secret_path = secret_path_in_dir(secrets_dir, secret_ref).unwrap();
+                let secret_path = secret_path_in_dir(secrets_dir, secret_ref)
+                    .expect("secret path in dir succeeds");
                 assert!(secret_path.exists());
                 assert_eq!(
-                    read_secret_in_dir(secrets_dir, secret_ref).unwrap(),
+                    read_secret_in_dir(secrets_dir, secret_ref)
+                        .expect("read secret in dir succeeds"),
                     "sk-test-secret-key-12345"
                 );
 
@@ -1327,13 +1330,16 @@ mod tests {
                 {
                     use std::os::unix::fs::PermissionsExt;
                     let file_mode = std::fs::metadata(&secret_path)
-                        .unwrap()
+                        .expect("metadata succeeds")
                         .permissions()
                         .mode()
                         & 0o777;
                     assert_eq!(file_mode, 0o600);
-                    let dir_mode =
-                        std::fs::metadata(secrets_dir).unwrap().permissions().mode() & 0o777;
+                    let dir_mode = std::fs::metadata(secrets_dir)
+                        .expect("metadata succeeds")
+                        .permissions()
+                        .mode()
+                        & 0o777;
                     assert_eq!(dir_mode, 0o700);
                 }
 
@@ -1343,7 +1349,7 @@ mod tests {
                         [],
                         |row| row.get(0),
                     )
-                    .unwrap();
+                    .expect("query provider_store succeeds");
                 assert!(!persisted_json.contains("sk-test-secret-key-12345"));
                 assert!(persisted_json.contains(secret_ref));
 
@@ -1353,7 +1359,7 @@ mod tests {
                         [],
                         |row| row.get(0),
                     )
-                    .unwrap();
+                    .expect("query app:AI_ENDPOINT succeeds");
                 assert_eq!(ep, "https://api.openai.com/v1");
 
                 let model: String = conn
@@ -1362,7 +1368,7 @@ mod tests {
                         [],
                         |row| row.get(0),
                     )
-                    .unwrap();
+                    .expect("query app:AI_MODEL succeeds");
                 assert_eq!(model, "gpt-4o");
 
                 let key_ref: String = conn
@@ -1371,7 +1377,7 @@ mod tests {
                         [],
                         |row| row.get(0),
                     )
-                    .unwrap();
+                    .expect("query app:AI_API_KEY_REF succeeds");
                 assert_eq!(key_ref, *secret_ref);
 
                 let plaintext_key_count: usize = conn
@@ -1380,7 +1386,7 @@ mod tests {
                         [],
                         |row| row.get(0),
                     )
-                    .unwrap();
+                    .expect("query count app:AI_API_KEY succeeds");
                 assert_eq!(plaintext_key_count, 0);
             },
         );
@@ -1568,7 +1574,8 @@ mod tests {
                     std::process::id(),
                     rand::random::<u64>()
                 ));
-                std::fs::write(&invalid_secrets_file, b"not a directory").unwrap();
+                std::fs::write(&invalid_secrets_file, b"not a directory")
+                    .expect("write invalid secrets dummy succeeds");
 
                 let mut store = ProviderStore::default();
                 let seeded = seed_default_provider_from_env_if_empty_on_conn_and_dir(

@@ -691,7 +691,7 @@ mod tests {
     use super::*;
 
     fn session_test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open_in_memory().expect("open_in_memory succeeds");
         conn.execute_batch(
             "CREATE TABLE sessions (
                 user_id INTEGER NOT NULL, session_id INTEGER NOT NULL, name TEXT NOT NULL,
@@ -727,7 +727,7 @@ mod tests {
             CREATE INDEX idx_messages_chat_thread ON messages(chat_id, thread_id);
             CREATE INDEX idx_user_memories_user ON user_memories(user_id);",
         )
-        .unwrap();
+        .expect("execute_batch succeeds");
         conn
     }
 
@@ -737,18 +737,18 @@ mod tests {
              VALUES(7,3,'Original','now','now',?1)",
             params![revision],
         )
-        .unwrap();
+        .expect("insert session succeeds");
         conn.execute(
             "INSERT INTO active_sessions(user_id,session_id) VALUES(7,3)",
             [],
         )
-        .unwrap();
+        .expect("insert active_session succeeds");
         conn.execute(
             "INSERT INTO messages(user_id,session_id,role,content,created_at)
              VALUES(7,3,'user','\"hello\"','now')",
             [],
         )
-        .unwrap();
+        .expect("insert message succeeds");
     }
 
     #[test]
@@ -759,7 +759,7 @@ mod tests {
             "CREATE TRIGGER fail_clear BEFORE DELETE ON messages
              BEGIN SELECT RAISE(ABORT, 'clear failpoint'); END;",
         )
-        .unwrap();
+        .expect("execute_batch succeeds");
         let candidate = ChatSession {
             id: 3,
             name: "Original".to_string(),
@@ -774,14 +774,14 @@ mod tests {
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query revision succeeds");
         let messages: usize = conn
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE user_id=7 AND session_id=3",
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query count succeeds");
         assert_eq!(revision, 4);
         assert_eq!(messages, 1);
     }
@@ -794,7 +794,7 @@ mod tests {
             "CREATE TRIGGER fail_append BEFORE INSERT ON messages
              BEGIN SELECT RAISE(ABORT, 'append failpoint'); END;",
         )
-        .unwrap();
+        .expect("execute_batch succeeds");
         let candidate = ChatSession {
             id: 3,
             name: "Candidate title".to_string(),
@@ -813,14 +813,14 @@ mod tests {
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query name succeeds");
         let messages: usize = conn
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE user_id=7 AND session_id=3",
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query count succeeds");
         assert_eq!(name, "Original");
         assert_eq!(messages, 1);
     }
@@ -836,11 +836,12 @@ mod tests {
             created_at: "now".to_string(),
             revision: 8,
         };
-        let result = append_session_messages_on_conn(&mut conn, 7, 8, &candidate, &[]).unwrap();
+        let result = append_session_messages_on_conn(&mut conn, 7, 8, &candidate, &[])
+            .expect("append_session_messages succeeds");
         assert!(!result);
         let messages: usize = conn
             .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
-            .unwrap();
+            .expect("query count succeeds");
         assert_eq!(messages, 1);
     }
 
@@ -852,12 +853,12 @@ mod tests {
             "INSERT INTO session_counters(user_id,next_session_id) VALUES(7,4)",
             [],
         )
-        .unwrap();
+        .expect("insert session_counters succeeds");
         conn.execute_batch(
             "CREATE TRIGGER fail_delete BEFORE DELETE ON sessions
              BEGIN SELECT RAISE(ABORT, 'delete failpoint'); END;",
         )
-        .unwrap();
+        .expect("execute_batch succeeds");
         assert!(
             remove_session_transaction_on_conn(&mut conn, 7, 3, "Replacement", "later").is_err()
         );
@@ -865,21 +866,21 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions WHERE user_id=7", [], |row| {
                 row.get(0)
             })
-            .unwrap();
+            .expect("query count succeeds");
         let active: usize = conn
             .query_row(
                 "SELECT session_id FROM active_sessions WHERE user_id=7",
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query active succeeds");
         let next_id: usize = conn
             .query_row(
                 "SELECT next_session_id FROM session_counters WHERE user_id=7",
                 [],
                 |row| row.get(0),
             )
-            .unwrap();
+            .expect("query next_session_id succeeds");
         assert_eq!(session_count, 1);
         assert_eq!(active, 3);
         assert_eq!(next_id, 4);
@@ -889,31 +890,42 @@ mod tests {
     fn test_scoped_messages_and_threads() {
         let conn = session_test_conn();
         // Chat 100, Thread 0 (private chat)
-        save_scoped_message_on_conn(&conn, 100, 0, 100, "user", "\"Halo!\"").unwrap();
-        save_scoped_message_on_conn(&conn, 100, 0, 100, "assistant", "\"Hai ada apa?\"").unwrap();
+        save_scoped_message_on_conn(&conn, 100, 0, 100, "user", "\"Halo!\"")
+            .expect("save_scoped_message succeeds");
+        save_scoped_message_on_conn(&conn, 100, 0, 100, "assistant", "\"Hai ada apa?\"")
+            .expect("save_scoped_message succeeds");
         // Supergroup -100123, Thread 42
-        save_scoped_message_on_conn(&conn, -100123, 42, 100, "user", "\"Topik 42\"").unwrap();
+        save_scoped_message_on_conn(&conn, -100123, 42, 100, "user", "\"Topik 42\"")
+            .expect("save_scoped_message succeeds");
         // Supergroup -100123, Thread 99
-        save_scoped_message_on_conn(&conn, -100123, 99, 100, "user", "\"Topik 99\"").unwrap();
+        save_scoped_message_on_conn(&conn, -100123, 99, 100, "user", "\"Topik 99\"")
+            .expect("save_scoped_message succeeds");
 
-        assert_eq!(count_scoped_messages_on_conn(&conn, 100, 0).unwrap(), 2);
         assert_eq!(
-            count_scoped_messages_on_conn(&conn, -100123, 42).unwrap(),
+            count_scoped_messages_on_conn(&conn, 100, 0).expect("count_scoped_messages succeeds"),
+            2
+        );
+        assert_eq!(
+            count_scoped_messages_on_conn(&conn, -100123, 42)
+                .expect("count_scoped_messages succeeds"),
             1
         );
         assert_eq!(
-            count_scoped_messages_on_conn(&conn, -100123, 99).unwrap(),
+            count_scoped_messages_on_conn(&conn, -100123, 99)
+                .expect("count_scoped_messages succeeds"),
             1
         );
 
-        let msgs = load_scoped_messages_on_conn(&conn, 100, 0, 10).unwrap();
+        let msgs =
+            load_scoped_messages_on_conn(&conn, 100, 0, 10).expect("load_scoped_messages succeeds");
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[0].content, Value::String("Halo!".to_string()));
         assert_eq!(msgs[1].role, "assistant");
         assert_eq!(msgs[1].content, Value::String("Hai ada apa?".to_string()));
 
-        let thread_msgs = load_scoped_messages_on_conn(&conn, -100123, 42, 10).unwrap();
+        let thread_msgs = load_scoped_messages_on_conn(&conn, -100123, 42, 10)
+            .expect("load_scoped_messages succeeds");
         assert_eq!(thread_msgs.len(), 1);
         assert_eq!(
             thread_msgs[0].content,
@@ -924,26 +936,35 @@ mod tests {
     #[test]
     fn test_scoped_summary_crud() {
         let conn = session_test_conn();
-        assert_eq!(get_scoped_summary_on_conn(&conn, 100, 0).unwrap(), None);
-
-        save_scoped_summary_on_conn(&conn, 100, 0, "Discussed Rust async patterns").unwrap();
         assert_eq!(
-            get_scoped_summary_on_conn(&conn, 100, 0).unwrap(),
+            get_scoped_summary_on_conn(&conn, 100, 0).expect("get_scoped_summary succeeds"),
+            None
+        );
+
+        save_scoped_summary_on_conn(&conn, 100, 0, "Discussed Rust async patterns")
+            .expect("save_scoped_summary succeeds");
+        assert_eq!(
+            get_scoped_summary_on_conn(&conn, 100, 0).expect("get_scoped_summary succeeds"),
             Some("Discussed Rust async patterns".to_string())
         );
 
         // Different thread
-        assert_eq!(get_scoped_summary_on_conn(&conn, 100, 42).unwrap(), None);
-        save_scoped_summary_on_conn(&conn, 100, 42, "Topic 42 summary").unwrap();
         assert_eq!(
-            get_scoped_summary_on_conn(&conn, 100, 42).unwrap(),
+            get_scoped_summary_on_conn(&conn, 100, 42).expect("get_scoped_summary succeeds"),
+            None
+        );
+        save_scoped_summary_on_conn(&conn, 100, 42, "Topic 42 summary")
+            .expect("save_scoped_summary succeeds");
+        assert_eq!(
+            get_scoped_summary_on_conn(&conn, 100, 42).expect("get_scoped_summary succeeds"),
             Some("Topic 42 summary".to_string())
         );
 
         // Upsert
-        save_scoped_summary_on_conn(&conn, 100, 0, "Updated summary").unwrap();
+        save_scoped_summary_on_conn(&conn, 100, 0, "Updated summary")
+            .expect("save_scoped_summary succeeds");
         assert_eq!(
-            get_scoped_summary_on_conn(&conn, 100, 0).unwrap(),
+            get_scoped_summary_on_conn(&conn, 100, 0).expect("get_scoped_summary succeeds"),
             Some("Updated summary".to_string())
         );
     }

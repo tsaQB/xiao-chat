@@ -97,7 +97,7 @@ mod tests {
     use super::*;
 
     fn memory_test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open_in_memory().expect("open_in_memory succeeds");
         conn.execute_batch(
             "CREATE TABLE user_memories (
                 user_id INTEGER NOT NULL,
@@ -108,7 +108,7 @@ mod tests {
             );
             CREATE INDEX idx_user_memories_user ON user_memories(user_id);",
         )
-        .unwrap();
+        .expect("execute_batch succeeds");
         conn
     }
 
@@ -117,20 +117,25 @@ mod tests {
         let conn = memory_test_conn();
         let user_id = 999;
         assert!(get_user_memories_on_conn(&conn, user_id)
-            .unwrap()
+            .expect("get_user_memories succeeds")
             .is_empty());
 
-        save_user_memory_on_conn(&conn, user_id, "Name", "Alice").unwrap();
-        save_user_memory_on_conn(&conn, user_id, "Language", "Rust").unwrap();
+        save_user_memory_on_conn(&conn, user_id, "Name", "Alice")
+            .expect("save_user_memory succeeds");
+        save_user_memory_on_conn(&conn, user_id, "Language", "Rust")
+            .expect("save_user_memory succeeds");
 
-        let memories = get_user_memories_on_conn(&conn, user_id).unwrap();
+        let memories =
+            get_user_memories_on_conn(&conn, user_id).expect("get_user_memories succeeds");
         assert_eq!(memories.len(), 2);
         assert_eq!(memories[0], ("Language".to_string(), "Rust".to_string()));
         assert_eq!(memories[1], ("Name".to_string(), "Alice".to_string()));
 
         // Upsert
-        save_user_memory_on_conn(&conn, user_id, "Language", "Rust & Go").unwrap();
-        let memories = get_user_memories_on_conn(&conn, user_id).unwrap();
+        save_user_memory_on_conn(&conn, user_id, "Language", "Rust & Go")
+            .expect("save_user_memory succeeds");
+        let memories =
+            get_user_memories_on_conn(&conn, user_id).expect("get_user_memories succeeds");
         assert_eq!(memories.len(), 2);
         assert_eq!(
             memories[0],
@@ -138,14 +143,17 @@ mod tests {
         );
 
         // Delete single
-        delete_user_memory_on_conn(&conn, user_id, "Language").unwrap();
-        let memories = get_user_memories_on_conn(&conn, user_id).unwrap();
+        delete_user_memory_on_conn(&conn, user_id, "Language")
+            .expect("delete_user_memory succeeds");
+        let memories =
+            get_user_memories_on_conn(&conn, user_id).expect("get_user_memories succeeds");
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0], ("Name".to_string(), "Alice".to_string()));
 
         // Clear all
-        clear_user_memories_on_conn(&conn, user_id).unwrap();
-        let memories = get_user_memories_on_conn(&conn, user_id).unwrap();
+        clear_user_memories_on_conn(&conn, user_id).expect("clear_user_memories succeeds");
+        let memories =
+            get_user_memories_on_conn(&conn, user_id).expect("get_user_memories succeeds");
         assert!(memories.is_empty());
     }
 }

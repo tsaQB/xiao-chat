@@ -129,7 +129,7 @@ fn history_replay_uses_routes_not_diagnostic_evidence() {
                 snapshot
                     .routing
                     .set_route(role, ModelRoute::MainModel)
-                    .unwrap();
+                    .expect("set_route succeeds");
                 assert!(history_attachment_authorized(&snapshot, kind));
                 let legacy = json!([part.clone()]);
                 assert_eq!(sanitize_legacy_history(&legacy, &snapshot), legacy);
@@ -140,7 +140,10 @@ fn history_replay_uses_routes_not_diagnostic_evidence() {
                         model: "model".into(),
                     },
                 ] {
-                    snapshot.routing.set_route(role, route).unwrap();
+                    snapshot
+                        .routing
+                        .set_route(role, route)
+                        .expect("set_route succeeds");
                     assert!(!history_attachment_authorized(&snapshot, kind));
                     assert_ne!(sanitize_legacy_history(&legacy, &snapshot), legacy);
                 }
@@ -149,7 +152,7 @@ fn history_replay_uses_routes_not_diagnostic_evidence() {
         snapshot
             .routing
             .set_route(role, ModelRoute::MainModel)
-            .unwrap();
+            .expect("set_route succeeds");
     }
     let unsafe_legacy = json!([
         {"type":"image_url", "image_url":{"url":"http://127.0.0.1/private"}},
@@ -158,7 +161,7 @@ fn history_replay_uses_routes_not_diagnostic_evidence() {
     ]);
     assert!(sanitize_legacy_history(&unsafe_legacy, &snapshot)
         .as_array()
-        .unwrap()
+        .expect("sanitized legacy is array")
         .iter()
         .all(|part| part["type"] == "text"));
 }
@@ -177,8 +180,8 @@ fn media_data_urls_preserve_resolved_mime_and_fail_closed() {
         } else {
             "video/"
         };
-        let data_url =
-            media_data_url(b"media", Some(mime_type), expected_kind, "test media").unwrap();
+        let data_url = media_data_url(b"media", Some(mime_type), expected_kind, "test media")
+            .expect("media_data_url succeeds");
         assert!(data_url.starts_with(expected_prefix), "{mime_type}");
     }
 
@@ -503,7 +506,10 @@ fn specialist_payload_contains_only_the_current_user_message() {
         "vision-model",
         vec![json!({"type":"text","text":"current question"})],
     );
-    let messages = payload.get("messages").and_then(Value::as_array).unwrap();
+    let messages = payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .expect("messages array present");
     assert_eq!(messages.len(), 1);
     assert_eq!(
         messages[0].get("role").and_then(Value::as_str),
@@ -561,12 +567,24 @@ fn generated_image_url_validation_rejects_unsafe_schemes_and_private_ips() {
         ImageGenerationErrorKind::UnsafeImageUrl
     );
     assert!(parse_generated_image_url("https://example.com/image.png").is_ok());
-    assert!(is_unsafe_remote_ip("127.0.0.1".parse().unwrap()));
-    assert!(is_unsafe_remote_ip("10.1.2.3".parse().unwrap()));
-    assert!(is_unsafe_remote_ip("100.64.0.1".parse().unwrap()));
-    assert!(is_unsafe_remote_ip("::1".parse().unwrap()));
-    assert!(is_unsafe_remote_ip("::ffff:127.0.0.1".parse().unwrap()));
-    assert!(!is_unsafe_remote_ip("1.1.1.1".parse().unwrap()));
+    assert!(is_unsafe_remote_ip(
+        "127.0.0.1".parse().expect("valid ip literal")
+    ));
+    assert!(is_unsafe_remote_ip(
+        "10.1.2.3".parse().expect("valid ip literal")
+    ));
+    assert!(is_unsafe_remote_ip(
+        "100.64.0.1".parse().expect("valid ip literal")
+    ));
+    assert!(is_unsafe_remote_ip(
+        "::1".parse().expect("valid ip literal")
+    ));
+    assert!(is_unsafe_remote_ip(
+        "::ffff:127.0.0.1".parse().expect("valid ip literal")
+    ));
+    assert!(!is_unsafe_remote_ip(
+        "1.1.1.1".parse().expect("valid ip literal")
+    ));
 }
 
 #[test]
@@ -580,7 +598,7 @@ fn image_timeout_is_a_typed_timeout_not_unsupported() {
 async fn generation_cancel_signal_reaches_registered_receiver() {
     let (sender, mut receiver) = watch::channel(false);
     assert!(signal_generation_cancel(Some(sender)));
-    receiver.changed().await.unwrap();
+    receiver.changed().await.expect("receiver changed");
     assert!(*receiver.borrow());
 }
 
@@ -700,7 +718,10 @@ fn persistence_path_has_no_false_media_default() {
 
 fn isolated_service(provider: ProviderConfig) -> AIChatService {
     AIChatService {
-        client: Client::builder().no_proxy().build().unwrap(),
+        client: Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build client succeeds"),
         user_sessions: Default::default(),
         active_session_id: Default::default(),
         generation_locks: Default::default(),
@@ -721,16 +742,21 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener succeeds");
+    let address = listener.local_addr().expect("local_addr succeeds");
     let server = tokio::spawn(async move {
         let mut requests = Vec::new();
         for status in ["200 OK", "415 Unsupported Media Type"] {
-            let (mut socket, _) = listener.accept().await.unwrap();
+            let (mut socket, _) = listener.accept().await.expect("accept socket succeeds");
             let mut bytes = Vec::new();
             loop {
                 let mut buffer = [0u8; 4096];
-                let count = socket.read(&mut buffer).await.unwrap();
+                let count = socket
+                    .read(&mut buffer)
+                    .await
+                    .expect("read socket succeeds");
                 assert!(count > 0);
                 bytes.extend_from_slice(&buffer[..count]);
                 assert!(bytes.len() < 128 * 1024);
@@ -740,22 +766,26 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
                         .lines()
                         .find_map(|line| {
                             let (name, value) = line.split_once(':')?;
-                            name.eq_ignore_ascii_case("content-length")
-                                .then(|| value.trim().parse::<usize>().unwrap())
+                            name.eq_ignore_ascii_case("content-length").then(|| {
+                                value.trim().parse::<usize>().expect("valid content-length")
+                            })
                         })
-                        .unwrap();
+                        .expect("content-length header found");
                     if bytes.len() >= end + 4 + length {
                         break;
                     }
                 }
             }
-            requests.push(String::from_utf8(bytes).unwrap());
+            requests.push(String::from_utf8(bytes).expect("valid utf8 request body"));
             let body = r#"{"text":"sample transcript"}"#;
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
-            socket.write_all(response.as_bytes()).await.unwrap();
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response succeeds");
         }
         requests
     });
@@ -770,8 +800,8 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
     };
     let service = isolated_service(provider.clone());
     let snapshot = service.generation_model_snapshot().await;
-    let route =
-        AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::AudioStt).unwrap();
+    let route = AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::AudioStt)
+        .expect("resolve audio stt route succeeds");
     {
         let mut live = service.provider_store.write().await;
         live.providers[0].endpoint = "http://127.0.0.1:1/changed".into();
@@ -786,7 +816,7 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
                 Some("audio/mpeg"),
             )
             .await
-            .unwrap(),
+            .expect("transcribe audio succeeds"),
         "sample transcript"
     );
     let error = service
@@ -798,8 +828,8 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
     assert!(service.capability_registry.read().await.models.is_empty());
     let requests = tokio::time::timeout(Duration::from_secs(5), server)
         .await
-        .unwrap()
-        .unwrap();
+        .expect("server timeout not exceeded")
+        .expect("server task join succeeds");
     assert_eq!(requests.len(), 2);
     for request in requests {
         assert!(request.starts_with("POST /v1/audio/transcriptions "));

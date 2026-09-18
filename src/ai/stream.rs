@@ -107,15 +107,22 @@ mod tests {
     #[test]
     fn accepts_data_without_space_and_crlf() {
         let mut decoder = SseDecoder::default();
-        let events = decoder.push(b"data:{\"x\":1}\r\n\r\n").unwrap();
+        let events = decoder
+            .push(b"data:{\"x\":1}\r\n\r\n")
+            .expect("push chunk succeeds");
         assert_eq!(events, vec![StreamEvent::Json(json!({"x": 1}))]);
     }
 
     #[test]
     fn handles_split_chunks_and_done() {
         let mut decoder = SseDecoder::default();
-        assert!(decoder.push(b"data: {\"x\":").unwrap().is_empty());
-        let events = decoder.push(b"2}\n\ndata: [DONE]\n\n").unwrap();
+        assert!(decoder
+            .push(b"data: {\"x\":")
+            .expect("push chunk succeeds")
+            .is_empty());
+        let events = decoder
+            .push(b"2}\n\ndata: [DONE]\n\n")
+            .expect("push chunk succeeds");
         assert_eq!(
             events,
             vec![StreamEvent::Json(json!({"x": 2})), StreamEvent::Done]
@@ -125,7 +132,9 @@ mod tests {
     #[test]
     fn joins_multiline_data_events() {
         let mut decoder = SseDecoder::default();
-        let events = decoder.push(b"data: {\"a\":\ndata: 1}\n\n").unwrap();
+        let events = decoder
+            .push(b"data: {\"a\":\ndata: 1}\n\n")
+            .expect("push chunk succeeds");
         assert_eq!(events, vec![StreamEvent::Json(json!({"a": 1}))]);
     }
 
@@ -137,8 +146,14 @@ mod tests {
         }));
         for split in 1..wire.len() {
             let mut decoder = SseDecoder::default();
-            let mut events = decoder.push(&wire.as_bytes()[..split]).unwrap();
-            events.extend(decoder.push(&wire.as_bytes()[split..]).unwrap());
+            let mut events = decoder
+                .push(&wire.as_bytes()[..split])
+                .expect("push chunk succeeds");
+            events.extend(
+                decoder
+                    .push(&wire.as_bytes()[split..])
+                    .expect("push chunk succeeds"),
+            );
             assert_eq!(events, vec![expected.clone()], "split at byte {split}");
         }
     }
@@ -168,7 +183,10 @@ mod tests {
     fn rejects_oversized_multiline_events() {
         let line = format!("data: {}\n", "x".repeat(MAX_SSE_LINE_BYTES / 2));
         let mut decoder = SseDecoder::default();
-        assert!(decoder.push(line.as_bytes()).unwrap().is_empty());
+        assert!(decoder
+            .push(line.as_bytes())
+            .expect("push chunk succeeds")
+            .is_empty());
         assert!(decoder.push(line.as_bytes()).is_err());
     }
 }
