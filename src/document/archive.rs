@@ -706,19 +706,33 @@ mod tests {
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
 
-        writer.start_file("README.md", options).unwrap();
-        writer.write_all(b"# Hello Xiao\nThis is a test.").unwrap();
+        writer
+            .start_file("README.md", options)
+            .expect("start_file succeeds");
+        writer
+            .write_all(b"# Hello Xiao\nThis is a test.")
+            .expect("write_all succeeds");
 
-        writer.start_file("data.json", options).unwrap();
-        writer.write_all(b"{\"version\": 1}").unwrap();
+        writer
+            .start_file("data.json", options)
+            .expect("start_file succeeds");
+        writer
+            .write_all(b"{\"version\": 1}")
+            .expect("write_all succeeds");
 
-        writer.start_file("image.png", options).unwrap();
+        writer
+            .start_file("image.png", options)
+            .expect("start_file succeeds");
         writer
             .write_all(&[0, 137, 80, 78, 71, 13, 10, 26, 10])
-            .unwrap(); // Contains null byte
+            .expect("write_all succeeds"); // Contains null byte
 
-        let bytes = writer.finish().unwrap().into_inner();
-        let result = extract_archive(&bytes, ArchiveKind::Zip, "test.zip").unwrap();
+        let bytes = writer
+            .finish()
+            .expect("finish writer succeeds")
+            .into_inner();
+        let result = extract_archive(&bytes, ArchiveKind::Zip, "test.zip")
+            .expect("extract_archive succeeds");
 
         assert!(result.contains("=== ARSIP: test.zip (ZIP, Total 3 Entri) ==="));
         assert!(result.contains("README.md"));
@@ -738,15 +752,21 @@ mod tests {
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
 
-        writer.start_file("huge.log", options).unwrap();
+        writer
+            .start_file("huge.log", options)
+            .expect("start_file succeeds");
         // Write 2.5 MB of spaces
         let chunk = vec![b' '; 512 * 1024];
         for _ in 0..5 {
-            writer.write_all(&chunk).unwrap();
+            writer.write_all(&chunk).expect("write_all succeeds");
         }
 
-        let bytes = writer.finish().unwrap().into_inner();
-        let result = extract_archive(&bytes, ArchiveKind::Zip, "large.zip").unwrap();
+        let bytes = writer
+            .finish()
+            .expect("finish writer succeeds")
+            .into_inner();
+        let result = extract_archive(&bytes, ArchiveKind::Zip, "large.zip")
+            .expect("extract_archive succeeds");
 
         assert!(result.contains("huge.log"));
         assert!(result.contains("[Teks - Melebihi batas 2 MB]"));
@@ -765,15 +785,16 @@ mod tests {
         header.set_cksum();
         tar_builder
             .append_data(&mut header, "src/main.rs", &content[..])
-            .unwrap();
+            .expect("append_data succeeds");
 
-        let tar_bytes = tar_builder.into_inner().unwrap();
+        let tar_bytes = tar_builder.into_inner().expect("tar into_inner succeeds");
 
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(&tar_bytes).unwrap();
-        let tar_gz_bytes = encoder.finish().unwrap();
+        encoder.write_all(&tar_bytes).expect("write_all succeeds");
+        let tar_gz_bytes = encoder.finish().expect("finish encoder succeeds");
 
-        let result = extract_archive(&tar_gz_bytes, ArchiveKind::TarGz, "project.tar.gz").unwrap();
+        let result = extract_archive(&tar_gz_bytes, ArchiveKind::TarGz, "project.tar.gz")
+            .expect("extract_archive succeeds");
         assert!(result.contains("=== ARSIP: project.tar.gz (TAR.GZ, Total 1 Entri) ==="));
         assert!(result.contains("src/main.rs"));
         assert!(result.contains("--- BERKAS: src/main.rs ---"));
@@ -783,14 +804,16 @@ mod tests {
     #[test]
     fn extracts_7z_archive_in_memory() {
         let cursor = Cursor::new(Vec::new());
-        let mut sz = sevenz_rust::ArchiveWriter::new(cursor).unwrap();
+        let mut sz = sevenz_rust::ArchiveWriter::new(cursor).expect("create 7z writer succeeds");
 
         let entry = sevenz_rust::ArchiveEntry::new_file("hello.rs");
 
         let data = b"pub fn greet() -> &'static str { \"Halo Xiao\" }";
-        sz.push_archive_entry(entry, Some(&data[..])).unwrap();
-        let bytes = sz.finish().unwrap().into_inner();
-        let result = extract_archive(&bytes, ArchiveKind::SevenZ, "code.7z").unwrap();
+        sz.push_archive_entry(entry, Some(&data[..]))
+            .expect("push_archive_entry succeeds");
+        let bytes = sz.finish().expect("finish 7z writer succeeds").into_inner();
+        let result = extract_archive(&bytes, ArchiveKind::SevenZ, "code.7z")
+            .expect("extract_archive succeeds");
 
         assert!(result.contains("=== ARSIP: code.7z (7Z, Total 1 Entri) ==="));
         assert!(result.contains("hello.rs"));
@@ -806,19 +829,33 @@ mod tests {
             .compression_method(zip::CompressionMethod::Stored);
 
         // File 1: Text with UTF-8 BOM
-        writer.start_file("bom.txt", options).unwrap();
-        writer.write_all(b"\xef\xbb\xbfHello with BOM").unwrap();
+        writer
+            .start_file("bom.txt", options)
+            .expect("start_file succeeds");
+        writer
+            .write_all(b"\xef\xbb\xbfHello with BOM")
+            .expect("write_all succeeds");
 
         // File 2: Non-UTF8 text (Latin-1: "Caf\xe9")
-        writer.start_file("latin1.txt", options).unwrap();
-        writer.write_all(b"Caf\xe9 au lait").unwrap();
+        writer
+            .start_file("latin1.txt", options)
+            .expect("start_file succeeds");
+        writer
+            .write_all(b"Caf\xe9 au lait")
+            .expect("write_all succeeds");
 
         // File 3: File with unknown extension containing null byte (exercises runtime null-byte detection)
-        writer.start_file("binary.xyz", options).unwrap();
-        writer.write_all(b"abc\x00def").unwrap();
+        writer
+            .start_file("binary.xyz", options)
+            .expect("start_file succeeds");
+        writer.write_all(b"abc\x00def").expect("write_all succeeds");
 
-        let bytes = writer.finish().unwrap().into_inner();
-        let result = extract_archive(&bytes, ArchiveKind::Zip, "test_encoding.zip").unwrap();
+        let bytes = writer
+            .finish()
+            .expect("finish writer succeeds")
+            .into_inner();
+        let result = extract_archive(&bytes, ArchiveKind::Zip, "test_encoding.zip")
+            .expect("extract_archive succeeds");
 
         assert!(result.contains("bom.txt"));
         assert!(result.contains("--- BERKAS: bom.txt ---"));

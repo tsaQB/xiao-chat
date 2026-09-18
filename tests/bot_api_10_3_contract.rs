@@ -222,9 +222,21 @@ fn parsed_collage_and_slideshow_serialize_with_10_3_discriminators() {
     let value =
         serde_json::to_value(&rich_message).expect("should serialize collage and slideshow");
     assert_eq!(value["blocks"][0]["type"], "collage");
-    assert_eq!(value["blocks"][0]["blocks"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        value["blocks"][0]["blocks"]
+            .as_array()
+            .expect("array of collage blocks")
+            .len(),
+        2
+    );
     assert_eq!(value["blocks"][1]["type"], "slideshow");
-    assert_eq!(value["blocks"][1]["blocks"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        value["blocks"][1]["blocks"]
+            .as_array()
+            .expect("array of slideshow blocks")
+            .len(),
+        2
+    );
 }
 
 #[test]

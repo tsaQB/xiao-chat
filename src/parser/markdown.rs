@@ -2490,7 +2490,7 @@ mod tests {
     #[test]
     fn emoji_and_multibyte_inline_text_survive_parser() {
         let value = parse_inline("Halo █ 😊 世界 **tebal**");
-        let serialized = serde_json::to_string(&value).unwrap();
+        let serialized = serde_json::to_string(&value).expect("serialize value succeeds");
         assert!(serialized.contains("世界"));
         assert!(serialized.contains("😊"));
     }
@@ -2519,7 +2519,7 @@ mod tests {
             for end in boundaries.into_iter().filter(|end| *end > 0) {
                 let prefix = &source[..end];
                 let blocks = parse_streaming_markdown_to_rich_blocks(prefix);
-                let wire = serde_json::to_string(&blocks).unwrap();
+                let wire = serde_json::to_string(&blocks).expect("serialize blocks succeeds");
                 assert!(
                     !wire.contains("**"),
                     "bold marker leaked for {prefix:?}: {wire}"
@@ -2615,7 +2615,7 @@ Paragraf normal";
                 _ => None,
             })
             .expect("footer block should exist");
-        let serialized = serde_json::to_string(footer).unwrap();
+        let serialized = serde_json::to_string(footer).expect("serialize footer succeeds");
         assert!(serialized.contains("3.0s"));
         assert!(serialized.contains("⚡"));
         assert!(serialized.contains("code"));
@@ -2639,8 +2639,8 @@ Paragraf normal";
         let streaming = parse_streaming_markdown_to_rich_blocks(source);
         let canonical = parse_markdown_to_rich_blocks(source);
         assert_eq!(
-            serde_json::to_value(streaming).unwrap(),
-            serde_json::to_value(canonical).unwrap()
+            serde_json::to_value(streaming).expect("serialize streaming succeeds"),
+            serde_json::to_value(canonical).expect("serialize canonical succeeds")
         );
     }
 
@@ -2648,7 +2648,7 @@ Paragraf normal";
     fn spoiler_and_strikethrough_parse_correctly() {
         let markdown = "Info: ||rahasia besar|| dan ~~harga lama~~";
         let parsed = parse_inline(markdown);
-        let serialized = serde_json::to_string(&parsed).unwrap();
+        let serialized = serde_json::to_string(&parsed).expect("serialize parsed succeeds");
         assert!(serialized.contains(r#""type":"spoiler""#));
         assert!(serialized.contains("rahasia besar"));
         assert!(serialized.contains(r#""type":"strikethrough""#));
@@ -2656,7 +2656,8 @@ Paragraf normal";
 
         let html = "Tag: <tg-spoiler>kunci rahasia</tg-spoiler> dan <s>coret html</s>";
         let parsed_html = parse_inline(html);
-        let serialized_html = serde_json::to_string(&parsed_html).unwrap();
+        let serialized_html =
+            serde_json::to_string(&parsed_html).expect("serialize parsed_html succeeds");
         assert!(serialized_html.contains(r#""type":"spoiler""#));
         assert!(serialized_html.contains("kunci rahasia"));
         assert!(serialized_html.contains(r#""type":"strikethrough""#));
@@ -2671,11 +2672,11 @@ Paragraf normal";
         let Some(RichBlock::ExpandableBlockQuotation { text, credit }) = blocks.first() else {
             panic!("expected expandable blockquote");
         };
-        let text_str = serde_json::to_string(text).unwrap();
+        let text_str = serde_json::to_string(text).expect("serialize text succeeds");
         assert!(text_str.contains("Baris penalaran pertama"));
         assert!(text_str.contains("Baris penalaran kedua"));
         assert!(credit.is_some());
-        let credit_str = serde_json::to_string(&credit).unwrap();
+        let credit_str = serde_json::to_string(&credit).expect("serialize credit succeeds");
         assert!(credit_str.contains("As-tsaqib"));
 
         let html =
@@ -2690,10 +2691,10 @@ Paragraf normal";
             panic!("expected HTML expandable blockquote");
         };
         assert!(serde_json::to_string(h_text)
-            .unwrap()
+            .expect("serialize h_text succeeds")
             .contains("Catatan terlipat penting"));
         assert!(serde_json::to_string(h_credit)
-            .unwrap()
+            .expect("serialize h_credit succeeds")
             .contains("Dokumentasi"));
     }
 
@@ -2726,7 +2727,7 @@ Paragraf normal";
     fn tg_document_links_and_underline_parse_correctly() {
         let text = "Tautan: [Buka File](tg://document?id=doc_abc123) dan <u>garis bawah</u> serta ++format ins++";
         let parsed = parse_inline(text);
-        let serialized = serde_json::to_string(&parsed).unwrap();
+        let serialized = serde_json::to_string(&parsed).expect("serialize parsed succeeds");
         assert!(serialized.contains(r#""type":"url""#));
         assert!(serialized.contains("tg://document?id=doc_abc123"));
         assert!(serialized.contains("Buka File"));
@@ -2772,7 +2773,7 @@ Paragraf normal";
     fn html_tags_convert_to_rich_formatting() {
         let input = "Teks <b>tebal</b> dan <strong>kuat</strong> serta <i>miring</i> dan <code>kode()</code> serta <a href=\"https://example.com\">Tautan</a>";
         let value = parse_inline(input);
-        let serialized = serde_json::to_string(&value).unwrap();
+        let serialized = serde_json::to_string(&value).expect("serialize value succeeds");
         assert!(serialized.contains(r#""type":"bold""#));
         assert!(serialized.contains("tebal"));
         assert!(serialized.contains("kuat"));
@@ -2789,7 +2790,7 @@ Paragraf normal";
         let text = "> [!NOTE]\n> Ini catatan penting sistem.";
         let blocks = parse_markdown_to_rich_blocks(text);
         assert_eq!(blocks.len(), 1);
-        let serialized = serde_json::to_string(&blocks[0]).unwrap();
+        let serialized = serde_json::to_string(&blocks[0]).expect("serialize callout succeeds");
         assert!(serialized.contains("Catatan:"));
         assert!(serialized.contains("Ini catatan penting sistem."));
     }
@@ -2810,7 +2811,8 @@ Paragraf normal";
         let text = "<think>\nInternal secret reasoning\n</think>\n<tool_call>\n{\"name\": \"search\"}\n</tool_call>\nHalo! Ada yang bisa dibantu?";
         let blocks = parse_markdown_to_rich_blocks(text);
         assert_eq!(blocks.len(), 1);
-        let serialized = serde_json::to_string(&blocks[0]).unwrap();
+        let serialized =
+            serde_json::to_string(&blocks[0]).expect("serialize stripped block succeeds");
         assert!(!serialized.contains("Internal secret reasoning"));
         assert!(!serialized.contains("tool_call"));
         assert!(serialized.contains("Halo! Ada yang bisa dibantu?"));
@@ -2855,8 +2857,8 @@ Paragraf normal";
         // Should parse as Paragraphs with styled links so Telegram link preview works without API 400 rejection
         assert!(matches!(blocks[0], RichBlock::Paragraph { .. }));
         assert!(matches!(blocks[1], RichBlock::Paragraph { .. }));
-        let s0 = serde_json::to_string(&blocks[0]).unwrap();
-        let s1 = serde_json::to_string(&blocks[1]).unwrap();
+        let s0 = serde_json::to_string(&blocks[0]).expect("serialize block 0 succeeds");
+        let s1 = serde_json::to_string(&blocks[1]).expect("serialize block 1 succeeds");
         assert!(s0.contains("Belajar Rust") && s0.contains("youtube.com"));
         assert!(s1.contains("Tutorial") && s1.contains("youtu.be"));
     }
@@ -2878,7 +2880,7 @@ Paragraf normal";
         assert!(matches!(blocks[0], RichBlock::Photo { .. }));
         assert!(matches!(blocks[1], RichBlock::Audio { .. }));
         assert!(matches!(blocks[2], RichBlock::Photo { .. }));
-        let cap = blocks[0].caption_text().unwrap();
+        let cap = blocks[0].caption_text().expect("caption present");
         assert_eq!(cap, "Kucing Manis");
     }
 
@@ -2929,10 +2931,10 @@ Paragraf normal";
         assert!(matches!(blocks[1], RichBlock::Paragraph { .. }));
         assert!(matches!(blocks[2], RichBlock::Paragraph { .. }));
         assert!(matches!(blocks[3], RichBlock::Paragraph { .. }));
-        let s0 = serde_json::to_string(&blocks[0]).unwrap();
-        let s1 = serde_json::to_string(&blocks[1]).unwrap();
-        let s2 = serde_json::to_string(&blocks[2]).unwrap();
-        let s3 = serde_json::to_string(&blocks[3]).unwrap();
+        let s0 = serde_json::to_string(&blocks[0]).expect("serialize block 0 succeeds");
+        let s1 = serde_json::to_string(&blocks[1]).expect("serialize block 1 succeeds");
+        let s2 = serde_json::to_string(&blocks[2]).expect("serialize block 2 succeeds");
+        let s3 = serde_json::to_string(&blocks[3]).expect("serialize block 3 succeeds");
         assert!(s0.contains("🖼️") && s0.contains("logo.svg") && s0.contains("Vektor SVG"));
         assert!(s1.contains("🎵") && s1.contains("spotify.com") && s1.contains("Audio"));
         assert!(s2.contains("🖼️") && s2.contains("art.bmp") && s2.contains("Gambar Bitmap"));
@@ -2967,8 +2969,8 @@ Contoh inline: $44\text{cm}$ dan $7,5\text{hari}$."#;
         let paragraph = blocks
             .iter()
             .find(|b| matches!(b, RichBlock::Paragraph { .. }))
-            .unwrap();
-        let serialized = serde_json::to_string(paragraph).unwrap();
+            .expect("paragraph block present");
+        let serialized = serde_json::to_string(paragraph).expect("serialize paragraph succeeds");
         assert!(serialized.contains(r"44\\ \\mathrm{cm}"));
         assert!(serialized.contains(r"7.5\\ \\mathrm{hari}"));
     }

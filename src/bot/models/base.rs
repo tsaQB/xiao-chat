@@ -1760,11 +1760,12 @@ mod tests {
         let button = RichMessageButton::copy("Salin", "teks yang disalin");
         assert!(button.validate().is_ok());
 
-        let value = serde_json::to_value(&button).unwrap();
+        let value = serde_json::to_value(&button).expect("serialize button succeeds");
         assert_eq!(value["copy_text"]["text"], "teks yang disalin");
 
         let inline_button = InlineKeyboardButton::copy("Salin Prompt", "prompt text");
-        let inline_value = serde_json::to_value(&inline_button).unwrap();
+        let inline_value =
+            serde_json::to_value(&inline_button).expect("serialize inline button succeeds");
         assert_eq!(inline_value["copy_text"]["text"], "prompt text");
 
         let mut invalid_button = RichMessageButton::copy("Salin", "a".repeat(257));
@@ -1787,7 +1788,7 @@ mod tests {
         ]);
         assert!(message.validate().is_ok());
 
-        let serialized = serde_json::to_value(&message).unwrap();
+        let serialized = serde_json::to_value(&message).expect("serialize message succeeds");
         assert_eq!(serialized["blocks"][0]["type"], "pullquote");
         assert_eq!(serialized["blocks"][0]["text"], "Kutipan penting");
         assert_eq!(serialized["blocks"][1]["type"], "footer");
@@ -1811,7 +1812,8 @@ mod tests {
 
     #[test]
     fn disabled_inline_button_serializes_as_empty_object() {
-        let value = serde_json::to_value(InlineKeyboardButton::disabled("Unavailable")).unwrap();
+        let value = serde_json::to_value(InlineKeyboardButton::disabled("Unavailable"))
+            .expect("serialize disabled button succeeds");
         assert_eq!(value["disabled"], serde_json::json!({}));
         assert!(value.get("callback_data").is_none());
     }
@@ -1825,8 +1827,10 @@ mod tests {
                 "draft_id": 99
             }
         }))
-        .unwrap();
-        let stopped = update.stopped_message_generation.unwrap();
+        .expect("deserialize stop update succeeds");
+        let stopped = update
+            .stopped_message_generation
+            .expect("stopped_message_generation present");
         assert_eq!(stopped.chat.id, 7);
         assert_eq!(stopped.draft_id, 99);
     }
@@ -1839,7 +1843,7 @@ mod tests {
             )],
             align: Some("center".to_string()),
         };
-        let value = serde_json::to_value(block).unwrap();
+        let value = serde_json::to_value(block).expect("serialize button block succeeds");
         assert_eq!(value["type"], "buttons");
         assert_eq!(value["buttons"][0]["callback_data"], "retry");
         assert_eq!(value["buttons"][0]["style"], "primary");
@@ -1851,7 +1855,7 @@ mod tests {
             text: Value::String("detail".to_string()),
             credit: Some(Value::String("source".to_string())),
         };
-        let value = serde_json::to_value(block).unwrap();
+        let value = serde_json::to_value(block).expect("serialize quote succeeds");
         assert_eq!(value["type"], "expandable_blockquote");
         assert_eq!(value["text"], "detail");
         assert_eq!(value["credit"], "source");
@@ -1866,7 +1870,7 @@ mod tests {
             blocks: vec![serde_json::json!({"type": "paragraph", "text": "Body"})],
             is_open: Some(true),
         };
-        let value = serde_json::to_value(block).unwrap();
+        let value = serde_json::to_value(block).expect("serialize details succeeds");
         assert_eq!(value["summary"], "More");
         assert!(value["blocks"].is_array());
         assert_eq!(value["is_open"], true);
@@ -1908,7 +1912,11 @@ mod tests {
                 .collect(),
         );
         assert!(message.validate().is_ok());
-        message.media.as_mut().unwrap().push(serde_json::json!({}));
+        message
+            .media
+            .as_mut()
+            .expect("media vector present")
+            .push(serde_json::json!({}));
         assert!(message.validate().is_err());
 
         let table = |columns: usize| {
@@ -1981,7 +1989,7 @@ mod tests {
         ]);
         assert!(msg.validate().is_ok());
 
-        let val = serde_json::to_value(&msg).unwrap();
+        let val = serde_json::to_value(&msg).expect("serialize rich media msg succeeds");
         assert_eq!(val["blocks"][0]["type"], "photo");
         assert_eq!(val["blocks"][0]["caption"]["text"], "Pemandangan");
         assert_eq!(val["blocks"][1]["type"], "video");
@@ -2016,7 +2024,7 @@ mod tests {
         let text_btn = RichTextButton {
             button: btn.clone(),
         };
-        let text_val = serde_json::to_value(&text_btn).unwrap();
+        let text_val = serde_json::to_value(&text_btn).expect("serialize text_btn succeeds");
         assert!(text_val.get("button").is_some());
     }
 

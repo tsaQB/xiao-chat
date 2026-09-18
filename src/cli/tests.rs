@@ -47,42 +47,42 @@ fn find_model_in_store_exact_and_cross_provider() {
     // Match in active provider
     let res = find_model_in_store(&store, "llama-3.1-8b-instant");
     assert!(res.is_some());
-    let (p, m) = res.unwrap();
+    let (p, m) = res.expect("model found in store");
     assert_eq!(p.id, "groq-1");
     assert_eq!(m, "llama-3.1-8b-instant");
 
     // Model name containing a slash when prefix is not a provider
     let res = find_model_in_store(&store, "meta-llama/llama-3.1-8b-instruct");
     assert!(res.is_some());
-    let (p, m) = res.unwrap();
+    let (p, m) = res.expect("model found in store");
     assert_eq!(p.id, "openai-1");
     assert_eq!(m, "meta-llama/llama-3.1-8b-instruct");
 
     // Match across other provider
     let res = find_model_in_store(&store, "gpt-4o-mini");
     assert!(res.is_some());
-    let (p, m) = res.unwrap();
+    let (p, m) = res.expect("model found in store");
     assert_eq!(p.id, "openai-1");
     assert_eq!(m, "gpt-4o-mini");
 
     // Case-insensitive match across provider
     let res = find_model_in_store(&store, "GPT-4O-MINI");
     assert!(res.is_some());
-    let (p, m) = res.unwrap();
+    let (p, m) = res.expect("model found in store");
     assert_eq!(p.id, "openai-1");
     assert_eq!(m, "gpt-4o-mini");
 
     // Delimited provider/model match with name
     let res = find_model_in_store(&store, "openai/gpt-4o");
     assert!(res.is_some());
-    let (p, m) = res.unwrap();
+    let (p, m) = res.expect("model found in store");
     assert_eq!(p.id, "openai-1");
     assert_eq!(m, "gpt-4o");
 
     // Delimited provider/model match with ID
     let res = find_model_in_store(&store, "groq-1/llama-3.1-8b-instant");
     assert!(res.is_some());
-    let (p, m) = res.unwrap();
+    let (p, m) = res.expect("model found in store");
     assert_eq!(p.id, "groq-1");
     assert_eq!(m, "llama-3.1-8b-instant");
 

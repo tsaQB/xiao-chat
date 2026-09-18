@@ -188,7 +188,7 @@ mod tests {
                 file_name: "abc.png".to_string(),
             }],
         );
-        let decoded = decode_user_content(&value).unwrap();
+        let decoded = decode_user_content(&value).expect("decode_user_content succeeds");
         assert_eq!(decoded.text, "describe this");
         assert_eq!(decoded.attachments.len(), 1);
     }

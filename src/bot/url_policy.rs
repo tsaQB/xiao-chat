@@ -168,32 +168,61 @@ mod tests {
 
     #[test]
     fn remote_ip_policy_matches_private_and_public_boundaries() {
-        assert!(is_unsafe_remote_ip("0.0.0.1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("100.64.0.1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("192.168.1.1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("198.18.0.1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("240.0.0.1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("fc00::1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("::ffff:127.0.0.1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("2001:db8::1".parse().unwrap()));
-        assert!(!is_unsafe_remote_ip("1.1.1.1".parse().unwrap()));
+        assert!(is_unsafe_remote_ip(
+            "0.0.0.1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "100.64.0.1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "192.168.1.1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "198.18.0.1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "240.0.0.1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "fc00::1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "::ffff:127.0.0.1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "2001:db8::1".parse().expect("valid ip literal")
+        ));
         assert!(!is_unsafe_remote_ip(
-            "2606:4700:4700::1111".parse().unwrap()
+            "1.1.1.1".parse().expect("valid ip literal")
+        ));
+        assert!(!is_unsafe_remote_ip(
+            "2606:4700:4700::1111".parse().expect("valid ip literal")
         ));
     }
 
     #[test]
     fn blocks_nat64_and_siit_translated_private_ips() {
-        assert!(is_unsafe_remote_ip("64:ff9b::127.0.0.1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("64:ff9b::192.168.1.1".parse().unwrap()));
-        assert!(is_unsafe_remote_ip("::ffff:0:10.0.0.1".parse().unwrap()));
-        assert!(!is_unsafe_remote_ip("64:ff9b::1.1.1.1".parse().unwrap()));
-        assert!(!is_unsafe_remote_ip("::ffff:0:1.1.1.1".parse().unwrap()));
+        assert!(is_unsafe_remote_ip(
+            "64:ff9b::127.0.0.1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "64:ff9b::192.168.1.1".parse().expect("valid ip literal")
+        ));
+        assert!(is_unsafe_remote_ip(
+            "::ffff:0:10.0.0.1".parse().expect("valid ip literal")
+        ));
+        assert!(!is_unsafe_remote_ip(
+            "64:ff9b::1.1.1.1".parse().expect("valid ip literal")
+        ));
+        assert!(!is_unsafe_remote_ip(
+            "::ffff:0:1.1.1.1".parse().expect("valid ip literal")
+        ));
     }
 
     #[tokio::test]
     async fn rejects_redirect_chain_to_internal_metadata_endpoint() {
-        let base = Url::parse("https://public.example.com/media/photo.jpg").unwrap();
+        let base =
+            Url::parse("https://public.example.com/media/photo.jpg").expect("valid test url");
 
         // 1. IP metadata endpoint (169.254.169.254, link-local, fd00::)
         let metadata_targets = [
@@ -267,10 +296,12 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_multi_hop_redirect_chain_terminating_in_private_target() {
-        let hop0 = Url::parse("https://public.example.com/start").unwrap();
+        let hop0 = Url::parse("https://public.example.com/start").expect("valid test url");
 
         // Hop 1: relative redirect to another path on the same public host
-        let hop1_url = hop0.join("/intermediate/redirect").unwrap();
+        let hop1_url = hop0
+            .join("/intermediate/redirect")
+            .expect("valid relative url join");
         assert_eq!(
             hop1_url.as_str(),
             "https://public.example.com/intermediate/redirect"

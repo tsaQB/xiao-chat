@@ -3089,21 +3089,21 @@ mod tests {
         assert!(matches!(converted.blocks[2], RichBlock::Paragraph { .. }));
         assert!(matches!(converted.blocks[3], RichBlock::Paragraph { .. }));
 
-        let s0 = serde_json::to_string(&converted.blocks[0]).unwrap();
+        let s0 = serde_json::to_string(&converted.blocks[0]).expect("serialize block 0 succeeds");
         assert!(
             s0.contains("🖼️")
                 && s0.contains("Kucing Manis")
                 && s0.contains("https://example.com/cat.jpg")
         );
 
-        let s1 = serde_json::to_string(&converted.blocks[1]).unwrap();
+        let s1 = serde_json::to_string(&converted.blocks[1]).expect("serialize block 1 succeeds");
         assert!(
             s1.contains("🎬")
                 && s1.contains("Tonton Video")
                 && s1.contains("https://example.com/movie.mp4")
         );
 
-        let s2 = serde_json::to_string(&converted.blocks[2]).unwrap();
+        let s2 = serde_json::to_string(&converted.blocks[2]).expect("serialize block 2 succeeds");
         assert!(s2.contains("🖼️ [Dua Foto]:") && s2.contains("Foto #1") && s2.contains("Foto #2"));
     }
 

@@ -1240,7 +1240,7 @@ mod tests {
 
     #[test]
     fn help_ui_is_typed_rich_and_declares_addons_read_only() {
-        let value = serde_json::to_value(build_help_ui()).unwrap();
+        let value = serde_json::to_value(build_help_ui()).expect("serialize help ui succeeds");
         let serialized = value.to_string();
         assert!(serialized.contains("\"type\":\"table\""));
         assert!(serialized.contains("\"type\":\"details\""));

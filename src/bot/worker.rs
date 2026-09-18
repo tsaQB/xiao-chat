@@ -469,7 +469,7 @@ mod tests {
                 }
             }"#,
         )
-        .unwrap();
+        .expect("deserialize update succeeds");
         assert_eq!(
             ScopeKey::from_update(&update_direct),
             ScopeKey {
@@ -491,7 +491,7 @@ mod tests {
                 }
             }"#,
         )
-        .unwrap();
+        .expect("deserialize update succeeds");
         assert_eq!(
             ScopeKey::from_update(&update_topic),
             ScopeKey {
@@ -516,7 +516,7 @@ mod tests {
                 }
             }"#,
         )
-        .unwrap();
+        .expect("deserialize update succeeds");
         assert_eq!(
             ScopeKey::from_update(&update_cb),
             ScopeKey {

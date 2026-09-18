@@ -725,7 +725,7 @@ mod tests {
     fn streamed_markdown_uses_native_rich_blocks() {
         let partial = "## Dua Gaya yang Bertarung\n\nOrbit itu **jatuh terus-menerus**.\n\n---\n\n1. **Gravitasi Bumi** — tarik ke bawah\n2. **Kecepatan tangensial** — dorong ke samping";
         let blocks = parse_streaming_markdown_to_rich_blocks(partial);
-        let wire = serde_json::to_string(&blocks).unwrap();
+        let wire = serde_json::to_string(&blocks).expect("serialize blocks succeeds");
 
         assert!(blocks
             .iter()
@@ -805,19 +805,22 @@ mod tests {
         assert!(s0.contains("0s •"));
 
         let s1 = state.render_current_status(
-            now.checked_sub(std::time::Duration::from_secs(1)).unwrap(),
+            now.checked_sub(std::time::Duration::from_secs(1))
+                .expect("instant subtraction succeeds"),
             true,
         );
         assert!(s1.contains("1s ••"));
 
         let s2 = state.render_current_status(
-            now.checked_sub(std::time::Duration::from_secs(2)).unwrap(),
+            now.checked_sub(std::time::Duration::from_secs(2))
+                .expect("instant subtraction succeeds"),
             true,
         );
         assert!(s2.contains("2s •••"));
 
         let s3 = state.render_current_status(
-            now.checked_sub(std::time::Duration::from_secs(3)).unwrap(),
+            now.checked_sub(std::time::Duration::from_secs(3))
+                .expect("instant subtraction succeeds"),
             true,
         );
         assert!(s3.contains("3s •"));
@@ -879,7 +882,7 @@ mod tests {
         let rich = InputRichMessage::new(vec![]);
         let res = tl.finalize_answer(&rich).await;
         assert!(res.is_ok());
-        let val = res.unwrap();
+        let val = res.expect("finalize_answer succeeds");
         assert_eq!(val.get("failed").and_then(Value::as_bool), Some(true));
     }
 

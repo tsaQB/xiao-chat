@@ -603,12 +603,17 @@ mod tests {
         let cursor = Cursor::new(Vec::<u8>::new());
         let mut writer = zip::ZipWriter::new(cursor);
         let options = zip::write::SimpleFileOptions::default();
-        writer.start_file("word/document.xml", options).unwrap();
+        writer
+            .start_file("word/document.xml", options)
+            .expect("start_file succeeds");
         writer
             .write_all(br#"<w:document><w:body><w:p><w:r><w:t>Hello &amp; world</w:t></w:r></w:p><w:p><w:r><w:t>Second</w:t></w:r></w:p></w:body></w:document>"#)
-            .unwrap();
-        let bytes = writer.finish().unwrap().into_inner();
-        let text = extract_docx_text(&bytes).unwrap();
+            .expect("write_all succeeds");
+        let bytes = writer
+            .finish()
+            .expect("finish writer succeeds")
+            .into_inner();
+        let text = extract_docx_text(&bytes).expect("extract_docx_text succeeds");
         assert!(text.contains("Hello & world"));
         assert!(text.contains("Second"));
     }
@@ -619,7 +624,9 @@ mod tests {
         let mut writer = zip::ZipWriter::new(cursor);
         let options = zip::write::SimpleFileOptions::default();
 
-        writer.start_file("xl/sharedStrings.xml", options).unwrap();
+        writer
+            .start_file("xl/sharedStrings.xml", options)
+            .expect("start_file succeeds");
         writer
             .write_all(
                 br#"<sst count="2" uniqueCount="2">
@@ -627,11 +634,11 @@ mod tests {
                     <si><t>Second String</t></si>
                 </sst>"#,
             )
-            .unwrap();
+            .expect("write_all succeeds");
 
         writer
             .start_file("xl/worksheets/sheet1.xml", options)
-            .unwrap();
+            .expect("start_file succeeds");
         writer
             .write_all(
                 br#"<worksheet>
@@ -647,10 +654,13 @@ mod tests {
                     </sheetData>
                 </worksheet>"#,
             )
-            .unwrap();
+            .expect("write_all succeeds");
 
-        let bytes = writer.finish().unwrap().into_inner();
-        let text = extract_xlsx_text(&bytes).unwrap();
+        let bytes = writer
+            .finish()
+            .expect("finish writer succeeds")
+            .into_inner();
+        let text = extract_xlsx_text(&bytes).expect("extract_xlsx_text succeeds");
         assert!(text.contains("Rich Text\tSecond String"));
         assert!(text.contains("100\t200"));
         assert!(text.contains("Rich Text\tSecond String\n100\t200"));
@@ -662,14 +672,19 @@ mod tests {
         let mut writer = zip::ZipWriter::new(cursor);
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
-        writer.start_file("word/document.xml", options).unwrap();
+        writer
+            .start_file("word/document.xml", options)
+            .expect("start_file succeeds");
         // Write repeating spaces/zeroes that compress to very few bytes but decompress beyond limit
         let big_chunk = vec![b' '; 1024 * 1024]; // 1 MiB chunk
         for _ in 0..9 {
             // 9 MiB > MAX_ZIP_XML_BYTES (8 MiB)
-            writer.write_all(&big_chunk).unwrap();
+            writer.write_all(&big_chunk).expect("write_all succeeds");
         }
-        let bytes = writer.finish().unwrap().into_inner();
+        let bytes = writer
+            .finish()
+            .expect("finish writer succeeds")
+            .into_inner();
         let err = extract_docx_text(&bytes).unwrap_err();
         assert!(err.contains("melebihi batas ukuran dekompresi yang aman"));
     }
@@ -680,20 +695,27 @@ mod tests {
         let mut writer = zip::ZipWriter::new(cursor);
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
-        writer.start_file("word/document.xml", options).unwrap();
+        writer
+            .start_file("word/document.xml", options)
+            .expect("start_file succeeds");
         let big_chunk = vec![b' '; 1024 * 1024];
         for _ in 0..9 {
-            writer.write_all(&big_chunk).unwrap();
+            writer.write_all(&big_chunk).expect("write_all succeeds");
         }
-        let mut bytes = writer.finish().unwrap().into_inner();
+        let mut bytes = writer
+            .finish()
+            .expect("finish writer succeeds")
+            .into_inner();
         if let Some(pos) = bytes.windows(4).position(|w| w == [0x50, 0x4b, 0x03, 0x04]) {
             bytes[pos + 22..pos + 26].copy_from_slice(&100_u32.to_le_bytes());
         }
         if let Some(pos) = bytes.windows(4).position(|w| w == [0x50, 0x4b, 0x01, 0x02]) {
             bytes[pos + 24..pos + 28].copy_from_slice(&100_u32.to_le_bytes());
         }
-        let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
-        let file = archive.by_name("word/document.xml").unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(&bytes)).expect("open zip archive succeeds");
+        let file = archive
+            .by_name("word/document.xml")
+            .expect("find file in zip archive succeeds");
         assert_eq!(file.size(), 100);
         drop(file);
         drop(archive);
@@ -717,6 +739,6 @@ mod tests {
         let doc2 = extract_document(windows_1252, "text/plain", "legacy.txt")
             .await
             .expect("should decode lossy non-utf8");
-        assert!(doc2.text.unwrap().contains("Hi "));
+        assert!(doc2.text.expect("text present").contains("Hi "));
     }
 }
