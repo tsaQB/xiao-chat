@@ -229,7 +229,7 @@ fn parsed_collage_and_slideshow_serialize_with_10_3_discriminators() {
 
 #[test]
 fn telegram_command_registration_is_pure_zero_slash() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../src/bot/daemon.rs");
     let cmd_start = source
         .find("// Register Bot Commands")
         .expect("bot command registration block");

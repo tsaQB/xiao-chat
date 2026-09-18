@@ -154,6 +154,10 @@ cargo run -- setup
   - `ai_hub.rs`: Provider, model catalog, and multimodal specialist routing.
   - `help.rs`: Global CLI help screen.
 - `src/bot/`:
+  - `daemon.rs`: Bot initialization, Telegram connection handshake, command clearing (`pure zero-slash`), and long-polling loop with graceful shutdown.
+  - `worker.rs`: Keyed per-scope mailboxes (`ScopeKey`), worker concurrency limits, durable inbox queue replay, and bounded retry with panic isolation.
+  - `router.rs`: Incoming update routing, media and document classification, context overflow policies, and AI chat dispatch.
+  - `image_flow.rs`: Multi-step conversational image generation pipeline, prompt extraction, and structured fallback cards.
   - `client.rs` / `client/raw.rs`: Telegram API client supporting Bot API 10.3 rich message drafts, ephemeral contexts, and file downloads.
   - `models.rs` / `models/base.rs`: Type-safe Telegram API models, rich message block definitions (`RichBlock`), and validation bounds.
   - `transport_policy.rs`: Retry backoff logic, HTTP 429 rate limit parsing, and Bad Request fallback gates.
@@ -191,7 +195,7 @@ cargo run -- setup
 When modifying or adding features, you **must** preserve these invariants:
 
 ### 1. Hard Single-Owner Invariant
-- **Rule**: Non-owner updates are dropped silently at the gateway (`main.rs`).
+- **Rule**: Non-owner updates are dropped silently at the gateway (`src/bot/router.rs`).
 - **Implementation**: `ctx.user_id != self.owner_user_id` immediately yields `RouteDecision::Ignore`. Never respond to, log, or leak bot existence to unauthorized Telegram IDs.
 
 ### 2. Pure Zero-Slash Gateway
