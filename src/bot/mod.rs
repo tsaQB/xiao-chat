@@ -3,5 +3,6 @@ pub mod client;
 pub(crate) mod client_raw;
 pub mod image_flow;
 pub mod models;
+pub mod router;
 pub(crate) mod transport_policy;
 pub(crate) mod url_policy;

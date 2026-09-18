@@ -635,13 +635,13 @@ pub async fn handle_image_generation(
         .map(str::trim)
         .filter(|prompt| !prompt.is_empty())
     {
-        crate::handle_ai_chat(
+        crate::bot::router::handle_ai_chat(
             bot,
             ai_service,
             chat_id,
             thread_id,
             user_id,
-            crate::ChatInput {
+            crate::bot::router::ChatInput {
                 prompt: explanation_prompt,
                 image_bytes: None,
                 document_images: None,
