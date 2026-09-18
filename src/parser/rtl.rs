@@ -53,7 +53,7 @@ pub fn has_rtl_characters(text: &str) -> bool {
 }
 
 /// Returns true if the string contains at least one Eastern Arabic-Indic (Hindi) digit.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn has_eastern_arabic_digits(text: &str) -> bool {
     text.chars().any(is_eastern_arabic_digit)
 }

@@ -497,29 +497,6 @@ fn main_context_overflow_warning(model: &str, used: usize, usable_limit: usize) 
     })
 }
 
-#[cfg(test)]
-fn build_clear_confirmation_ui() -> InputRichMessage {
-    use bot::models::RichMessageButton;
-    InputRichMessage::new(vec![
-        RichBlock::SectionHeading {
-            text: Value::String("RESET HISTORY?".to_string()),
-            level: 1,
-        },
-        RichBlock::BlockQuotation {
-            blocks: vec![
-                json!({"type":"paragraph","text":"This removes canonical conversation history and attachment context for the active session. The session remains. In-flight older generations cannot write back after the revision changes."}),
-            ],
-        },
-        RichBlock::Buttons {
-            buttons: vec![
-                RichMessageButton::callback_styled("Reset History", "action_clear", "danger"),
-                RichMessageButton::callback("Cancel", "clear_cancel"),
-            ],
-            align: Some("center".to_string()),
-        },
-    ])
-}
-
 // ==========================================
 // Intent Detection & Image Generation
 // ==========================================
@@ -988,7 +965,6 @@ async fn handle_image_generation(
                 ImageGenerationErrorKind::UnsafeImageUrl => "Unsafe image URL",
                 ImageGenerationErrorKind::DownloadTimeout => "Download timeout",
                 ImageGenerationErrorKind::Cancelled => "Cancelled",
-                ImageGenerationErrorKind::FallbackDisabled => "Fallback disabled",
                 ImageGenerationErrorKind::Provider => "Provider error",
             };
             let mut blocks = vec![
@@ -1925,6 +1901,12 @@ async fn main() {
             let action_arg = args.get(2).map(|s| s.as_str());
             let target_arg = args.get(3).map(|s| s.as_str());
             run_cli_gateway_hub(action_arg, target_arg).await;
+            return;
+        }
+        "mcp" => {
+            let action_arg = args.get(2).map(|s| s.as_str());
+            let target_arg = args.get(3).map(|s| s.as_str());
+            run_cli_mcp_hub(&ai_service, action_arg, target_arg).await;
             return;
         }
         "doctor" | "probe" => {
@@ -3121,13 +3103,5 @@ mod tests {
 
         assert!(doc_guard.contains("document_images"));
         assert!(doc_guard.contains("is_none_or(|pages| pages.is_empty())"));
-    }
-
-    #[test]
-    fn clear_confirmation_is_a_typed_rich_action() {
-        let encoded = serde_json::to_string(&build_clear_confirmation_ui()).unwrap();
-        assert!(encoded.contains("action_clear"));
-        assert!(encoded.contains("clear_cancel"));
-        assert!(encoded.contains("RESET HISTORY"));
     }
 }

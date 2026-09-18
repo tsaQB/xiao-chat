@@ -2643,7 +2643,7 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
                         act_label
                     );
                 }
-                println!("\x1b[38;5;244mGunakan '/switch <id>' untuk berpindah sesi atau '/new [nama]' untuk membuat sesi baru.\x1b[0m\n");
+                println!("\x1b[38;5;244mGunakan '/switch <id>' untuk berpindah sesi, '/rm <id>' untuk menghapus, atau '/new [nama]' untuk membuat baru.\x1b[0m\n");
                 continue;
             } else if lower.starts_with("/switch") {
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
@@ -2658,6 +2658,23 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
                         }
                     } else {
                         println!("\x1b[31m✖ Sesi #{} tidak ditemukan.\x1b[0m\n", target_id);
+                    }
+                } else {
+                    println!("\x1b[31m✖ ID sesi harus berupa angka.\x1b[0m\n");
+                }
+                continue;
+            } else if lower.starts_with("/rm") || lower.starts_with("/delete") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() < 2 {
+                    println!("\x1b[33mPenggunaan: /rm <id_sesi> (contoh: /rm 2)\x1b[0m\n");
+                } else if let Ok(target_id) = parts[1].parse::<usize>() {
+                    if ai_service.remove_session_by_id(user_id, target_id).await {
+                        println!("\x1b[1;32m✔ Sesi #{} berhasil dihapus.\x1b[0m\n", target_id);
+                    } else {
+                        println!(
+                            "\x1b[31m✖ Sesi #{} tidak ditemukan atau gagal dihapus.\x1b[0m\n",
+                            target_id
+                        );
                     }
                 } else {
                     println!("\x1b[31m✖ ID sesi harus berupa angka.\x1b[0m\n");
@@ -2712,6 +2729,7 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
                     "  \x1b[36m/sessions\x1b[0m       - Tampilkan daftar semua sesi percakapan"
                 );
                 println!("  \x1b[36m/switch <id>\x1b[0m    - Beralih ke sesi percakapan tertentu");
+                println!("  \x1b[36m/rm <id>\x1b[0m        - Hapus sesi percakapan berdasarkan ID");
                 println!("  \x1b[36m/model\x1b[0m          - Tampilkan informasi model dan provider aktif");
                 println!("  \x1b[36m/help\x1b[0m           - Tampilkan bantuan perintah");
                 println!("  \x1b[36m/exit\x1b[0m           - Keluar dari mode chat (atau Ctrl+C / Ctrl+D)\n");
@@ -2993,6 +3011,106 @@ pub(crate) async fn run_cli_context(
     }
 }
 
+pub(crate) async fn run_cli_mcp_hub(
+    _ai_service: &AIChatService,
+    action: Option<&str>,
+    target: Option<&str>,
+) {
+    load_environment();
+    let current_mcp_url = crate::ai::tools::get_configured_mcp_url();
+    let (search_engine_str, _) = crate::ai::tools::get_search_engine_status();
+
+    match action {
+        None | Some("status") | Some("list") => {
+            println!(
+                "\n\x1b[1;36mModel Context Protocol (MCP) & Web Search Configuration\x1b[0m\n"
+            );
+            println!(
+                "  \x1b[38;5;245mActive Engine :\x1b[0m \x1b[1;37m{}\x1b[0m",
+                search_engine_str
+            );
+            println!(
+                "  \x1b[38;5;245mMCP Endpoint  :\x1b[0m \x1b[1;32m{}\x1b[0m",
+                current_mcp_url
+            );
+            println!("\n\x1b[38;5;244mSubcommands:\x1b[0m");
+            println!("  xiao mcp url <URL>      - Set custom MCP endpoint URL (SSRF protected)");
+            println!("  xiao mcp test [query]   - Test MCP search probe with live query");
+            println!(
+                "  xiao mcp reset          - Reset endpoint to default (https://mcp.exa.ai/)\n"
+            );
+        }
+        Some("url") | Some("set") => {
+            let Some(raw_url) = target else {
+                println!("\n\x1b[33mPenggunaan: xiao mcp url <URL>\x1b[0m\n");
+                return;
+            };
+            let trimmed = raw_url.trim();
+            match crate::bot::url_policy::resolve_download_url(trimmed).await {
+                Ok(_) => {
+                    if crate::ai::service::save_app_setting("EXA_MCP_URL", trimmed).is_ok() {
+                        println!(
+                            "\n\x1b[1;32m✔ MCP endpoint berhasil disimpan:\x1b[0m {}\n",
+                            trimmed
+                        );
+                    } else {
+                        println!(
+                            "\n\x1b[31m✖ Gagal menyimpan konfigurasi MCP ke database.\x1b[0m\n"
+                        );
+                    }
+                }
+                Err(err) => {
+                    println!("\n\x1b[31m✖ URL ditolak oleh kebijakan keamanan (SSRF/Protokol): {}\x1b[0m\n", err);
+                }
+            }
+        }
+        Some("test") | Some("check") => {
+            let query = target.unwrap_or("Rust 2021 edition release notes");
+            println!("\n\x1b[1;36mTesting MCP Endpoint Probe...\x1b[0m");
+            println!("  Endpoint : {}", current_mcp_url);
+            println!("  Query    : {}\n", query);
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_default();
+            let start = std::time::Instant::now();
+            match crate::ai::tools::search_exa_mcp(&client, &current_mcp_url, query).await {
+                Ok(result) => {
+                    let elapsed = start.elapsed().as_millis();
+                    println!("\x1b[1;32m✔ Sukses terhubung ke MCP ({elapsed}ms)\x1b[0m\n");
+                    let preview = if result.len() > 300 {
+                        &result[..300]
+                    } else {
+                        &result
+                    };
+                    println!(
+                        "\x1b[38;5;244mCuplikan Respons:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
+                        preview.trim()
+                    );
+                }
+                Err(err) => {
+                    let elapsed = start.elapsed().as_millis();
+                    println!("\x1b[31m✖ Gagal probe MCP ({elapsed}ms): {}\x1b[0m\n", err);
+                }
+            }
+        }
+        Some("reset") => {
+            let default_url = "https://mcp.exa.ai/";
+            if crate::ai::service::save_app_setting("EXA_MCP_URL", default_url).is_ok() {
+                println!(
+                    "\n\x1b[1;32m✔ MCP endpoint berhasil direset ke default:\x1b[0m {}\n",
+                    default_url
+                );
+            } else {
+                println!("\n\x1b[31m✖ Gagal mereset konfigurasi MCP.\x1b[0m\n");
+            }
+        }
+        Some(unknown) => {
+            println!("\n\x1b[33mSubcommand '{}' tidak dikenal. Gunakan: status, url, test, reset\x1b[0m\n", unknown);
+        }
+    }
+}
+
 pub(crate) fn print_cli_help() {
     println!(
         "\n\x1b[1;36mxiao v{} — AI Assistant Bot\x1b[0m\n",
@@ -3010,6 +3128,7 @@ pub(crate) fn print_cli_help() {
     println!("  \x1b[36mcontext [chat] [th]\x1b[0m  Display token consumption and context gauge (default: owner private chat)");
     println!("  \x1b[36mmemory [action]\x1b[0m     Manage long-term user memories (list, rm <key>, clear)");
     println!("  \x1b[36mai [action]\x1b[0m         Unified AI management hub (Model, Provider, Addon) [Interactive/One-Liner]");
+    println!("  \x1b[36mmcp [action]\x1b[0m        Manage Model Context Protocol search endpoints [status, url, test, reset]");
     println!("  \x1b[36mgateway [action]\x1b[0m    Manage Telegram messaging gateway (Token & Owner ID) [Interactive/One-Liner]");
     println!("  \x1b[36mversion, -v\x1b[0m         Display binary version");
     println!("  \x1b[36mhelp\x1b[0m                Show this help message\n");
@@ -3037,6 +3156,11 @@ pub(crate) fn print_cli_help() {
     );
     println!("     \x1b[36mxiao ai addon\x1b[0m       Configure multimodal specialist routes (Vision, STT, Video, Image)");
     println!("     \x1b[36mxiao ai test [role]\x1b[0m Open live diagnostic probe center (or test: vision, stt, video, image, all)\n");
+    println!("\x1b[1;37mSubcommands for 'mcp':\x1b[0m");
+    println!("     \x1b[36mxiao mcp\x1b[0m                    Display active MCP endpoint & search status (default)");
+    println!("     \x1b[36mxiao mcp url <URL>\x1b[0m          Set custom MCP server endpoint (SSRF protected)");
+    println!("     \x1b[36mxiao mcp test [query]\x1b[0m       Probe MCP endpoint connectivity with live query");
+    println!("     \x1b[36mxiao mcp reset\x1b[0m              Reset MCP endpoint to default (https://mcp.exa.ai/)\n");
     println!("\x1b[1;37mSubcommands for 'gateway':\x1b[0m");
     println!("     \x1b[36mxiao gateway\x1b[0m                Open Interactive Gateway Manager");
     println!(

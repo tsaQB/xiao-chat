@@ -140,12 +140,27 @@ xiao <command> [arguments]
 | `ai use <model>` | Switch the active Main model directly. |
 | `ai addon` | Configure multimodal specialist roles (`Vision`, `Video`, `Audio STT`, `Image Generation`, `Curator`). |
 | `ai test [role]` | Run live diagnostic capability probes against active endpoints. |
+| `mcp [action]` | Manage Model Context Protocol search endpoints (`xiao mcp`, `xiao mcp url <URL>`, `xiao mcp test`, `xiao mcp reset`). |
 | `gateway` | Manage Telegram Bot Token connectivity and verify `OWNER_USER_ID`. |
 | `version` | Display version information. |
 | `help` | Display command-line help. |
 
-### Terminal Chat Example
-Test prompts directly from your shell:
+### Terminal Chat REPL & Commands
+Xiao provides an interactive terminal REPL when invoked with `cargo run -- chat`:
+
+```text
+Xiao Interactive Chat REPL Commands:
+  /sessions         List all conversation sessions with IDs and message counts
+  /switch <id>      Switch active conversation session
+  /rm <id>          Remove conversation session by ID
+  /new [name]       Create and switch to a new conversation session
+  /clear            Reset conversation history in the active session
+  /model            Inspect active Main model and provider endpoint
+  /help             Show available REPL commands
+  /exit             Exit chat mode (or Ctrl+C / Ctrl+D)
+```
+
+You can also run one-shot queries without entering the REPL:
 
 ```bash
 cargo run -- chat "Summarize recent advances in Rust async runtimes"
@@ -173,6 +188,7 @@ Settings can be defined in `.env` (or `~/.xiao.env`, `~/xiao/.env`) or managed d
 | `BRAVE_API_KEY` | *Optional* | API key for Brave Search integration in `web_search`. |
 | `TAVILY_API_KEY` | *Optional* | API key for Tavily AI search integration. |
 | `EXA_API_KEY` | *Optional* | API key for Exa search integration. |
+| `EXA_MCP_URL` | `https://mcp.exa.ai/` | Model Context Protocol search server endpoint (keyless Exa MCP protocol). |
 
 ---
 

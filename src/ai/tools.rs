@@ -119,8 +119,16 @@ pub fn get_search_engine_status() -> (String, String) {
         "Exa MCP (Keyless) \u{2192} DuckDuckGo / Wikipedia".to_string()
     };
 
-    let mcp_url = env::var("EXA_MCP_URL").unwrap_or_else(|_| "https://mcp.exa.ai/".to_string());
+    let mcp_url = get_configured_mcp_url();
     (engine_name, mcp_url)
+}
+
+pub fn get_configured_mcp_url() -> String {
+    env::var("EXA_MCP_URL")
+        .ok()
+        .or_else(|| crate::ai::service::load_app_setting("EXA_MCP_URL"))
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| "https://mcp.exa.ai/".to_string())
 }
 
 pub async fn execute_web_search(query: &str) -> String {
@@ -173,7 +181,7 @@ pub async fn execute_web_search(query: &str) -> String {
     }
 
     // 4. Default / Keyless Exa MCP
-    let mcp_url = env::var("EXA_MCP_URL").unwrap_or_else(|_| "https://mcp.exa.ai/".to_string());
+    let mcp_url = get_configured_mcp_url();
     info!("Trying Exa Keyless MCP for query: {q}");
     match search_exa_mcp(&client, &mcp_url, q).await {
         Ok(res) => return res,
@@ -387,7 +395,7 @@ async fn search_exa_api(
     }
 }
 
-async fn search_exa_mcp(
+pub(crate) async fn search_exa_mcp(
     _client: &reqwest::Client,
     mcp_url: &str,
     query: &str,

@@ -79,6 +79,12 @@ cargo run -- ai use <model>
 cargo run -- ai addon
 cargo run -- ai test [role]
 
+# Model Context Protocol (MCP) & Search Management
+cargo run -- mcp
+cargo run -- mcp url <URL>
+cargo run -- mcp test [query]
+cargo run -- mcp reset
+
 # Telegram Gateway & Owner Configuration
 cargo run -- gateway
 cargo run -- gateway check
@@ -132,7 +138,7 @@ cargo run -- setup
 
 ### Module Responsibilities
 - `src/main.rs`: Application entry point, CLI subcommand dispatch, Telegram long-polling loop, durable intake worker, and update routing.
-- `src/cli.rs`: Interactive TUI wizards (via `crossterm`), dashboard rendering, terminal chat REPL, and AI provider/gateway administration.
+- `src/cli.rs`: Interactive TUI wizards (via `crossterm`), dashboard rendering, terminal chat REPL (with multi-session management `/sessions`, `/switch`, `/rm`, `/new`), AI provider hub, MCP hub, and gateway administration.
 - `src/bot/`:
   - `client.rs` / `client/raw.rs`: Telegram API client supporting Bot API 10.3 rich message drafts, ephemeral contexts, and file downloads.
   - `models.rs` / `models/base.rs`: Type-safe Telegram API models, rich message block definitions (`RichBlock`), and validation bounds.
@@ -144,7 +150,7 @@ cargo run -- setup
   - `capability.rs` / `provider.rs`: Live model probe harness and capability verification (e.g. confirming whether an endpoint actually supports vision or tool calling).
   - `storage.rs`: SQLite persistence layer (WAL mode) for messages, sessions, user memories, scoped summaries, and encrypted/private credentials.
   - `stream.rs`: UTF-8 chunk-safe Server-Sent Events (SSE) streaming decoder.
-  - `tools.rs`: Function calling engine (`web_search` with Brave/Tavily/Exa/DDG fallbacks, and `fetch_url`).
+  - `tools.rs`: Function calling engine (`web_search` with keyless Exa MCP protocol, Tavily/Brave API, and DuckDuckGo/Wikipedia fallbacks; and `fetch_url`).
 - `src/document.rs` & `src/document/archive.rs`: In-memory safe extraction of text, archives (ZIP, TAR, TAR.GZ, 7Z), Office files (DOCX, XLSX), and PDF page extraction/rendering.
 - `src/attachments.rs`: Content attachment persistence scoped by chat/thread.
 - `src/timeline.rs`: Real-time streaming draft management with progress spinner and activity state indicators.

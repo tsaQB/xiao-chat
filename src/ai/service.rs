@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use chrono::Local;
 use futures_util::StreamExt;
 use reqwest::multipart::{Form, Part};
@@ -426,14 +424,6 @@ fn select_audio_execution_mode(
     }
 }
 
-fn generation_revision_matches(
-    session: Option<&ChatSession>,
-    session_id: usize,
-    revision: u64,
-) -> bool {
-    session.is_some_and(|session| session.id == session_id && session.revision == revision)
-}
-
 fn validate_generated_image_bytes(bytes: &[u8]) -> Result<(), String> {
     if bytes.is_empty() {
         return Err("generated image response was empty".to_string());
@@ -706,7 +696,6 @@ pub struct GenerationGuard {
     active_generations: ActiveGenerations,
     chat_id: i64,
     draft_id: i64,
-    defused: bool,
 }
 
 impl GenerationGuard {
@@ -715,20 +704,12 @@ impl GenerationGuard {
             active_generations,
             chat_id,
             draft_id,
-            defused: false,
         }
-    }
-
-    pub fn defuse(&mut self) {
-        self.defused = true;
     }
 }
 
 impl Drop for GenerationGuard {
     fn drop(&mut self) {
-        if self.defused {
-            return;
-        }
         let key = (self.chat_id, self.draft_id);
         if let Ok(mut map) = self.active_generations.try_write() {
             map.remove(&key);
@@ -801,7 +782,6 @@ pub enum ImageGenerationErrorKind {
     UnsafeImageUrl,
     DownloadTimeout,
     Cancelled,
-    FallbackDisabled,
     Provider,
 }
 
@@ -1118,17 +1098,6 @@ impl AIChatService {
         }
     }
 
-    pub async fn get_active_session_index(&self, user_id: i64) -> usize {
-        let sessions = self.get_sessions(user_id).await;
-        let Some(active_id) = self.get_active_session_id(user_id).await else {
-            return 0;
-        };
-        sessions
-            .iter()
-            .position(|session| session.id == active_id)
-            .unwrap_or(0)
-    }
-
     pub async fn get_active_session(&self, user_id: i64) -> Option<ChatSession> {
         let sessions = self.get_sessions(user_id).await;
         let active_id = self.get_active_session_id(user_id).await?;
@@ -1189,14 +1158,6 @@ impl AIChatService {
         true
     }
 
-    pub async fn switch_session(&self, user_id: i64, index: usize) -> bool {
-        let sessions = self.get_sessions(user_id).await;
-        let Some(session_id) = sessions.get(index).map(|session| session.id) else {
-            return false;
-        };
-        self.switch_session_by_id(user_id, session_id).await
-    }
-
     pub async fn remove_session_by_id(&self, user_id: i64, session_id: usize) -> bool {
         let _ = self.get_sessions(user_id).await;
         let _ = self.get_active_session_id(user_id).await;
@@ -1249,14 +1210,6 @@ impl AIChatService {
         true
     }
 
-    pub async fn remove_session(&self, user_id: i64, index: usize) -> bool {
-        let sessions = self.get_sessions(user_id).await;
-        let Some(session_id) = sessions.get(index).map(|session| session.id) else {
-            return false;
-        };
-        self.remove_session_by_id(user_id, session_id).await
-    }
-
     pub async fn clear_history(&self, user_id: i64) -> bool {
         let Some(_) = self.get_active_session_id(user_id).await else {
             return false;
@@ -1301,6 +1254,7 @@ impl AIChatService {
                 }
                 drop(sessions_map);
                 delete_session_attachments(user_id, active_id).await;
+                self.clear_scoped_history(user_id, 0).await;
                 true
             }
             Some(false) => {
@@ -1329,10 +1283,6 @@ impl AIChatService {
             .entry(key)
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
-    }
-
-    pub async fn generation_lock_user(&self, user_id: i64) -> Arc<Mutex<()>> {
-        self.generation_lock(user_id, 0).await
     }
 
     pub async fn begin_generation(
@@ -1377,10 +1327,6 @@ impl AIChatService {
         for sender in senders {
             let _ = sender.send(true);
         }
-    }
-
-    pub async fn get_context_stats(&self, user_id: i64) -> ContextStats {
-        self.get_scoped_context_stats(user_id, 0, user_id).await
     }
 
     pub async fn get_scoped_context_stats(
@@ -1496,30 +1442,6 @@ impl AIChatService {
             usage_pct,
             progress_bar: bar,
             messages_breakdown: msg_stats,
-        }
-    }
-
-    // ==========================================
-    // Audio Transcription (Whisper)
-    // ==========================================
-
-    pub async fn transcribe_audio(
-        &self,
-        _user_id: i64,
-        audio_bytes: Vec<u8>,
-        file_name: &str,
-        mime_type: Option<&str>,
-    ) -> (bool, Result<String, String>) {
-        let route = match self.resolve_model_route(ModelRole::AudioStt).await {
-            Ok(route) => route,
-            Err(error) => return (false, Err(error)),
-        };
-        match self
-            .transcribe_audio_resolved(&route, audio_bytes, file_name, mime_type)
-            .await
-        {
-            Ok(text) => (true, Ok(text)),
-            Err(error) => (false, Err(error)),
         }
     }
 
@@ -3124,19 +3046,6 @@ impl AIChatService {
     // Image Generation (role-aware OpenAI Images + explicit fallback)
     // ==========================================
 
-    pub async fn generate_image(
-        &self,
-        user_id: i64,
-        prompt: &str,
-        width: usize,
-        height: usize,
-        cancel_rx: &mut watch::Receiver<bool>,
-    ) -> Result<GeneratedImage, ImageGenerationError> {
-        let snapshot = self.generation_model_snapshot().await;
-        self.generate_image_with_snapshot(user_id, prompt, width, height, &snapshot, cancel_rx)
-            .await
-    }
-
     pub(crate) async fn generate_image_with_snapshot(
         &self,
         _user_id: i64,
@@ -3397,29 +3306,6 @@ mod tests {
         assert_eq!(crate::ai::storage::compute_next_session_id(Some(21), 8), 21);
         assert_eq!(crate::ai::storage::compute_next_session_id(Some(4), 8), 9);
         assert_eq!(crate::ai::storage::compute_next_session_id(None, 8), 9);
-    }
-
-    #[test]
-    fn clear_revision_invalidates_old_generation_and_new_generation_matches() {
-        let mut current = session(11);
-        current.revision = 14;
-        assert!(generation_revision_matches(Some(&current), 11, 14));
-        current.revision += 1;
-        assert!(!generation_revision_matches(Some(&current), 11, 14));
-        assert!(generation_revision_matches(Some(&current), 11, 15));
-    }
-
-    #[test]
-    fn deleted_session_discards_late_generation_and_switch_never_redirects_it() {
-        let origin = session(7);
-        let active_after_switch = session(9);
-        assert!(!generation_revision_matches(None, 7, 0));
-        assert!(!generation_revision_matches(
-            Some(&active_after_switch),
-            7,
-            0
-        ));
-        assert!(generation_revision_matches(Some(&origin), 7, 0));
     }
 
     fn evidence_record(
@@ -4251,17 +4137,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generation_guard_respects_defuse() {
+    async fn generation_guard_cleans_up_on_drop() {
         let active: ActiveGenerations = Arc::new(RwLock::new(HashMap::new()));
         let (tx, _rx) = tokio::sync::watch::channel(false);
         active.write().await.insert((123, 789), tx);
 
         {
-            let mut guard = GenerationGuard::new(active.clone(), 123, 789);
-            guard.defuse();
+            let _guard = GenerationGuard::new(active.clone(), 123, 789);
         }
 
-        assert!(active.read().await.contains_key(&(123, 789)));
+        assert!(!active.read().await.contains_key(&(123, 789)));
     }
 
     #[test]

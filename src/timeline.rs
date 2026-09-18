@@ -89,6 +89,7 @@ struct TimelineState {
     is_failed: bool,
     placeholder_message_id: Option<i64>,
     last_synced_status: Option<String>,
+    ticker_epoch: u64,
 }
 
 impl TimelineState {
@@ -101,6 +102,7 @@ impl TimelineState {
             is_failed: false,
             placeholder_message_id: None,
             last_synced_status: None,
+            ticker_epoch: 0,
         }
     }
 
@@ -320,23 +322,30 @@ impl ExecutionTimeline {
         self.lock_state().stopped = true;
     }
 
-    pub fn is_stopped(&self) -> bool {
-        self.lock_state().stopped
-    }
-
     pub fn start_ticker(&self) {
-        self.lock_state().stopped = false;
-        let timeline = self.clone();
+        let my_epoch = {
+            let mut state = self.lock_state();
+            state.stopped = false;
+            state.ticker_epoch = state.ticker_epoch.wrapping_add(1);
+            state.ticker_epoch
+        };
 
         // 1. Private chat draft ticker: animate draft every 1000ms
         if matches!(self.inner.mode, TimelineMode::PrivateDraft { .. }) {
-            let tl = timeline.clone();
+            let inner_weak = std::sync::Arc::downgrade(&self.inner);
             tokio::spawn(async move {
-                while !tl.is_stopped() {
+                loop {
                     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                    if tl.is_stopped() {
+                    let Some(inner) = inner_weak.upgrade() else {
                         break;
+                    };
+                    {
+                        let state = inner.lock_state();
+                        if state.stopped || state.ticker_epoch != my_epoch {
+                            break;
+                        }
                     }
+                    let tl = ExecutionTimeline { inner };
                     TelegramBotClient::with_delivery_context(
                         tl.inner.delivery_context.clone(),
                         tl.sync_draft(false),
@@ -348,15 +357,18 @@ impl ExecutionTimeline {
 
         // 2. Chat action heartbeat: keep Telegram status (e.g. typing) alive every 4000ms
         // until generation completes or stops.
-        let tl = timeline;
+        let inner_weak = std::sync::Arc::downgrade(&self.inner);
         tokio::spawn(async move {
-            while !tl.is_stopped() {
+            loop {
                 tokio::time::sleep(tokio::time::Duration::from_millis(4000)).await;
-                if tl.is_stopped() {
+                let Some(inner) = inner_weak.upgrade() else {
                     break;
-                }
+                };
                 let action = {
-                    let state = tl.lock_state();
+                    let state = inner.lock_state();
+                    if state.stopped || state.ticker_epoch != my_epoch {
+                        break;
+                    }
                     let act = state.items.last().map(|it| it.activity);
                     match act {
                         Some(ProgressActivity::Drawing) => "upload_photo",
@@ -366,8 +378,8 @@ impl ExecutionTimeline {
                     }
                 };
                 let _ = TelegramBotClient::with_delivery_context(
-                    tl.inner.delivery_context.clone(),
-                    tl.inner.bot.send_chat_action(tl.inner.chat_id, action),
+                    inner.delivery_context.clone(),
+                    inner.bot.send_chat_action(inner.chat_id, action),
                 )
                 .await;
             }
@@ -886,5 +898,20 @@ mod tests {
         }]);
         crate::parser::rtl::apply_rtl_direction(&mut ltr_msg, ltr_partial);
         assert!(ltr_msg.is_rtl.is_none());
+    }
+
+    #[tokio::test]
+    async fn ticker_exits_gracefully_when_timeline_is_dropped() {
+        let bot = TelegramBotClient::new("dummy");
+        let weak_inner = {
+            let tl = ExecutionTimeline::for_chat(bot, 12345, 12345, 1, 10, true, None);
+            tl.start_ticker();
+            std::sync::Arc::downgrade(&tl.inner)
+            // tl is dropped here
+        };
+        // Give background tasks a moment to awaken
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Strong count should be 0 because background tasks only held Weak references
+        assert!(weak_inner.upgrade().is_none());
     }
 }

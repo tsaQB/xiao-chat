@@ -22,7 +22,7 @@ pub fn parse_streaming_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
     blocks
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
     let mut blocks = markdown::parse_markdown_to_rich_blocks(text);
     normalize_bot_api_10_3_media(&mut blocks);
