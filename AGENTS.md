@@ -142,8 +142,17 @@ cargo run -- setup
 ```
 
 ### Module Responsibilities
-- `src/main.rs`: Application entry point, CLI subcommand dispatch, Telegram long-polling loop, durable intake worker, and update routing.
-- `src/cli.rs`: Interactive TUI wizards (via `crossterm`), dashboard rendering, terminal chat REPL (with multi-session management `/sessions`, `/switch`, `/rm`, `/new`), AI provider hub, MCP hub, and gateway administration.
+- `src/cli/`: Modular command-line subcommands and interactive interfaces:
+  - `tui.rs`: Terminal UI engine, RAII raw-mode lifecycle guard (`CleanRawMode`), and ANSI layout formatters.
+  - `status.rs`: Dashboard and diagnostic system status rendering.
+  - `gateway.rs`: Telegram gateway and bot token/owner management.
+  - `wizard.rs`: Interactive setup and onboarding quickstart.
+  - `chat.rs`: Terminal chat REPL and multi-session manager (`/sessions`, `/switch`, `/rm`, `/new`).
+  - `memory.rs`: Tier-1 persistent memory management.
+  - `context.rs`: Token usage and sliding-window breakdown inspector.
+  - `mcp.rs`: Model Context Protocol and search engine hub.
+  - `ai_hub.rs`: Provider, model catalog, and multimodal specialist routing.
+  - `help.rs`: Global CLI help screen.
 - `src/bot/`:
   - `client.rs` / `client/raw.rs`: Telegram API client supporting Bot API 10.3 rich message drafts, ephemeral contexts, and file downloads.
   - `models.rs` / `models/base.rs`: Type-safe Telegram API models, rich message block definitions (`RichBlock`), and validation bounds.
