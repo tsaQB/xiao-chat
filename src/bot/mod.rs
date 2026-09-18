@@ -6,3 +6,4 @@ pub mod models;
 pub mod router;
 pub(crate) mod transport_policy;
 pub(crate) mod url_policy;
+pub mod worker;
