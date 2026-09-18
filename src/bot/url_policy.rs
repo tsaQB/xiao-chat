@@ -1,6 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use url::{Host, Url};
 
+#[derive(Debug)]
 pub(crate) struct ResolvedDownloadUrl {
     pub url: Url,
     pub host: String,
@@ -130,6 +131,17 @@ pub(crate) async fn resolve_download_url(raw: &str) -> Result<ResolvedDownloadUr
     })
 }
 
+#[allow(dead_code)]
+pub(crate) async fn resolve_redirect_hop(
+    current_url: &Url,
+    location: &str,
+) -> Result<ResolvedDownloadUrl, String> {
+    let next_url = current_url
+        .join(location.trim())
+        .map_err(|e| format!("invalid redirect location: {e}"))?;
+    resolve_download_url(next_url.as_str()).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +189,108 @@ mod tests {
         assert!(is_unsafe_remote_ip("::ffff:0:10.0.0.1".parse().unwrap()));
         assert!(!is_unsafe_remote_ip("64:ff9b::1.1.1.1".parse().unwrap()));
         assert!(!is_unsafe_remote_ip("::ffff:0:1.1.1.1".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn rejects_redirect_chain_to_internal_metadata_endpoint() {
+        let base = Url::parse("https://public.example.com/media/photo.jpg").unwrap();
+
+        // 1. IP metadata endpoint (169.254.169.254, link-local, fd00::)
+        let metadata_targets = [
+            "http://169.254.169.254/latest/meta-data",
+            "http://169.254.1.1/link-local",
+            "http://[fd00::1]/metadata",
+            "http://[fe80::1]/link-local",
+            "//169.254.169.254/latest/meta-data",
+        ];
+        for target in metadata_targets {
+            let hop = resolve_redirect_hop(&base, target).await;
+            assert!(
+                hop.is_err(),
+                "redirect to metadata target '{target}' must be rejected, got: {hop:?}"
+            );
+        }
+
+        // 2. Loopback (127.0.0.1, ::1, localhost)
+        let loopback_targets = [
+            "http://127.0.0.1/admin",
+            "http://127.0.0.1:8080/admin",
+            "http://[::1]/admin",
+            "http://[::1]:8080/admin",
+            "http://localhost:8080/admin",
+            "//127.0.0.1/admin",
+            "//[::1]/admin",
+        ];
+        for target in loopback_targets {
+            let hop = resolve_redirect_hop(&base, target).await;
+            assert!(
+                hop.is_err(),
+                "redirect to loopback target '{target}' must be rejected, got: {hop:?}"
+            );
+        }
+
+        // 3. Private RFC1918 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+        let private_targets = [
+            "http://10.0.0.1/internal",
+            "http://10.255.255.254/internal",
+            "http://172.16.0.1/internal",
+            "http://172.31.255.254/internal",
+            "http://192.168.0.1/internal",
+            "http://192.168.1.100/internal",
+            "//10.0.0.1/internal",
+            "//192.168.1.1/internal",
+        ];
+        for target in private_targets {
+            let hop = resolve_redirect_hop(&base, target).await;
+            assert!(
+                hop.is_err(),
+                "redirect to private target '{target}' must be rejected, got: {hop:?}"
+            );
+        }
+
+        // 4. Non-HTTP schemes (file://, gopher://, ftp://, javascript:, data:)
+        let non_http_targets = [
+            "file:///etc/passwd",
+            "gopher://127.0.0.1:6379/_",
+            "ftp://example.com/file",
+            "javascript:alert(1)",
+            "data:text/plain;base64,SGVsbG8=",
+        ];
+        for target in non_http_targets {
+            let hop = resolve_redirect_hop(&base, target).await;
+            assert!(
+                hop.is_err(),
+                "redirect to non-http target '{target}' must be rejected, got: {hop:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_multi_hop_redirect_chain_terminating_in_private_target() {
+        let hop0 = Url::parse("https://public.example.com/start").unwrap();
+
+        // Hop 1: relative redirect to another path on the same public host
+        let hop1_url = hop0.join("/intermediate/redirect").unwrap();
+        assert_eq!(
+            hop1_url.as_str(),
+            "https://public.example.com/intermediate/redirect"
+        );
+
+        // Hop 2: redirect to AWS/GCP metadata service
+        let hop2_meta =
+            resolve_redirect_hop(&hop1_url, "http://169.254.169.254/latest/meta-data").await;
+        assert!(hop2_meta.is_err());
+
+        // Hop 2: redirect to local loopback
+        let hop2_loopback = resolve_redirect_hop(&hop1_url, "http://127.0.0.1:80/secret").await;
+        assert!(hop2_loopback.is_err());
+
+        // Hop 2: redirect to RFC1918 private network
+        let hop2_rfc1918 = resolve_redirect_hop(&hop1_url, "http://192.168.1.1/admin").await;
+        assert!(hop2_rfc1918.is_err());
+
+        // Hop 2: redirect to local filesystem file://
+        let hop2_file = resolve_redirect_hop(&hop1_url, "file:///etc/shadow").await;
+        assert!(hop2_file.is_err());
     }
 }
