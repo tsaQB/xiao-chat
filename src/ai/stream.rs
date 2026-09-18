@@ -161,7 +161,9 @@ mod tests {
     #[test]
     fn rejects_malformed_json_events() {
         let mut decoder = SseDecoder::default();
-        let error = decoder.push(b"data: {not-json}\n\n").unwrap_err();
+        let error = decoder
+            .push(b"data: {not-json}\n\n")
+            .expect_err("malformed JSON should error");
         assert!(error.contains("invalid JSON"));
     }
 

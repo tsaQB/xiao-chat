@@ -289,3 +289,9 @@ Configuration is loaded via `get_config_path()` in `src/main.rs`:
 5. **RTL & Bidirectional Layout (Bot API 10.3)**:
    - When text or rich block contents contain RTL scripts (Arabic, Hebrew, Persian, Urdu) or Eastern Arabic-Indic / Hindi numerals (`٠..٩` / `\u0660..\u0669`), `InputRichMessage.is_rtl` must be set to `Some(true)`.
    - Markdown and Unicode box tables automatically detect RTL content in headers and cells, defaulting unspecified column alignments to `"right"` so Telegram mirrors and renders them naturally from right to left.
+6. **Zero `.unwrap()` Policy & `clippy::unwrap_used = "deny"`**:
+   - The entire codebase strictly enforces zero `.unwrap()` calls across both production code and test suites.
+   - Any runtime production code must use idiomatic error handling (`?`, `match`, `if let`, `unwrap_or`, `unwrap_or_else`, etc.).
+   - Static constants (such as compiled Regex) and unit/contract test assertions use `.expect("descriptive invariant or failure explanation")`.
+   - `clippy::unwrap_used = "deny"` is configured in `Cargo.toml [lints.clippy]`, causing any compiler check or CI run containing `.unwrap()` to fail immediately.
+

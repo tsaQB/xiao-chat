@@ -544,13 +544,14 @@ fn generated_image_base64_rejects_oversized_input_before_decode() {
             .div_ceil(3)
             .saturating_add(16),
     );
-    let error = decode_generated_image_base64(&oversized).unwrap_err();
+    let error = decode_generated_image_base64(&oversized).expect_err("oversized image should fail");
     assert_eq!(error.kind, ImageGenerationErrorKind::InvalidImage);
 }
 
 #[test]
 fn generated_image_base64_validation_is_typed() {
-    let error = decode_generated_image_base64("%%%not-base64%%%").unwrap_err();
+    let error =
+        decode_generated_image_base64("%%%not-base64%%%").expect_err("invalid base64 should fail");
     assert_eq!(error.kind, ImageGenerationErrorKind::InvalidBase64);
 
     use base64::Engine;
@@ -562,7 +563,7 @@ fn generated_image_base64_validation_is_typed() {
 fn generated_image_url_validation_rejects_unsafe_schemes_and_private_ips() {
     assert_eq!(
         parse_generated_image_url("file:///etc/passwd")
-            .unwrap_err()
+            .expect_err("file url should be rejected")
             .kind,
         ImageGenerationErrorKind::UnsafeImageUrl
     );
@@ -822,7 +823,7 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
     let error = service
         .transcribe_audio_resolved(&route, b"sample".to_vec(), "sample.mp3", Some("audio/mpeg"))
         .await
-        .unwrap_err();
+        .expect_err("unconfigured audio provider should fail");
     assert!(error.contains("415"));
     assert!(!error.contains("probe"));
     assert!(service.capability_registry.read().await.models.is_empty());
@@ -846,7 +847,7 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
     let error = service
         .generate_image_with_snapshot(0, "test", 64, 64, &disabled, &mut receiver)
         .await
-        .unwrap_err();
+        .expect_err("disabled route should fail");
     assert_eq!(error.kind, ImageGenerationErrorKind::RouteDisabled);
     assert!(service
         .transcribe_audio_resolved(&route, vec![], "unsafe.bin", None,)

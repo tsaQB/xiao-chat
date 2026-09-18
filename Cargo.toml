@@ -40,3 +40,8 @@ lto = true
 codegen-units = 1
 panic = "unwind"
 strip = true
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "allow"
+

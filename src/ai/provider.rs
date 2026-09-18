@@ -1846,7 +1846,7 @@ mod tests {
             )
             .expect("set_route succeeds");
         assert!(select_model_route(&store, &routing, ModelRole::Vision)
-            .unwrap_err()
+            .expect_err("route to missing provider should fail")
             .contains("not found"));
 
         routing
@@ -1859,7 +1859,7 @@ mod tests {
             )
             .expect("set_route succeeds");
         assert!(select_model_route(&store, &routing, ModelRole::Vision)
-            .unwrap_err()
+            .expect_err("route to missing model should fail")
             .contains("no longer present"));
     }
 

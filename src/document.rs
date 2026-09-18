@@ -685,7 +685,7 @@ mod tests {
             .finish()
             .expect("finish writer succeeds")
             .into_inner();
-        let err = extract_docx_text(&bytes).unwrap_err();
+        let err = extract_docx_text(&bytes).expect_err("zip bomb should be rejected");
         assert!(err.contains("melebihi batas ukuran dekompresi yang aman"));
     }
 
@@ -720,7 +720,7 @@ mod tests {
         drop(file);
         drop(archive);
 
-        let err = extract_docx_text(&bytes).unwrap_err();
+        let err = extract_docx_text(&bytes).expect_err("forged header zip bomb should be rejected");
         assert!(err.contains("melebihi batas ukuran dekompresi yang aman"));
     }
 
