@@ -1751,25 +1751,16 @@ async fn handle_callback_query(bot: &TelegramBotClient, cq: crate::bot::models::
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn dispatch_text_or_image_chat(
+async fn dispatch_text_or_image_chat<'a>(
     bot: &TelegramBotClient,
     ai_service: &AIChatService,
     user_last_image_prompt: &UserLastImagePrompt,
     chat_id: i64,
     thread_id: i64,
     user_id: i64,
-    text: &str,
-    reply_to_msg_id: Option<i64>,
-    image_bytes: Option<Vec<u8>>,
-    document_images: Option<Vec<Vec<u8>>>,
-    mime_type: Option<&str>,
-    doc_text: Option<&str>,
-    doc_name: Option<&str>,
-    video_bytes: Option<Vec<u8>>,
-    video_mime: Option<&str>,
-    video_duration: i32,
+    input: ChatInput<'a>,
 ) {
+    let text = input.prompt;
     let is_explicit_image = command_matches(text, "/image");
     let image_arg = if is_explicit_image {
         command_args(text, "/image").unwrap_or("")
@@ -1777,7 +1768,7 @@ async fn dispatch_text_or_image_chat(
         text
     };
 
-    let auto_image_intent = if image_bytes.is_none() && doc_text.is_none() {
+    let auto_image_intent = if input.image_bytes.is_none() && input.doc_text.is_none() {
         plan_image_generation_intent(image_arg).or_else(|| {
             if is_explicit_image && !image_arg.trim().is_empty() {
                 Some(ImageGenerationIntent {
@@ -1802,33 +1793,11 @@ async fn dispatch_text_or_image_chat(
             user_id,
             &intent.image_prompt,
             intent.explanation_prompt.as_deref(),
-            reply_to_msg_id,
+            input.reply_to_message_id,
         )
         .await;
     } else {
-        handle_ai_chat(
-            bot,
-            ai_service,
-            chat_id,
-            thread_id,
-            user_id,
-            ChatInput {
-                prompt: text,
-                image_bytes,
-                document_images,
-                mime_type,
-                doc_text,
-                doc_name,
-                audio_bytes: None,
-                audio_mime: None,
-                video_bytes,
-                video_mime,
-                video_duration: Some(video_duration),
-                model_snapshot: None,
-                reply_to_message_id: reply_to_msg_id,
-            },
-        )
-        .await;
+        handle_ai_chat(bot, ai_service, chat_id, thread_id, user_id, input).await;
     }
 }
 
@@ -2189,16 +2158,21 @@ async fn handle_update(
             chat_id,
             thread_id,
             user_id,
-            &text,
-            reply_to_msg_id,
-            image_bytes,
-            document_images,
-            mime_type.as_deref(),
-            doc_text.as_deref(),
-            doc_name.as_deref(),
-            video_bytes,
-            video_mime.as_deref(),
-            video_duration,
+            ChatInput {
+                prompt: &text,
+                image_bytes,
+                document_images,
+                mime_type: mime_type.as_deref(),
+                doc_text: doc_text.as_deref(),
+                doc_name: doc_name.as_deref(),
+                audio_bytes: None,
+                audio_mime: None,
+                video_bytes,
+                video_mime: video_mime.as_deref(),
+                video_duration: Some(video_duration),
+                model_snapshot: None,
+                reply_to_message_id: reply_to_msg_id,
+            },
         )
         .await;
     } else if let Some(cq) = update.callback_query {
