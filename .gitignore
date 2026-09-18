@@ -1,7 +1,5 @@
 .env
 target/
-__pycache__/
-*.py[cod]
 Screenshot_*.png
 Screenshot_*.jpg
 Screenshot_*.jpeg
@@ -9,7 +7,6 @@ IMG_*.jpg
 IMG_*.jpeg
 picked_*.jpg
 multi_*.jpg
-preview_styles.py
 .crush/
 picoclaw/
 .agents/
