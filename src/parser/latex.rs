@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 /// Regex to convert decimal commas between digits (e.g. "7,5" -> "7.5", "3,14" -> "3.14")
 /// to avoid JLaTeXMath parsing errors and awkward spacing in TeX math mode.
 static RE_DECIMAL_COMMA: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?P<before>\d+),(?P<after>\d+)").unwrap());
+    LazyLock::new(|| Regex::new(r"(?P<before>\d+),(?P<after>\d+)").expect("valid static regex"));
 
 /// Regex to detect digits glued to (or followed by) text/mathrm/mbox units, e.g.:
 /// "10\text{cm}", "50\text{cm}", "44\text{cm}", "7.5\text{hari}", "100 \text{ m}", "10\,\text{cm}"
@@ -12,17 +12,19 @@ static RE_NUMBER_UNIT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?P<num>\d+(?:\.\d+)?)(?:\\ |\s|\\\,)*(?:\\(?:text|mathrm|mbox))\{(?P<inner>[^{}]+)\}",
     )
-    .unwrap()
+    .expect("valid static regex")
 });
 
 /// Regex to detect standalone \text{...} or \mbox{...} commands that are not preceded by a number.
-static RE_STANDALONE_TEXT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\\(?:text|mbox)\{(?P<inner>[^{}]+)\}").unwrap());
+static RE_STANDALONE_TEXT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\(?:text|mbox)\{(?P<inner>[^{}]+)\}").expect("valid static regex")
+});
 
 /// Regex to ensure proper binary operator spacing when a hyphen immediately follows \mathrm{...}
 /// e.g. "\mathrm{Suku\ ke}-7" -> "\mathrm{Suku\ ke} - 7"
-static RE_HYPHEN_AFTER_MATHROMAN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\\mathrm\{[^{}]+\})-(?P<after>\d+)").unwrap());
+static RE_HYPHEN_AFTER_MATHROMAN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(\\mathrm\{[^{}]+\})-(?P<after>\d+)").expect("valid static regex")
+});
 
 /// Normalizes internal whitespace of a math roman segment into TeX escaped backslash-spaces.
 fn escape_math_roman_text(inner: &str) -> String {
@@ -48,7 +50,7 @@ pub fn sanitize_latex_for_telegram(input: &str) -> String {
 
     // 1. Convert decimal commas (e.g., "7,5" -> "7.5", "3,14" -> "3.14"), skipping coordinate pairs
     let commas_normalized = RE_DECIMAL_COMMA.replace_all(trimmed, |caps: &regex::Captures| {
-        let m = caps.get(0).unwrap();
+        let m = caps.get(0).expect("full match capture exists");
         let start = m.start();
         if start > 0 {
             let prev_char = trimmed[..start].chars().last();

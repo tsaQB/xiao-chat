@@ -9,30 +9,34 @@ use serde_json::{json, Value};
 use tracing::{info, warn};
 
 static RE_DDG_TITLE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<a class="result__url"[^>]*href="(?P<url>[^"]+)"[^>]*>"#).unwrap()
+    Regex::new(r#"<a class="result__url"[^>]*href="(?P<url>[^"]+)"[^>]*>"#)
+        .expect("valid static regex")
 });
 static RE_DDG_SNIPPET: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<a class="result__snippet"[^>]*>(?P<snippet>.*?)</a>"#).unwrap()
+    Regex::new(r#"<a class="result__snippet"[^>]*>(?P<snippet>.*?)</a>"#)
+        .expect("valid static regex")
 });
 
 static RE_HTML_SCRIPT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<script.*?</script>").unwrap());
+    LazyLock::new(|| Regex::new(r"(?is)<script.*?</script>").expect("valid static regex"));
 static RE_HTML_STYLE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<style.*?</style>").unwrap());
+    LazyLock::new(|| Regex::new(r"(?is)<style.*?</style>").expect("valid static regex"));
 static RE_HTML_HEAD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<head.*?</head>").unwrap());
+    LazyLock::new(|| Regex::new(r"(?is)<head.*?</head>").expect("valid static regex"));
 static RE_HTML_NOSCRIPT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<noscript.*?</noscript>").unwrap());
+    LazyLock::new(|| Regex::new(r"(?is)<noscript.*?</noscript>").expect("valid static regex"));
 static RE_HTML_BLOCK_BREAK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)</(?:p|div|section|article|blockquote|h[1-6]|tr|table|ul|ol)>|<br\s*/?>|<hr\s*/?>",
     )
-    .unwrap()
+    .expect("valid static regex")
 });
 static RE_HTML_LIST_ITEM: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)<li\b[^>]*>").unwrap());
-static RE_HTML_TAGS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
-static RE_WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]+").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)<li\b[^>]*>").expect("valid static regex"));
+static RE_HTML_TAGS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<[^>]+>").expect("valid static regex"));
+static RE_WHITESPACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[ \t]+").expect("valid static regex"));
 
 pub fn clean_html_to_text(html: &str) -> String {
     let no_script = RE_HTML_SCRIPT.replace_all(html, "");
@@ -744,7 +748,7 @@ static RE_TOOL_PREAMBLE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)^(?:baik|tentu|oke|siap|halo|yes|sure|okay|alright|fine)?\s*[,.:!?-]?\s*(?:tunggu|sebentar|biar|mari|tolong|saya|aku|kami|kita|akan|let me|i will|i'll|allow me|searching|looking up|checking)\b.*?\b(?:cari|carikan|mencari|pencarian|cek|mengecek|pengecekan|periksa|memeriksa|lihat|search|searching|check|checking|look up|looking up|fetch|retrieve|find)\b",
     )
-    .unwrap()
+    .expect("valid static regex")
 });
 
 const DEFINITIVE_PREAMBLE_PREFIXES: &[&str] = &[

@@ -3,84 +3,102 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 static RE_TERM_HEADING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(#{1,6})\s*([^\s#].*)$").unwrap());
-static RE_TERM_DIVIDER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\-{3,}|\*{3,}|_{3,}|─{3,}|—{2,})$").unwrap());
-static RE_TERM_BULLET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-*•]\s+(.+)$").unwrap());
-static RE_TERM_NUMBERED: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\d+[\.)])\s+(.+)$").unwrap());
-
-static RE_TERM_HTML_BOLD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<(?:b|strong)(?:\s+[^>]*)?>(.*?)</(?:b|strong)>").unwrap());
-static RE_TERM_HTML_ITALIC: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<(?:i|em)(?:\s+[^>]*)?>(.*?)</(?:i|em)>").unwrap());
-static RE_TERM_HTML_CODE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<code(?:\s+[^>]*)?>(.*?)</code>").unwrap());
-static RE_TERM_HTML_UNDERLINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<(?:u|ins)(?:\s+[^>]*)?>(.*?)</(?:u|ins)>").unwrap());
-static RE_TERM_HTML_STRIKE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)<(?:s|strike|del)(?:\s+[^>]*)?>(.*?)</(?:s|strike|del)>").unwrap()
+    LazyLock::new(|| Regex::new(r"^(#{1,6})\s*([^\s#].*)$").expect("valid static regex"));
+static RE_TERM_DIVIDER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\-{3,}|\*{3,}|_{3,}|─{3,}|—{2,})$").expect("valid static regex")
 });
-static RE_TERM_HTML_SPOILER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<tg-spoiler(?:\s+[^>]*)?>(.*?)</tg-spoiler>").unwrap());
-static RE_TERM_HTML_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?is)<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>"#).unwrap());
+static RE_TERM_BULLET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[-*•]\s+(.+)$").expect("valid static regex"));
+static RE_TERM_NUMBERED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d+[\.)])\s+(.+)$").expect("valid static regex"));
+
+static RE_TERM_HTML_BOLD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<(?:b|strong)(?:\s+[^>]*)?>(.*?)</(?:b|strong)>").expect("valid static regex")
+});
+static RE_TERM_HTML_ITALIC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<(?:i|em)(?:\s+[^>]*)?>(.*?)</(?:i|em)>").expect("valid static regex")
+});
+static RE_TERM_HTML_CODE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<code(?:\s+[^>]*)?>(.*?)</code>").expect("valid static regex")
+});
+static RE_TERM_HTML_UNDERLINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<(?:u|ins)(?:\s+[^>]*)?>(.*?)</(?:u|ins)>").expect("valid static regex")
+});
+static RE_TERM_HTML_STRIKE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<(?:s|strike|del)(?:\s+[^>]*)?>(.*?)</(?:s|strike|del)>")
+        .expect("valid static regex")
+});
+static RE_TERM_HTML_SPOILER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<tg-spoiler(?:\s+[^>]*)?>(.*?)</tg-spoiler>").expect("valid static regex")
+});
+static RE_TERM_HTML_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>"#)
+        .expect("valid static regex")
+});
 static RE_TERM_HTML_TAGS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"</?[a-zA-Z][^>]*>").unwrap());
+    LazyLock::new(|| Regex::new(r"</?[a-zA-Z][^>]*>").expect("valid static regex"));
 
 static RE_TERM_MEDIA_PHOTO: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?i)!?\[(?:photo|foto|image|img|gambar|picture|pic)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)"#,
     )
-    .unwrap()
+    .expect("valid static regex")
 });
 static RE_TERM_MEDIA_VIDEO: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)!?\[(?:video|vid)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)"#).unwrap()
+    Regex::new(r#"(?i)!?\[(?:video|vid)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)"#)
+        .expect("valid static regex")
 });
 static RE_TERM_MEDIA_AUDIO: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)!?\[(?:audio|musik|music|lagu|song)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)"#).unwrap()
+    Regex::new(r#"(?i)!?\[(?:audio|musik|music|lagu|song)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)"#)
+        .expect("valid static regex")
 });
 static RE_TERM_MEDIA_VOICE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?i)!?\[(?:voice|voicenote|voice_note|suara|rekaman|vn)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)"#,
     )
-    .unwrap()
+    .expect("valid static regex")
 });
 static RE_TERM_MEDIA_DOC: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)!?\[(?:document|dokumen|doc|file|berkas)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)"#)
-        .unwrap()
+        .expect("valid static regex")
 });
 static RE_TERM_MEDIA_MAP: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\[(?:map|location|lokasi|peta|geo)\s*:\s*([^\]]+)\]"#).unwrap()
+    Regex::new(r#"(?i)\[(?:map|location|lokasi|peta|geo)\s*:\s*([^\]]+)\]"#)
+        .expect("valid static regex")
 });
 static RE_TERM_MEDIA_IMG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"!\[([^\]]*)\]\(([^)]+)\)"#).unwrap());
-static RE_TERM_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\[([^\]]+)\]\((https?://[^\s)]+|tg://[^\s)]+)\)"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"!\[([^\]]*)\]\(([^)]+)\)"#).expect("valid static regex"));
+static RE_TERM_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[([^\]]+)\]\((https?://[^\s)]+|tg://[^\s)]+)\)"#).expect("valid static regex")
+});
 
 static RE_TERM_BOLD_STAR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
-static RE_TERM_BOLD_UNDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"__([^_]+)__").unwrap());
+    LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").expect("valid static regex"));
+static RE_TERM_BOLD_UNDER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"__([^_]+)__").expect("valid static regex"));
 static RE_TERM_UNDERLINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\+\+([^+]+)\+\+").unwrap());
-static RE_TERM_SPOILER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\|\|([^|]+)\|\|").unwrap());
-static RE_TERM_STRIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"~~([^~]+)~~").unwrap());
-static RE_TERM_CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap());
+    LazyLock::new(|| Regex::new(r"\+\+([^+]+)\+\+").expect("valid static regex"));
+static RE_TERM_SPOILER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\|\|([^|]+)\|\|").expect("valid static regex"));
+static RE_TERM_STRIKE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"~~([^~]+)~~").expect("valid static regex"));
+static RE_TERM_CODE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"`([^`]+)`").expect("valid static regex"));
 static RE_TERM_ITALIC: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?:\*([^*]+)\*|\b_([^_]+)_\b)").unwrap());
+    LazyLock::new(|| Regex::new(r"(?:\*([^*]+)\*|\b_([^_]+)_\b)").expect("valid static regex"));
 
 static RE_TERM_MAP_LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)^\[(?:map|location|lokasi|peta|geo)\s*:\s*([^\]]+)\](?:\s*\(([^)]+)\))?$"#)
-        .unwrap()
+        .expect("valid static regex")
 });
 static RE_TERM_MEDIA_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)^!?\[(photo|foto|image|img|gambar|picture|pic|video|vid|audio|musik|music|lagu|song|voice|voicenote|voice_note|suara|rekaman|vn|animation|animasi|gif|collage|kolase|gallery|galeri|album|slideshow|slide|document|dokumen|doc|file|berkas)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)$"#).unwrap()
+    Regex::new(r#"(?i)^!?\[(photo|foto|image|img|gambar|picture|pic|video|vid|audio|musik|music|lagu|song|voice|voicenote|voice_note|suara|rekaman|vn|animation|animasi|gif|collage|kolase|gallery|galeri|album|slideshow|slide|document|dokumen|doc|file|berkas)\s*:\s*([^\]]+)\]\s*\(([^)]+)\)$"#).expect("valid static regex")
 });
 static RE_TERM_IMG_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^!\[([^\]]*)\]\(([^)]+)\)$"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"^!\[([^\]]*)\]\(([^)]+)\)$"#).expect("valid static regex"));
 
 static RE_ANSI_STRIP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap());
+    LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").expect("valid static regex"));
 
 /// Renders markdown text into an elegantly styled, ANSI-escaped terminal representation.
 ///

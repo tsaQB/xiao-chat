@@ -9,27 +9,37 @@ use crate::bot::models::{
 use crate::parser::latex::sanitize_latex_for_telegram;
 use crate::parser::rtl;
 
-static RE_HTML_SPOILER_TG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<tg-spoiler(?:\s+[^>]*)?>(.*?)</tg-spoiler>").unwrap());
+static RE_HTML_SPOILER_TG: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<tg-spoiler(?:\s+[^>]*)?>(.*?)</tg-spoiler>").expect("valid static regex")
+});
 static RE_HTML_SPOILER_SPAN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?is)<span\s+class=["']?(?:tg-)?spoiler["']?>(.*?)</span>"#).unwrap()
+    Regex::new(r#"(?is)<span\s+class=["']?(?:tg-)?spoiler["']?>(.*?)</span>"#)
+        .expect("valid static regex")
 });
 static RE_HTML_STRIKE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)<(?:s|strike|del)(?:\s+[^>]*)?>(.*?)</(?:s|strike|del)>").unwrap()
+    Regex::new(r"(?is)<(?:s|strike|del)(?:\s+[^>]*)?>(.*?)</(?:s|strike|del)>")
+        .expect("valid static regex")
 });
-static RE_HTML_UNDERLINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<(?:u|ins)(?:\s+[^>]*)?>(.*?)</(?:u|ins)>").unwrap());
-static RE_HTML_BOLD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<(?:b|strong)(?:\s+[^>]*)?>(.*?)</(?:b|strong)>").unwrap());
-static RE_HTML_ITALIC: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<(?:i|em)(?:\s+[^>]*)?>(.*?)</(?:i|em)>").unwrap());
-static RE_HTML_CODE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<code(?:\s+[^>]*)?>(.*?)</code>").unwrap());
-static RE_HTML_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?is)<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>"#).unwrap());
-static RE_HTML_BR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>").unwrap());
+static RE_HTML_UNDERLINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<(?:u|ins)(?:\s+[^>]*)?>(.*?)</(?:u|ins)>").expect("valid static regex")
+});
+static RE_HTML_BOLD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<(?:b|strong)(?:\s+[^>]*)?>(.*?)</(?:b|strong)>").expect("valid static regex")
+});
+static RE_HTML_ITALIC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<(?:i|em)(?:\s+[^>]*)?>(.*?)</(?:i|em)>").expect("valid static regex")
+});
+static RE_HTML_CODE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<code(?:\s+[^>]*)?>(.*?)</code>").expect("valid static regex")
+});
+static RE_HTML_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>"#)
+        .expect("valid static regex")
+});
+static RE_HTML_BR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>").expect("valid static regex"));
 static RE_HTML_LEAKED_TAGS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)</?(?:b|strong|i|em|s|strike|del|u|ins|code|pre|blockquote|a|tg-spoiler|span|p|div|mark|kbd)(?:\s+[^>]*)?>").unwrap()
+    Regex::new(r"(?i)</?(?:b|strong|i|em|s|strike|del|u|ins|code|pre|blockquote|a|tg-spoiler|span|p|div|mark|kbd)(?:\s+[^>]*)?>").expect("valid static regex")
 });
 
 pub fn parse_inline(input_str: &str) -> Value {
@@ -649,7 +659,9 @@ fn parse_multi_media_list_block(
             })
         }
     } else if valid_blocks.len() == 1 {
-        let first = valid_blocks.pop().unwrap();
+        let first = valid_blocks
+            .pop()
+            .expect("guaranteed single element in valid_blocks");
         let photo_val = first.get("photo").cloned().unwrap_or(first);
         Some(RichBlock::Photo {
             photo: photo_val,
@@ -1135,7 +1147,7 @@ fn try_parse_container_media_block(
 
     static RE_MEDIA_SRC: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"(?i)(?:src=["']([^"']+)["']|!?\[[^\]]*\]\(([^)]+)\)|https?://[^\s"'<>()]+)"#)
-            .unwrap()
+            .expect("valid static regex")
     });
 
     let mut sub_blocks = Vec::new();
@@ -1181,7 +1193,9 @@ fn try_parse_container_media_block(
         };
         Some((block, i))
     } else if sub_blocks.len() == 1 {
-        let first = sub_blocks.pop().unwrap();
+        let first = sub_blocks
+            .pop()
+            .expect("guaranteed single element in sub_blocks");
         let block = if first["type"] == "video" {
             RichBlock::Video {
                 video: first["video"].clone(),
@@ -1230,7 +1244,7 @@ fn try_parse_container_media_block(
 static RE_EMBEDDED_MEDIA: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?i)(!?\[(?:photo|foto|image|img|gambar|picture|pic|video|vid|audio|musik|music|lagu|song|voice|voicenote|voice_note|suara|rekaman|vn|animation|animasi|gif|collage|kolase|gallery|galeri|album|slideshow|slide|document|dokumen|doc|file|berkas|map|location|lokasi|peta|geo)\s*:[^\]]+\](?:\s*\([^\)]+\))?[.,;:]?|!\[[^\]]*\]\s*\([^\)]+\)[.,;:]?|<tg-(?:photo|video|audio|document|map|collage|slideshow)[^>]*>|</tg-(?:photo|video|audio|document|map|collage|slideshow)>|<img[^>]*>)"#
-    ).unwrap()
+    ).expect("valid static regex")
 });
 
 pub fn isolate_embedded_media_blocks(text: &str) -> String {
@@ -1306,29 +1320,32 @@ pub fn isolate_embedded_media_blocks(text: &str) -> String {
 }
 
 static RE_THINK_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)<(?:think|thought|reasoning|reflection)\b.*?</(?:think|thought|reasoning|reflection)>").unwrap()
+    Regex::new(r"(?is)<(?:think|thought|reasoning|reflection)\b.*?</(?:think|thought|reasoning|reflection)>").expect("valid static regex")
 });
 static RE_TOOL_CALL_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)<(?:tool_call|function_calls?)\b.*?</(?:tool_call|function_calls?)>").unwrap()
+    Regex::new(r"(?is)<(?:tool_call|function_calls?)\b.*?</(?:tool_call|function_calls?)>")
+        .expect("valid static regex")
 });
 static RE_SQUARE_THINK_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?is)\[(?:think|thinking|thought|reasoning|reflection)\].*?\[/(?:think|thinking|thought|reasoning|reflection)\]")
-        .unwrap()
+        .expect("valid static regex")
 });
-static RE_UNCLOSED_THINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<(?:think|thought|reasoning|reflection)\b.*$").unwrap());
+static RE_UNCLOSED_THINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<(?:think|thought|reasoning|reflection)\b.*$").expect("valid static regex")
+});
 static RE_UNCLOSED_SQUARE_THINK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)\[(?:think|thinking|thought|reasoning|reflection)\](?:[^(].*|$)").unwrap()
+    Regex::new(r"(?is)\[(?:think|thinking|thought|reasoning|reflection)\](?:[^(].*|$)")
+        .expect("valid static regex")
 });
 static RE_TRAILING_INCOMPLETE_TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)<\s*(?:t(?:h(?:i(?:n(?:k)?)?)?)?|t(?:h(?:o(?:u(?:g(?:h(?:t)?)?)?)?)?)?|r(?:e(?:a(?:s(?:o(?:n(?:i(?:n(?:g)?)?)?)?)?)?)?)?|r(?:e(?:f(?:l(?:e(?:c(?:t(?:i(?:o(?:n)?)?)?)?)?)?)?)?)?)?$").unwrap()
+    Regex::new(r"(?i)<\s*(?:t(?:h(?:i(?:n(?:k)?)?)?)?|t(?:h(?:o(?:u(?:g(?:h(?:t)?)?)?)?)?)?|r(?:e(?:a(?:s(?:o(?:n(?:i(?:n(?:g)?)?)?)?)?)?)?)?|r(?:e(?:f(?:l(?:e(?:c(?:t(?:i(?:o(?:n)?)?)?)?)?)?)?)?)?)?$").expect("valid static regex")
 });
 static RE_TRAILING_INCOMPLETE_SQUARE_TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\[\s*(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?|t(?:h(?:o(?:u(?:g(?:h(?:t)?)?)?)?)?)?|r(?:e(?:a(?:s(?:o(?:n(?:i(?:n(?:g)?)?)?)?)?)?)?)?|r(?:e(?:f(?:l(?:e(?:c(?:t(?:i(?:o(?:n)?)?)?)?)?)?)?)?)?)?$").unwrap()
+    Regex::new(r"(?i)\[\s*(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?|t(?:h(?:o(?:u(?:g(?:h(?:t)?)?)?)?)?)?|r(?:e(?:a(?:s(?:o(?:n(?:i(?:n(?:g)?)?)?)?)?)?)?)?|r(?:e(?:f(?:l(?:e(?:c(?:t(?:i(?:o(?:n)?)?)?)?)?)?)?)?)?)?$").expect("valid static regex")
 });
 static RE_LEAKED_CONTROL_TAGS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)</?(?:think|thought|reasoning|reflection|tool_call|function_calls?)\b[^>]*>")
-        .unwrap()
+        .expect("valid static regex")
 });
 
 pub fn sanitize_leaked_llm_artifacts(text: &str) -> String {
@@ -1363,10 +1380,10 @@ pub fn sanitize_leaked_llm_artifacts(text: &str) -> String {
 
 pub fn extract_thinking_and_answer(raw: &str) -> (Option<String>, String) {
     static RE_EXTRACT_THINK: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?is)<(?:think|thought|reasoning|reflection)\b[^>]*>(.*?)</(?:think|thought|reasoning|reflection)>").unwrap()
+        Regex::new(r"(?is)<(?:think|thought|reasoning|reflection)\b[^>]*>(.*?)</(?:think|thought|reasoning|reflection)>").expect("valid static regex")
     });
     static RE_EXTRACT_SQUARE_THINK: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?is)\[(?:think|thinking|thought|reasoning|reflection)\](.*?)(?:\[/(?:think|thinking|thought|reasoning|reflection)\]|$)").unwrap()
+        Regex::new(r"(?is)\[(?:think|thinking|thought|reasoning|reflection)\](.*?)(?:\[/(?:think|thinking|thought|reasoning|reflection)\]|$)").expect("valid static regex")
     });
 
     let thinking = RE_EXTRACT_THINK
@@ -1601,8 +1618,10 @@ fn try_parse_table(
         }
     }
 
-    static RE_TABLE_UNDERLINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^-{3,}$").unwrap());
-    static RE_SPACE_SPLIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s{2,}|\t+").unwrap());
+    static RE_TABLE_UNDERLINE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^-{3,}$").expect("valid static regex"));
+    static RE_SPACE_SPLIT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\s{2,}|\t+").expect("valid static regex"));
 
     // 3. Plain Underline Table: Header \n ---------------- \n Data
     let underline_match = i + 1 < n && RE_TABLE_UNDERLINE.is_match(lines[i + 1].trim());
@@ -1859,15 +1878,16 @@ fn provisional_markdown_start(text: &str) -> Option<usize> {
 }
 
 static RE_UNCLOSED_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\([^\)]*$").unwrap());
+    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\([^\)]*$").expect("valid static regex"));
 static RE_DRAFT_HEADING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*#{1,6}\s*").unwrap());
+    LazyLock::new(|| Regex::new(r"(?m)^\s*#{1,6}\s*").expect("valid static regex"));
 static RE_DRAFT_LIST: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+").unwrap());
-static RE_DRAFT_DIVIDER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:-{1,}|\*{3,}|_{3,})\s*$").unwrap());
+    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+").expect("valid static regex"));
+static RE_DRAFT_DIVIDER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\s*(?:-{1,}|\*{3,}|_{3,})\s*$").expect("valid static regex")
+});
 static RE_DRAFT_QUOTE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:\*\*>|>>>|>)\s*").unwrap());
+    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:\*\*>|>>>|>)\s*").expect("valid static regex"));
 
 fn sanitize_provisional_markdown(tail: &str) -> String {
     let mut safe = tail
@@ -1894,11 +1914,14 @@ fn sanitize_provisional_markdown(tail: &str) -> String {
 }
 
 static RE_BLOCK_HEADING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(#{1,6})\s*([^\s#].*)$").unwrap());
-static RE_BLOCK_DIVIDER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\-{3,}|\*{3,}|_{3,}|─{3,}|—{2,})$").unwrap());
-static RE_BLOCK_BULLET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[-*•]\s+").unwrap());
-static RE_BLOCK_NUMBERED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+[\.)]\s+").unwrap());
+    LazyLock::new(|| Regex::new(r"^(#{1,6})\s*([^\s#].*)$").expect("valid static regex"));
+static RE_BLOCK_DIVIDER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\-{3,}|\*{3,}|_{3,}|─{3,}|—{2,})$").expect("valid static regex")
+});
+static RE_BLOCK_BULLET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[-*•]\s+").expect("valid static regex"));
+static RE_BLOCK_NUMBERED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+[\.)]\s+").expect("valid static regex"));
 
 pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
     if text.trim().is_empty() {
