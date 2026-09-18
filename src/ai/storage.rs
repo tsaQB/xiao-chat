@@ -60,6 +60,12 @@ pub struct ProviderStore {
 const SECRET_SCHEME_PREFIX: &str = "secret://";
 
 pub(crate) fn xiao_data_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("XIAO_DATA_DIR") {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return std::path::PathBuf::from(trimmed);
+        }
+    }
     let base = std::env::var("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -2672,6 +2678,21 @@ mod tests {
         // Failed records do not show in pending
         let pending_after_fail = pending_telegram_updates_after_on_conn(&conn, 99, 10).unwrap();
         assert!(pending_after_fail.is_empty());
+    }
+
+    #[test]
+    fn xiao_data_dir_honors_env_override() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let original = std::env::var("XIAO_DATA_DIR").ok();
+        let custom_dir = "/tmp/test_xiao_custom_dir";
+        std::env::set_var("XIAO_DATA_DIR", custom_dir);
+        assert_eq!(xiao_data_dir(), std::path::PathBuf::from(custom_dir));
+
+        if let Some(val) = original {
+            std::env::set_var("XIAO_DATA_DIR", val);
+        } else {
+            std::env::remove_var("XIAO_DATA_DIR");
+        }
     }
 
     #[test]

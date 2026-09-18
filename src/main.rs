@@ -1394,50 +1394,164 @@ async fn scoped_chat_worker(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ScopedRetryPolicy {
+    pub max_attempts: i64,
+    pub backoff: Duration,
+}
+
+impl Default for ScopedRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 2,
+            backoff: Duration::from_millis(1500),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetryOutcome {
+    Success,
+    PoisonPill,
+    ExceededMaxAttempts,
+    ClaimFailed,
+    Cancelled,
+}
+
+pub(crate) trait ScopedRetryStorage: Send + Sync {
+    fn claim(&self) -> impl std::future::Future<Output = Option<i64>> + Send;
+    fn retry(&self, reason: &'static str) -> impl std::future::Future<Output = bool> + Send;
+    fn failed(&self, reason: &'static str) -> impl std::future::Future<Output = bool> + Send;
+    fn processed(&self) -> impl std::future::Future<Output = bool> + Send;
+}
+
+struct DurableInboxStorage {
+    update_id: i64,
+}
+
+impl ScopedRetryStorage for DurableInboxStorage {
+    async fn claim(&self) -> Option<i64> {
+        ai::storage::mark_telegram_processing_claim_async(self.update_id).await
+    }
+    async fn retry(&self, reason: &'static str) -> bool {
+        ai::storage::mark_telegram_processing_retry_async(self.update_id, reason).await
+    }
+    async fn failed(&self, reason: &'static str) -> bool {
+        ai::storage::mark_telegram_processing_failed_async(self.update_id, reason).await
+    }
+    async fn processed(&self) -> bool {
+        ai::storage::mark_telegram_processed_async(self.update_id).await
+    }
+}
+
+async fn execute_with_scoped_retry<S, F, Fut>(
+    global_concurrency: &Arc<tokio::sync::Semaphore>,
+    storage: &S,
+    policy: ScopedRetryPolicy,
+    mut make_task: F,
+) -> RetryOutcome
+where
+    S: ScopedRetryStorage,
+    F: FnMut() -> Fut + Send,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    loop {
+        // Acquire global permit only while actively executing
+        let permit = match global_concurrency.acquire().await {
+            Ok(p) => p,
+            Err(_) => return RetryOutcome::Cancelled,
+        };
+
+        // Seed/read attempt count directly from durable storage claim
+        let attempt = match storage.claim().await {
+            Some(a) => a,
+            None => {
+                drop(permit);
+                return RetryOutcome::ClaimFailed;
+            }
+        };
+
+        if attempt > policy.max_attempts {
+            warn!(
+                "Task melebihi batas percobaan ({attempt} attempts); mengarantina sebagai failed"
+            );
+            let _ = storage
+                .failed("quarantined after exceeding max attempts")
+                .await;
+            drop(permit);
+            return RetryOutcome::ExceededMaxAttempts;
+        }
+
+        let fut = make_task();
+        let join_res = tokio::spawn(fut).await;
+
+        match join_res {
+            Ok(()) => {
+                if !storage.processed().await {
+                    warn!("Gagal menyelesaikan durable processing checkpoint");
+                }
+                drop(permit);
+                return RetryOutcome::Success;
+            }
+            Err(join_err) if join_err.is_panic() => {
+                // REQUIREMENT: RELEASE PERMIT BEFORE BACKOFF SLEEP
+                drop(permit);
+
+                if attempt < policy.max_attempts {
+                    warn!(
+                        "Task panic pada percobaan {attempt}/{}. Menandai retry dan backoff {:?} (permit dilepas)...",
+                        policy.max_attempts, policy.backoff
+                    );
+                    let _ = storage
+                        .retry("transient panic during processing, scheduled for retry")
+                        .await;
+
+                    // Backoff without holding any concurrency permit
+                    tokio::time::sleep(policy.backoff).await;
+
+                    // Next iteration re-acquires permit and re-claims via storage.claim()
+                    continue;
+                } else {
+                    error!(
+                        "Task gagal setelah {attempt} kali percobaan (poison pill). Mengarantina sebagai failed."
+                    );
+                    let _ = storage
+                        .failed("quarantined after max consecutive panics")
+                        .await;
+                    return RetryOutcome::PoisonPill;
+                }
+            }
+            Err(join_err) => {
+                drop(permit);
+                warn!("Task cancelled or aborted: {join_err}");
+                return RetryOutcome::Cancelled;
+            }
+        }
+    }
+}
+
 async fn process_scoped_update(
     global_concurrency: &Arc<tokio::sync::Semaphore>,
     ctx: &WorkerContext,
     update: Update,
 ) {
     let update_id = update.update_id;
-    let current_update = update;
+    let storage = DurableInboxStorage { update_id };
+    let policy = ScopedRetryPolicy::default();
 
-    loop {
-        // Acquire global permit only while actively executing
-        let permit = match global_concurrency.acquire().await {
-            Ok(p) => p,
-            Err(_) => return,
-        };
+    let worker_bot = ctx.bot.clone();
+    let worker_ai = Arc::clone(&ctx.ai_service);
+    let worker_last_image = Arc::clone(&ctx.user_last_image_prompt);
+    let worker_route = Arc::clone(&ctx.route_scope);
 
-        // Seed/read attempt count directly from SQLite durable claim
-        let attempt = match ai::storage::mark_telegram_processing_claim_async(update_id).await {
-            Some(a) => a,
-            None => {
-                drop(permit);
-                return;
-            }
-        };
+    execute_with_scoped_retry(global_concurrency, &storage, policy, move || {
+        let update_clone = update.clone();
+        let worker_bot = worker_bot.clone();
+        let worker_ai = Arc::clone(&worker_ai);
+        let worker_last_image = Arc::clone(&worker_last_image);
+        let worker_route = Arc::clone(&worker_route);
 
-        if attempt > 2 {
-            warn!(
-                "Update {update_id} melebihi batas percobaan ({attempt} attempts); mengarantina sebagai failed"
-            );
-            let _ = ai::storage::mark_telegram_processing_failed_async(
-                update_id,
-                "quarantined after exceeding max attempts (attempts > 2)",
-            )
-            .await;
-            drop(permit);
-            return;
-        }
-
-        let worker_bot = ctx.bot.clone();
-        let worker_ai = Arc::clone(&ctx.ai_service);
-        let worker_last_image = Arc::clone(&ctx.user_last_image_prompt);
-        let worker_route = Arc::clone(&ctx.route_scope);
-        let update_clone = current_update.clone();
-
-        let join_res = tokio::spawn(async move {
+        async move {
             let delivery_context = delivery_context_for_update(&update_clone);
             TelegramBotClient::with_delivery_context(
                 delivery_context,
@@ -1450,55 +1564,9 @@ async fn process_scoped_update(
                 ),
             )
             .await;
-        })
-        .await;
-
-        match join_res {
-            Ok(()) => {
-                if !ai::storage::mark_telegram_processed_async(update_id).await {
-                    warn!("Gagal menyelesaikan durable Telegram inbox update {update_id}");
-                }
-                drop(permit);
-                return;
-            }
-            Err(join_err) if join_err.is_panic() => {
-                // REQUIREMENT 1: RELEASE PERMIT BEFORE BACKOFF SLEEP
-                drop(permit);
-
-                if attempt < 2 {
-                    warn!(
-                        "Update {update_id} panic pada percobaan {attempt}/2. Menandai retry dan backoff 1.5s (permit dilepas)..."
-                    );
-                    let _ = ai::storage::mark_telegram_processing_retry_async(
-                        update_id,
-                        "transient panic during processing, scheduled for retry",
-                    )
-                    .await;
-
-                    // Backoff without holding any concurrency permit
-                    tokio::time::sleep(Duration::from_millis(1500)).await;
-
-                    // Next iteration re-acquires permit and re-claims via mark_telegram_processing_claim_async
-                    continue;
-                } else {
-                    error!(
-                        "Update {update_id} gagal setelah {attempt} kali percobaan (poison pill). Mengarantina sebagai failed."
-                    );
-                    let _ = ai::storage::mark_telegram_processing_failed_async(
-                        update_id,
-                        "quarantined after 2 consecutive panics",
-                    )
-                    .await;
-                    return;
-                }
-            }
-            Err(join_err) => {
-                drop(permit);
-                warn!("Update {update_id} task cancelled or aborted: {join_err}");
-                return;
-            }
         }
-    }
+    })
+    .await;
 }
 
 async fn process_durable_update(
@@ -3478,31 +3546,117 @@ mod tests {
         );
     }
 
-    #[test]
-    fn process_scoped_update_drops_permit_before_backoff_sleep() {
-        let source = include_str!("main.rs");
-        let func_start = source
-            .find("async fn process_scoped_update(")
-            .expect("process_scoped_update definition");
-        let func_end = source[func_start..]
-            .find("async fn process_durable_update(")
-            .map(|offset| func_start + offset)
-            .expect("process_durable_update definition");
-        let func_body = &source[func_start..func_end];
+    #[derive(Default)]
+    struct MockRetryStorage {
+        claim_count: Arc<std::sync::atomic::AtomicI64>,
+        retry_count: Arc<std::sync::atomic::AtomicUsize>,
+        failed_count: Arc<std::sync::atomic::AtomicUsize>,
+        processed_count: Arc<std::sync::atomic::AtomicUsize>,
+    }
 
-        let panic_match = func_body
-            .find("Err(join_err) if join_err.is_panic() =>")
-            .expect("panic handler branch");
-        let drop_permit = func_body[panic_match..]
-            .find("drop(permit);")
-            .expect("drop permit in panic branch");
-        let sleep_backoff = func_body[panic_match..]
-            .find("tokio::time::sleep(")
-            .expect("sleep in panic branch");
+    impl super::ScopedRetryStorage for MockRetryStorage {
+        async fn claim(&self) -> Option<i64> {
+            Some(
+                self.claim_count
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1,
+            )
+        }
+        async fn retry(&self, _reason: &'static str) -> bool {
+            self.retry_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            true
+        }
+        async fn failed(&self, _reason: &'static str) -> bool {
+            self.failed_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            true
+        }
+        async fn processed(&self) -> bool {
+            self.processed_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_with_scoped_retry_drops_permit_during_panic_backoff_runtime() {
+        use super::{execute_with_scoped_retry, RetryOutcome, ScopedRetryPolicy};
+
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let storage = MockRetryStorage::default();
+        let policy = ScopedRetryPolicy {
+            max_attempts: 2,
+            backoff: Duration::from_millis(200),
+        };
+
+        let call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let call_count_clone = Arc::clone(&call_count);
+        let sem_worker = Arc::clone(&sem);
+
+        let worker_handle = tokio::spawn(async move {
+            execute_with_scoped_retry(&sem_worker, &storage, policy, move || {
+                let count = call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if count == 0 {
+                        panic!("simulated transient panic on attempt 1");
+                    }
+                }
+            })
+            .await
+        });
+
+        // Give the task time to acquire permit, spawn handler, panic, and enter the 200ms backoff sleep
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // While the worker is sleeping in its backoff window, prove at runtime that the permit is free
+        let acquired_during_backoff = match sem.try_acquire() {
+            Ok(test_permit) => {
+                // Drop our test permit so the worker can re-acquire it for attempt 2
+                drop(test_permit);
+                true
+            }
+            Err(_) => false,
+        };
+
+        let outcome = worker_handle.await.expect("worker task joins");
 
         assert!(
-            drop_permit < sleep_backoff,
-            "Permit must be dropped BEFORE tokio::time::sleep backoff"
+            acquired_during_backoff,
+            "Semaphore permit must be free and acquirable by other tasks during backoff sleep"
+        );
+        assert_eq!(outcome, RetryOutcome::Success);
+        assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn execute_with_scoped_retry_quarantines_poison_pill_after_consecutive_panics() {
+        use super::{execute_with_scoped_retry, RetryOutcome, ScopedRetryPolicy};
+
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let storage = MockRetryStorage::default();
+        let claim_counter = Arc::clone(&storage.claim_count);
+        let retry_counter = Arc::clone(&storage.retry_count);
+        let failed_counter = Arc::clone(&storage.failed_count);
+        let processed_counter = Arc::clone(&storage.processed_count);
+
+        let policy = ScopedRetryPolicy {
+            max_attempts: 2,
+            backoff: Duration::from_millis(20),
+        };
+
+        let outcome = execute_with_scoped_retry(&sem, &storage, policy, || async {
+            panic!("unrecoverable panic");
+        })
+        .await;
+
+        assert_eq!(outcome, RetryOutcome::PoisonPill);
+        assert_eq!(claim_counter.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(retry_counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(failed_counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            processed_counter.load(std::sync::atomic::Ordering::SeqCst),
+            0
         );
     }
 }

@@ -187,10 +187,17 @@ When modifying or adding features, you **must** preserve these invariants:
 - **Rule**: Plaintext API keys and bot tokens are **never** committed, written to SQLite in plaintext, or printed in debug logs.
 - **Mechanism**: Secrets are written to disk under `~/.local/share/xiaoai/secrets/` with strict `0o600` file / `0o700` directory permissions. The database only stores a `secret://` URI reference (`api_key_ref`).
 
-### 5. Durable Intake Queue & Native Stop
-- **Queue**: Telegram long-polling writes incoming updates directly to SQLite table `telegram_inbox` as `pending`. An asynchronous worker channel processes them.
-- **Recovery**: On startup, `recover_telegram_processing_async()` resets any in-flight `processing` updates back to `pending` to guarantee at-least-once delivery.
-- **Native Stop Priority**: `stopped_message_generation` updates bypass the worker queue and cancel generation tokens immediately, ensuring cancellations are not blocked behind queued work.
+### 5. Durable Intake Queue, Keyed Mailbox Isolation & Native Stop
+- **Queue**: Telegram long-polling writes incoming updates directly to SQLite table `telegram_inbox` as `pending`.
+- **Per-Scope Keyed Mailboxes**: Updates are dispatched into dedicated per-scope channels (`ScopeKey { chat_id, thread_id }`). This guarantees strict FIFO processing within any individual chat or topic while processing different chats concurrently up to a global semaphore limit (8 permits). Mailbox workers gracefully despawn after 30 seconds of inactivity using an atomic critical section to prevent lost messages.
+- **Panic Isolation & Bounded Retry**: Each update is executed inside an isolated `tokio::spawn` task with unwinding panic protection (`JoinError::is_panic()`).
+  - Upon transient panic, the global concurrency permit is immediately released (`drop(permit)`), a 1.5-second backoff sleep occurs, and the update is retried immediately in-worker up to a maximum of 2 attempts (`attempts <= 2`, seeded and tracked directly in SQLite).
+  - If a task panics consecutively or exceeds 2 attempts, it is quarantined as `failed` ("poison pill") to protect the queue from infinite crash loops.
+- **Operational Trade-Off & Duplicate Side-Effect Risk**:
+  - Because in-worker retries trigger rapidly (~1.5s) on *any* panic without killing the daemon process, external side effects executed before an unexpected panic (e.g. an outbound Telegram message draft/reply already dispatched or an intermediate turn committed to SQLite before final inbox checkpointing) **will repeat upon retry**.
+  - This is an intentional operational trade-off of at-least-once processing semantics: Xiao guarantees zero message loss over exactly-once execution.
+- **Crash Recovery**: On startup, `recover_telegram_processing_async()` resets any in-flight `processing` updates back to `pending` to guarantee at-least-once recovery across process restarts, while quarantining updates with `attempts >= 2`.
+- **Native Stop Priority**: `stopped_message_generation` updates bypass worker mailboxes and execute synchronously to cancel in-flight generation tokens with zero latency.
 
 ### 6. Specialist Context Isolation
 - **Rule**: Canonical conversational history belongs solely to the `Main` model.
@@ -204,10 +211,10 @@ When modifying or adding features, you **must** preserve these invariants:
 ## 5. Storage & State Layout
 
 SQLite database location and files default to:
-- **Base directory**: `~/.local/share/xiaoai/` (or `$HOME/.local/share/xiaoai/`)
+- **Base directory**: `~/.local/share/xiaoai/` (or `$XIAO_DATA_DIR` if configured)
 - **Database**: `xiaoai.db` (configured with `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`)
-- **Secrets directory**: `~/.local/share/xiaoai/secrets/`
-- **Attachments directory**: `~/.local/share/xiaoai/attachments/<chat_id>/<thread_id>/`
+- **Secrets directory**: `<base>/secrets/` (e.g. `~/.local/share/xiaoai/secrets/`)
+- **Attachments directory**: `<base>/attachments/<chat_id>/<thread_id>/`
 
 ### Database Tables:
 - `settings`: Key-value application configuration.
