@@ -18,10 +18,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use ai::service::{GenerationModelSnapshot, ImageGenerationErrorKind};
+use ai::service::{GenerationModelSnapshot, ImageGenerationError, ImageGenerationErrorKind};
 use ai::AIChatService;
 use bot::client::{TelegramBotClient, TelegramDeliveryContext};
-use bot::models::{BotCommand, InputRichMessage, RichBlock, RichBlockTableCell, Update};
+use bot::models::{
+    BotCommand, InputRichMessage, MessageGenerationStopped, RichBlock, RichBlockTableCell, Update,
+};
 use parser::build_full_rich_message;
 use timeline::{ExecutionTimeline, GenerationProgressSink, ProgressActivity};
 use util::{escape_html, truncate_chars};
@@ -793,20 +795,14 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn handle_image_generation(
-    bot: &TelegramBotClient,
-    ai_service: &AIChatService,
+async fn resolve_image_generation_prompt(
+    prompt: &str,
     user_last_image_prompt: &UserLastImagePrompt,
     chat_id: i64,
     thread_id: i64,
     user_id: i64,
-    prompt: &str,
-    explanation_prompt: Option<&str>,
-    reply_to_message_id: Option<i64>,
-) {
-    let mut clean_prompt = prompt.trim().to_string();
-
+) -> String {
+    let clean_prompt = prompt.trim();
     if clean_prompt == "__CONTEXT_FOLLOWUP__"
         || [
             "gambarnya",
@@ -818,7 +814,7 @@ async fn handle_image_generation(
             "ya",
             "fotonya",
         ]
-        .contains(&clean_prompt.as_str())
+        .contains(&clean_prompt)
     {
         let mut last_context = String::new();
         let scoped_messages = ai::storage::load_scoped_messages_async(chat_id, thread_id, 10).await;
@@ -836,54 +832,151 @@ async fn handle_image_generation(
         }
 
         if !last_context.is_empty() {
-            clean_prompt = format!("illustration of {}", truncate_chars(&last_context, 250));
+            format!("illustration of {}", truncate_chars(&last_context, 250))
         } else {
             let last_guard = user_last_image_prompt.read().await;
-            clean_prompt = last_guard.get(&user_id).cloned().unwrap_or_else(|| {
+            last_guard.get(&user_id).cloned().unwrap_or_else(|| {
                 "majestic mountain scenery with clouds and ancient kingdom".to_string()
-            });
+            })
         }
+    } else {
+        clean_prompt.to_string()
     }
+}
+
+async fn send_image_generation_help(
+    bot: &TelegramBotClient,
+    ai_service: &AIChatService,
+    chat_id: i64,
+) {
+    let route_text = match ai_service
+        .resolve_model_route(ai::service::ModelRole::ImageGeneration)
+        .await
+    {
+        Ok(route) => format!("{} / {}", route.provider.name, route.model),
+        Err(error) => format!("Unavailable — {}", error),
+    };
+    let rich = InputRichMessage::new(vec![
+        RichBlock::SectionHeading {
+            text: Value::String("IMAGE GENERATION".to_string()),
+            level: 1,
+        },
+        RichBlock::Table {
+            cells: vec![
+                vec![
+                    RichBlockTableCell::text_only("Image Model", true, Some("left")),
+                    RichBlockTableCell::text_only("Default Size", true, Some("left")),
+                ],
+                vec![
+                    RichBlockTableCell::text_only(&route_text, false, Some("left")),
+                    RichBlockTableCell::text_only("1024 × 1024", false, Some("left")),
+                ],
+            ],
+            has_header: true,
+            is_bordered: false,
+            is_striped: false,
+            is_compact: true,
+            caption: None,
+        },
+        RichBlock::Paragraph {
+            text: Value::String(
+                "Kirim deskripsi gambar yang ingin dibuat (contoh: \"buat gambar pemandangan pegunungan saat fajar\").".to_string(),
+            ),
+        },
+    ]);
+    let _ = bot
+        .send_rich_message(chat_id, &rich, None, None, None)
+        .await;
+}
+
+fn build_image_generation_error_rich(error: &ImageGenerationError) -> InputRichMessage {
+    let status = match error.kind {
+        ImageGenerationErrorKind::CapabilityUnknown => "Capability unknown",
+        ImageGenerationErrorKind::CapabilityUnsupported => "Unsupported",
+        ImageGenerationErrorKind::RouteDisabled => "Route disabled",
+        ImageGenerationErrorKind::ProviderNotFound => "Provider not found",
+        ImageGenerationErrorKind::ModelNotFound => "Model not found",
+        ImageGenerationErrorKind::Timeout => "Timeout",
+        ImageGenerationErrorKind::Auth => "Authentication error",
+        ImageGenerationErrorKind::RateLimited => "Rate limited",
+        ImageGenerationErrorKind::HttpStatus => "HTTP error",
+        ImageGenerationErrorKind::ProtocolMismatch => "Protocol mismatch",
+        ImageGenerationErrorKind::InvalidResponse => "Invalid response",
+        ImageGenerationErrorKind::InvalidBase64 => "Invalid base64",
+        ImageGenerationErrorKind::InvalidImage => "Invalid image",
+        ImageGenerationErrorKind::UnsafeImageUrl => "Unsafe image URL",
+        ImageGenerationErrorKind::DownloadTimeout => "Download timeout",
+        ImageGenerationErrorKind::Cancelled => "Cancelled",
+        ImageGenerationErrorKind::Provider => "Provider error",
+    };
+    let mut blocks = vec![
+        RichBlock::SectionHeading {
+            text: Value::String("IMAGE GENERATION FAILED".to_string()),
+            level: 1,
+        },
+        RichBlock::Table {
+            cells: vec![
+                vec![
+                    RichBlockTableCell::text_only("Status", true, Some("left")),
+                    RichBlockTableCell::text_only("Detail", true, Some("left")),
+                ],
+                vec![
+                    RichBlockTableCell::text_only(status, false, Some("left")),
+                    RichBlockTableCell::text_only(
+                        &truncate_chars(&error.message, 240),
+                        false,
+                        Some("left"),
+                    ),
+                ],
+            ],
+            has_header: true,
+            is_bordered: false,
+            is_striped: false,
+            is_compact: true,
+            caption: None,
+        },
+    ];
+    if matches!(
+        error.kind,
+        ImageGenerationErrorKind::CapabilityUnknown
+            | ImageGenerationErrorKind::CapabilityUnsupported
+            | ImageGenerationErrorKind::RouteDisabled
+            | ImageGenerationErrorKind::ProviderNotFound
+            | ImageGenerationErrorKind::ModelNotFound
+    ) {
+        blocks.push(RichBlock::BlockQuotation {
+            blocks: vec![json!({
+                "type":"paragraph",
+                "text":"Configure specialist Image Generation route with: xiao addon"
+            })],
+        });
+    }
+    InputRichMessage::new(blocks)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_image_generation(
+    bot: &TelegramBotClient,
+    ai_service: &AIChatService,
+    user_last_image_prompt: &UserLastImagePrompt,
+    chat_id: i64,
+    thread_id: i64,
+    user_id: i64,
+    prompt: &str,
+    explanation_prompt: Option<&str>,
+    reply_to_message_id: Option<i64>,
+) {
+    let clean_prompt = resolve_image_generation_prompt(
+        prompt,
+        user_last_image_prompt,
+        chat_id,
+        thread_id,
+        user_id,
+    )
+    .await;
 
     if clean_prompt.is_empty() {
-        let route_text = match ai_service
-            .resolve_model_route(ai::service::ModelRole::ImageGeneration)
-            .await
-        {
-            Ok(route) => format!("{} / {}", route.provider.name, route.model),
-            Err(error) => format!("Unavailable — {}", error),
-        };
-        let rich = InputRichMessage::new(vec![
-            RichBlock::SectionHeading {
-                text: Value::String("IMAGE GENERATION".to_string()),
-                level: 1,
-            },
-            RichBlock::Table {
-                cells: vec![
-                    vec![
-                        RichBlockTableCell::text_only("Image Model", true, Some("left")),
-                        RichBlockTableCell::text_only("Default Size", true, Some("left")),
-                    ],
-                    vec![
-                        RichBlockTableCell::text_only(&route_text, false, Some("left")),
-                        RichBlockTableCell::text_only("1024 × 1024", false, Some("left")),
-                    ],
-                ],
-                has_header: true,
-                is_bordered: false,
-                is_striped: false,
-                is_compact: true,
-                caption: None,
-            },
-            RichBlock::Paragraph {
-                text: Value::String(
-                    "Kirim deskripsi gambar yang ingin dibuat (contoh: \"buat gambar pemandangan pegunungan saat fajar\").".to_string(),
-                ),
-            },
-        ]);
-        let _ = bot
-            .send_rich_message(chat_id, &rich, None, None, None)
-            .await;
+        send_image_generation_help(bot, ai_service, chat_id).await;
         return;
     }
 
@@ -948,68 +1041,7 @@ async fn handle_image_generation(
                 return;
             }
 
-            let status = match error.kind {
-                ImageGenerationErrorKind::CapabilityUnknown => "Capability unknown",
-                ImageGenerationErrorKind::CapabilityUnsupported => "Unsupported",
-                ImageGenerationErrorKind::RouteDisabled => "Route disabled",
-                ImageGenerationErrorKind::ProviderNotFound => "Provider not found",
-                ImageGenerationErrorKind::ModelNotFound => "Model not found",
-                ImageGenerationErrorKind::Timeout => "Timeout",
-                ImageGenerationErrorKind::Auth => "Authentication error",
-                ImageGenerationErrorKind::RateLimited => "Rate limited",
-                ImageGenerationErrorKind::HttpStatus => "HTTP error",
-                ImageGenerationErrorKind::ProtocolMismatch => "Protocol mismatch",
-                ImageGenerationErrorKind::InvalidResponse => "Invalid response",
-                ImageGenerationErrorKind::InvalidBase64 => "Invalid base64",
-                ImageGenerationErrorKind::InvalidImage => "Invalid image",
-                ImageGenerationErrorKind::UnsafeImageUrl => "Unsafe image URL",
-                ImageGenerationErrorKind::DownloadTimeout => "Download timeout",
-                ImageGenerationErrorKind::Cancelled => "Cancelled",
-                ImageGenerationErrorKind::Provider => "Provider error",
-            };
-            let mut blocks = vec![
-                RichBlock::SectionHeading {
-                    text: Value::String("IMAGE GENERATION FAILED".to_string()),
-                    level: 1,
-                },
-                RichBlock::Table {
-                    cells: vec![
-                        vec![
-                            RichBlockTableCell::text_only("Status", true, Some("left")),
-                            RichBlockTableCell::text_only("Detail", true, Some("left")),
-                        ],
-                        vec![
-                            RichBlockTableCell::text_only(status, false, Some("left")),
-                            RichBlockTableCell::text_only(
-                                &truncate_chars(&error.message, 240),
-                                false,
-                                Some("left"),
-                            ),
-                        ],
-                    ],
-                    has_header: true,
-                    is_bordered: false,
-                    is_striped: false,
-                    is_compact: true,
-                    caption: None,
-                },
-            ];
-            if matches!(
-                error.kind,
-                ImageGenerationErrorKind::CapabilityUnknown
-                    | ImageGenerationErrorKind::CapabilityUnsupported
-                    | ImageGenerationErrorKind::RouteDisabled
-                    | ImageGenerationErrorKind::ProviderNotFound
-                    | ImageGenerationErrorKind::ModelNotFound
-            ) {
-                blocks.push(RichBlock::BlockQuotation {
-                    blocks: vec![json!({
-                        "type":"paragraph",
-                        "text":"Configure specialist Image Generation route with: xiao addon"
-                    })],
-                });
-            }
-            let rich = InputRichMessage::new(blocks);
+            let rich = build_image_generation_error_rich(&error);
             let _ = timeline.finalize_answer(&rich).await;
             return;
         }
@@ -1693,6 +1725,113 @@ fn classify_telegram_document_media(
     }
 }
 
+async fn handle_stopped_generation(
+    ai_service: &AIChatService,
+    route_scope: &ChatRouteScope,
+    stopped: &MessageGenerationStopped,
+) {
+    if route_scope.allows_stop_chat(stopped.chat.id) {
+        let _ = ai_service
+            .cancel_generation(stopped.chat.id, stopped.draft_id)
+            .await;
+    }
+}
+
+async fn handle_callback_query(bot: &TelegramBotClient, cq: crate::bot::models::CallbackQuery) {
+    let cq_id = cq.id;
+    let _ = bot
+        .answer_callback_query(
+            &cq_id,
+            Some("Xiao is now a pure conversational assistant."),
+            false,
+        )
+        .await;
+    if let Some(msg) = cq.message {
+        let _ = bot.delete_message(msg.chat.id, msg.message_id).await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_text_or_image_chat(
+    bot: &TelegramBotClient,
+    ai_service: &AIChatService,
+    user_last_image_prompt: &UserLastImagePrompt,
+    chat_id: i64,
+    thread_id: i64,
+    user_id: i64,
+    text: &str,
+    reply_to_msg_id: Option<i64>,
+    image_bytes: Option<Vec<u8>>,
+    document_images: Option<Vec<Vec<u8>>>,
+    mime_type: Option<&str>,
+    doc_text: Option<&str>,
+    doc_name: Option<&str>,
+    video_bytes: Option<Vec<u8>>,
+    video_mime: Option<&str>,
+    video_duration: i32,
+) {
+    let is_explicit_image = command_matches(text, "/image");
+    let image_arg = if is_explicit_image {
+        command_args(text, "/image").unwrap_or("")
+    } else {
+        text
+    };
+
+    let auto_image_intent = if image_bytes.is_none() && doc_text.is_none() {
+        plan_image_generation_intent(image_arg).or_else(|| {
+            if is_explicit_image && !image_arg.trim().is_empty() {
+                Some(ImageGenerationIntent {
+                    image_prompt: image_arg.trim().to_string(),
+                    explanation_prompt: None,
+                })
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+
+    if let Some(intent) = auto_image_intent {
+        handle_image_generation(
+            bot,
+            ai_service,
+            user_last_image_prompt,
+            chat_id,
+            thread_id,
+            user_id,
+            &intent.image_prompt,
+            intent.explanation_prompt.as_deref(),
+            reply_to_msg_id,
+        )
+        .await;
+    } else {
+        handle_ai_chat(
+            bot,
+            ai_service,
+            chat_id,
+            thread_id,
+            user_id,
+            ChatInput {
+                prompt: text,
+                image_bytes,
+                document_images,
+                mime_type,
+                doc_text,
+                doc_name,
+                audio_bytes: None,
+                audio_mime: None,
+                video_bytes,
+                video_mime,
+                video_duration: Some(video_duration),
+                model_snapshot: None,
+                reply_to_message_id: reply_to_msg_id,
+            },
+        )
+        .await;
+    }
+}
+
 async fn handle_update(
     bot: &TelegramBotClient,
     ai_service: &AIChatService,
@@ -1701,11 +1840,7 @@ async fn handle_update(
     update: Update,
 ) {
     if let Some(stopped) = update.stopped_message_generation.as_ref() {
-        if route_scope.allows_stop_chat(stopped.chat.id) {
-            let _ = ai_service
-                .cancel_generation(stopped.chat.id, stopped.draft_id)
-                .await;
-        }
+        handle_stopped_generation(ai_service, route_scope, stopped).await;
         return;
     }
     if let Some(msg) = update.message {
@@ -1768,48 +1903,51 @@ async fn handle_update(
             RouteDecision::Ignore => return,
         };
 
-        let mut image_bytes = None;
-        let mut document_images = None;
-        let mut mime_type = None;
-        let mut doc_text = None;
-        let mut doc_name = None;
-        let mut audio_bytes = None;
-        let mut audio_mime = None;
-        let mut audio_duration = 0;
-        let mut video_bytes = None;
-        let mut video_mime = None;
-        let mut video_duration = 0;
+        let mut image_bytes: Option<Vec<u8>> = None;
+        let mut document_images: Option<Vec<Vec<u8>>> = None;
+        let mut mime_type: Option<String> = None;
+        let mut doc_text: Option<String> = None;
+        let mut doc_name: Option<String> = None;
+        let mut audio_bytes: Option<Vec<u8>> = None;
+        let mut audio_mime: Option<String> = None;
+        let mut audio_duration: i32 = 0;
+        let mut video_bytes: Option<Vec<u8>> = None;
+        let mut video_mime: Option<String> = None;
+        let mut video_duration: i32 = 0;
 
-        if let Some(v) = msg.voice {
+        if let Some(ref v) = msg.voice {
             audio_duration = v.duration;
-            audio_mime = v.mime_type;
+            audio_mime = v.mime_type.clone();
             if let Some((data, path)) = bot.get_file_bytes(&v.file_id).await {
                 audio_bytes = Some(data);
                 doc_name = path.split('/').next_back().map(str::to_string);
             }
-        } else if let Some(a) = msg.audio {
+        } else if let Some(ref a) = msg.audio {
             audio_duration = a.duration;
-            audio_mime = a.mime_type;
-            let audio_file_name = a.file_name;
+            audio_mime = a.mime_type.clone();
+            let audio_file_name = a.file_name.clone();
             if let Some((data, path)) = bot.get_file_bytes(&a.file_id).await {
                 audio_bytes = Some(data);
                 doc_name =
                     audio_file_name.or_else(|| path.split('/').next_back().map(str::to_string));
             }
-        } else if let Some(vid) = msg.video {
+        } else if let Some(ref vid) = msg.video {
             video_duration = vid.duration;
             if let Some((data, path)) = bot.get_file_bytes(&vid.file_id).await {
                 video_bytes = Some(data);
                 let ext = path.split('.').next_back().unwrap_or("mp4");
-                video_mime = vid.mime_type.or_else(|| Some(format!("video/{ext}")));
+                video_mime = vid
+                    .mime_type
+                    .clone()
+                    .or_else(|| Some(format!("video/{ext}")));
             }
-        } else if let Some(vn) = msg.video_note {
+        } else if let Some(ref vn) = msg.video_note {
             video_duration = vn.duration;
             if let Some((data, _)) = bot.get_file_bytes(&vn.file_id).await {
                 video_bytes = Some(data);
                 video_mime = Some("video/mp4".to_string());
             }
-        } else if let Some(photos) = msg.photo {
+        } else if let Some(ref photos) = msg.photo {
             if let Some(largest) = photos.last() {
                 if let Some((data, path)) = bot.get_file_bytes(&largest.file_id).await {
                     image_bytes = Some(data);
@@ -2044,78 +2182,27 @@ async fn handle_update(
             return;
         }
 
-        let is_explicit_image = command_matches(&text, "/image");
-        let image_arg = if is_explicit_image {
-            command_args(&text, "/image").unwrap_or("")
-        } else {
-            &text
-        };
-
-        let auto_image_intent = if image_bytes.is_none() && doc_text.is_none() {
-            plan_image_generation_intent(image_arg).or_else(|| {
-                if is_explicit_image && !image_arg.trim().is_empty() {
-                    Some(ImageGenerationIntent {
-                        image_prompt: image_arg.trim().to_string(),
-                        explanation_prompt: None,
-                    })
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        };
-
-        if let Some(intent) = auto_image_intent {
-            handle_image_generation(
-                bot,
-                ai_service,
-                user_last_image_prompt,
-                chat_id,
-                thread_id,
-                user_id,
-                &intent.image_prompt,
-                intent.explanation_prompt.as_deref(),
-                reply_to_msg_id,
-            )
-            .await;
-        } else {
-            handle_ai_chat(
-                bot,
-                ai_service,
-                chat_id,
-                thread_id,
-                user_id,
-                ChatInput {
-                    prompt: &text,
-                    image_bytes,
-                    document_images,
-                    mime_type: mime_type.as_deref(),
-                    doc_text: doc_text.as_deref(),
-                    doc_name: doc_name.as_deref(),
-                    audio_bytes: None,
-                    audio_mime: None,
-                    video_bytes,
-                    video_mime: video_mime.as_deref(),
-                    video_duration: Some(video_duration),
-                    model_snapshot: None,
-                    reply_to_message_id: reply_to_msg_id,
-                },
-            )
-            .await;
-        }
+        dispatch_text_or_image_chat(
+            bot,
+            ai_service,
+            user_last_image_prompt,
+            chat_id,
+            thread_id,
+            user_id,
+            &text,
+            reply_to_msg_id,
+            image_bytes,
+            document_images,
+            mime_type.as_deref(),
+            doc_text.as_deref(),
+            doc_name.as_deref(),
+            video_bytes,
+            video_mime.as_deref(),
+            video_duration,
+        )
+        .await;
     } else if let Some(cq) = update.callback_query {
-        let cq_id = cq.id;
-        let _ = bot
-            .answer_callback_query(
-                &cq_id,
-                Some("Xiao is now a pure conversational assistant."),
-                false,
-            )
-            .await;
-        if let Some(msg) = cq.message {
-            let _ = bot.delete_message(msg.chat.id, msg.message_id).await;
-        }
+        handle_callback_query(bot, cq).await;
     }
 }
 
@@ -2210,17 +2297,19 @@ async fn main() {
             return;
         }
         "start" => {
-            // Proceed to run bot server
+            run_daemon(ai_service).await;
         }
         unknown => {
             println!("\x1b[31m✖ Error: Perintah '{unknown}' tidak dikenal. Jalankan 'xiao help' untuk bantuan.\x1b[0m");
             std::process::exit(1);
         }
     }
+}
 
-    tracing_subscriber::fmt::init();
-
-    let Some(token) = get_or_prompt_token(&ai_service).await else {
+async fn bootstrap_bot(
+    ai_service: &AIChatService,
+) -> (TelegramBotClient, Arc<ChatRouteScope>, UserLastImagePrompt) {
+    let Some(token) = get_or_prompt_token(ai_service).await else {
         std::process::exit(1);
     };
 
@@ -2278,15 +2367,27 @@ async fn main() {
         info!("Bot commands berhasil dikosongkan (pure zero-slash gateway).");
     }
 
+    (bot, route_scope, user_last_image_prompt)
+}
+
+fn spawn_workers(
+    bot: TelegramBotClient,
+    ai_service: Arc<AIChatService>,
+    user_last_image_prompt: UserLastImagePrompt,
+    route_scope: Arc<ChatRouteScope>,
+) -> (
+    tokio::sync::mpsc::Sender<Update>,
+    tokio::task::JoinHandle<()>,
+) {
     let (update_tx, mut update_rx) = tokio::sync::mpsc::channel::<Update>(64);
     let active_scopes: ActiveScopes = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let global_concurrency = Arc::new(tokio::sync::Semaphore::new(8));
 
     let worker_ctx = WorkerContext {
-        bot: bot.clone(),
-        ai_service: Arc::clone(&ai_service),
-        user_last_image_prompt: Arc::clone(&user_last_image_prompt),
-        route_scope: Arc::clone(&route_scope),
+        bot,
+        ai_service,
+        user_last_image_prompt,
+        route_scope,
     };
     let worker_active_scopes = Arc::clone(&active_scopes);
     let worker_global_concurrency = Arc::clone(&global_concurrency);
@@ -2349,6 +2450,16 @@ async fn main() {
         }
     });
 
+    (update_tx, update_worker)
+}
+
+async fn replay_durable_inbox(
+    bot: &TelegramBotClient,
+    ai_service: &Arc<AIChatService>,
+    user_last_image_prompt: &UserLastImagePrompt,
+    route_scope: &Arc<ChatRouteScope>,
+    update_tx: &tokio::sync::mpsc::Sender<Update>,
+) {
     let interrupted = ai::storage::recover_telegram_processing_async().await;
     if interrupted > 0 {
         warn!(
@@ -2382,10 +2493,10 @@ async fn main() {
                     if update.stopped_message_generation.is_some() {
                         // Native Stop bypasses the queue for immediate cancellation.
                         process_durable_update(
-                            &bot,
-                            &ai_service,
-                            &user_last_image_prompt,
-                            &route_scope,
+                            bot,
+                            ai_service,
+                            user_last_image_prompt,
+                            route_scope,
                             update,
                         )
                         .await;
@@ -2411,7 +2522,15 @@ async fn main() {
             }
         }
     }
+}
 
+async fn poll_loop(
+    bot: &TelegramBotClient,
+    ai_service: &Arc<AIChatService>,
+    user_last_image_prompt: &UserLastImagePrompt,
+    route_scope: &Arc<ChatRouteScope>,
+    update_tx: &tokio::sync::mpsc::Sender<Update>,
+) {
     let mut offset = ai::storage::load_telegram_offset_async().await;
     info!("Memulai polling pesan dengan durable control/generation queues...");
 
@@ -2481,10 +2600,10 @@ async fn main() {
                                     // Native Stop bypasses the queue so cancellation cannot be
                                     // blocked by queued generation work.
                                     process_durable_update(
-                                        &bot,
-                                        &ai_service,
-                                        &user_last_image_prompt,
-                                        &route_scope,
+                                        bot,
+                                        ai_service,
+                                        user_last_image_prompt,
+                                        route_scope,
                                         update,
                                     )
                                     .await;
@@ -2507,6 +2626,37 @@ async fn main() {
             }
         }
     }
+}
+
+async fn run_daemon(ai_service: Arc<AIChatService>) {
+    tracing_subscriber::fmt::init();
+
+    let (bot, route_scope, user_last_image_prompt) = bootstrap_bot(&ai_service).await;
+
+    let (update_tx, update_worker) = spawn_workers(
+        bot.clone(),
+        Arc::clone(&ai_service),
+        Arc::clone(&user_last_image_prompt),
+        Arc::clone(&route_scope),
+    );
+
+    replay_durable_inbox(
+        &bot,
+        &ai_service,
+        &user_last_image_prompt,
+        &route_scope,
+        &update_tx,
+    )
+    .await;
+
+    poll_loop(
+        &bot,
+        &ai_service,
+        &user_last_image_prompt,
+        &route_scope,
+        &update_tx,
+    )
+    .await;
 
     ai_service.cancel_all_generations().await;
     drop(update_tx);
