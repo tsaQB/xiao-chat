@@ -98,16 +98,88 @@ pub fn is_rtl_text(text: &str) -> bool {
     false
 }
 
+/// Converts ASCII digits '0'..'9' into Eastern Arabic-Indic digits '٠'..'٩'.
+pub fn to_eastern_arabic_digits(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| match c {
+            '0' => '٠',
+            '1' => '١',
+            '2' => '٢',
+            '3' => '٣',
+            '4' => '٤',
+            '5' => '٥',
+            '6' => '٦',
+            '7' => '٧',
+            '8' => '٨',
+            '9' => '٩',
+            other => other,
+        })
+        .collect()
+}
+
+/// Converts Eastern Arabic-Indic digits '٠'..'٩' into standard ASCII digits '0'..'9'.
+pub fn from_eastern_arabic_digits(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| match c {
+            '٠' => '0',
+            '١' => '1',
+            '٢' => '2',
+            '٣' => '3',
+            '٤' => '4',
+            '٥' => '5',
+            '٦' => '6',
+            '٧' => '7',
+            '٨' => '8',
+            '٩' => '9',
+            other => other,
+        })
+        .collect()
+}
+
+/// Checks if a string begins with an RTL character (ignoring whitespace and leading punctuation).
+pub fn is_arabic_or_rtl_leading(text: &str) -> bool {
+    text.chars()
+        .find(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+        .is_some_and(is_rtl_char)
+}
+
+/// Determines whether a table's headers are predominantly written in RTL script.
+pub fn is_table_predominantly_rtl(headers: &[&str]) -> bool {
+    if headers.is_empty() {
+        return false;
+    }
+    let rtl_headers = headers
+        .iter()
+        .filter(|h| is_rtl_text(h) || is_arabic_or_rtl_leading(h))
+        .count();
+    rtl_headers * 2 >= headers.len()
+}
+
 /// Checks if any RichBlock in the list contains RTL characters across all block variants.
+#[allow(dead_code)]
 pub fn blocks_contain_rtl(blocks: &[RichBlock]) -> bool {
     blocks.iter().any(|b| has_rtl_characters(&b.extract_text()))
 }
 
-/// Applies RTL direction to an InputRichMessage if either the provided text
-/// or any of its contained rich blocks contain RTL content.
+/// Applies RTL direction to an InputRichMessage ONLY if the content as a whole
+/// is predominantly RTL (>50% Arabic/Hebrew or leading RTL).
+///
+/// Mixed messages (e.g. Indonesian or English explaining Arabic grammar) remain LTR (None)
+/// so that Telegram's native Unicode BiDi engine positions Arabic quotes naturally
+/// without right-aligning Indonesian headers, lists, or tables.
 pub fn apply_rtl_direction(message: &mut InputRichMessage, text: &str) {
-    if message.is_rtl.is_none() && (is_rtl_text(text) || blocks_contain_rtl(&message.blocks)) {
-        message.is_rtl = Some(true);
+    if message.is_rtl.is_none() {
+        let dominant_rtl = if !text.trim().is_empty() {
+            is_rtl_text(text)
+        } else {
+            let combined: String = message.blocks.iter().map(|b| b.extract_text()).collect();
+            is_rtl_text(&combined)
+        };
+        if dominant_rtl {
+            message.is_rtl = Some(true);
+        }
     }
 }
 
@@ -182,5 +254,31 @@ mod tests {
             text: Value::String("Pure English".to_string()),
         };
         assert!(!blocks_contain_rtl(&[latin_block]));
+    }
+
+    #[test]
+    fn mixed_indonesian_lesson_with_arabic_example_keeps_is_rtl_none() {
+        let mut msg = InputRichMessage {
+            blocks: vec![
+                RichBlock::SectionHeading {
+                    text: Value::String("4. Contoh Analisis Kalimat Sederhana".to_string()),
+                    level: 3,
+                },
+                RichBlock::BlockQuotation {
+                    blocks: vec![serde_json::json!({
+                        "type": "paragraph",
+                        "text": "كَتَبَ التِّلْمِيْذُ الدَّرْسَ"
+                    })],
+                },
+                RichBlock::Paragraph {
+                    text: Value::String("Artinya: Murid itu menulis pelajaran.".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
+        let text =
+            "Ilmu Nahwu adalah salah satu cabang tata bahasa Arab. Perhatikan kalimat: كَتَبَ التِّلْمِيذُ";
+        apply_rtl_direction(&mut msg, text);
+        assert_eq!(msg.is_rtl, None);
     }
 }

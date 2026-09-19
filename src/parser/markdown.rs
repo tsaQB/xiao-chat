@@ -1444,6 +1444,12 @@ fn resolve_table_cell_align<'a>(
     }
 }
 
+fn is_ascii_numeric_cell(c: &str) -> bool {
+    c.chars()
+        .all(|ch| ch.is_ascii_digit() || ch.is_whitespace() || ch == '.' || ch == ',')
+        && c.chars().any(|ch| ch.is_ascii_digit())
+}
+
 /// Splits a table row into cell strings, respecting escaping, code spans, and math blocks
 /// so that pipes `|` inside `$ ... $`, `$$ ... $$`, `\( ... \)`, `\[ ... \]`, or ` `...` `
 /// (e.g. absolute value `|x|`, norm `|v|_p`, or set builder `{x | x > 0}`) are preserved
@@ -1575,6 +1581,7 @@ fn split_table_row_cells(row_str: &str, is_box_table: bool) -> Vec<String> {
 fn try_parse_table(
     lines: &[String],
     i: usize,
+    is_message_rtl: bool,
 ) -> (Option<Vec<Vec<RichBlockTableCell>>>, bool, usize) {
     let n = lines.len();
     let line = lines[i].trim();
@@ -1624,16 +1631,19 @@ fn try_parse_table(
                 idx_line += 1;
             }
 
+            let headers_str: Vec<&str> = header_raw.iter().map(|s| s.as_str()).collect();
+            let table_is_rtl = rtl::is_table_predominantly_rtl(&headers_str);
+
             let col_is_rtl = {
                 let mut all_rows: Vec<Vec<&str>> = Vec::with_capacity(raw_rows.len() + 1);
-                all_rows.push(header_raw.iter().map(|s| s.as_str()).collect());
+                all_rows.push(headers_str.clone());
                 for r in &raw_rows {
                     all_rows.push(r.iter().map(|s| s.as_str()).collect());
                 }
                 compute_column_rtl_flags(&all_rows)
             };
 
-            let header_row: Vec<RichBlockTableCell> = header_raw
+            let mut header_row: Vec<RichBlockTableCell> = header_raw
                 .into_iter()
                 .enumerate()
                 .map(|(idx, h)| {
@@ -1644,7 +1654,7 @@ fn try_parse_table(
                 })
                 .collect();
 
-            let mut table_cells = vec![header_row];
+            let mut data_rows: Vec<Vec<RichBlockTableCell>> = Vec::with_capacity(raw_rows.len());
             for row_raw in raw_rows {
                 let data_row: Vec<RichBlockTableCell> = row_raw
                     .into_iter()
@@ -1653,11 +1663,28 @@ fn try_parse_table(
                         let explicit = explicit_aligns.get(idx).copied().flatten();
                         let is_rtl = col_is_rtl.get(idx).copied().unwrap_or(false);
                         let align = resolve_table_cell_align(explicit, is_rtl, &c);
-                        RichBlockTableCell::new(parse_inline(&c), false, Some(align))
+                        let is_numeric = is_ascii_numeric_cell(&c);
+                        let formatted_cell = if (table_is_rtl || is_rtl) && is_numeric {
+                            rtl::to_eastern_arabic_digits(&c)
+                        } else {
+                            c
+                        };
+                        RichBlockTableCell::new(parse_inline(&formatted_cell), false, Some(align))
                     })
                     .collect();
-                table_cells.push(data_row);
+                data_rows.push(data_row);
             }
+
+            if table_is_rtl && !is_message_rtl {
+                header_row.reverse();
+                for r in &mut data_rows {
+                    r.reverse();
+                }
+            }
+
+            let mut table_cells = Vec::with_capacity(data_rows.len() + 1);
+            table_cells.push(header_row);
+            table_cells.extend(data_rows);
 
             return (Some(table_cells), true, idx_line);
         }
@@ -1717,6 +1744,13 @@ fn try_parse_table(
             }
 
             if !raw_rows.is_empty() {
+                let headers_str: Vec<&str> = raw_rows[0].iter().map(|s| s.as_str()).collect();
+                let table_is_rtl = if has_header {
+                    rtl::is_table_predominantly_rtl(&headers_str)
+                } else {
+                    false
+                };
+
                 let col_is_rtl = {
                     let mut all_rows: Vec<Vec<&str>> = Vec::with_capacity(raw_rows.len());
                     for r in &raw_rows {
@@ -1728,15 +1762,24 @@ fn try_parse_table(
 
                 for (r_idx, row_cols) in raw_rows.into_iter().enumerate() {
                     let is_hdr = r_idx == 0 && has_header;
-                    let row: Vec<RichBlockTableCell> = row_cols
+                    let mut row: Vec<RichBlockTableCell> = row_cols
                         .into_iter()
                         .enumerate()
                         .map(|(idx, c)| {
                             let is_rtl = col_is_rtl.get(idx).copied().unwrap_or(false);
                             let align = resolve_table_cell_align(None, is_rtl, &c);
-                            RichBlockTableCell::new(parse_inline(&c), is_hdr, Some(align))
+                            let is_numeric = is_ascii_numeric_cell(&c);
+                            let formatted_c = if (table_is_rtl || is_rtl) && is_numeric {
+                                rtl::to_eastern_arabic_digits(&c)
+                            } else {
+                                c
+                            };
+                            RichBlockTableCell::new(parse_inline(&formatted_c), is_hdr, Some(align))
                         })
                         .collect();
+                    if table_is_rtl && !is_message_rtl {
+                        row.reverse();
+                    }
                     table_cells.push(row);
                 }
 
@@ -1786,20 +1829,31 @@ fn try_parse_table(
             }
 
             if raw_rows.len() >= 2 {
+                let table_is_rtl = rtl::is_table_predominantly_rtl(&raw_rows[0]);
+
                 let col_is_rtl = compute_column_rtl_flags(&raw_rows);
                 let mut table_cells = Vec::with_capacity(raw_rows.len());
 
                 for (r_idx, row_cols) in raw_rows.into_iter().enumerate() {
                     let is_hdr = r_idx == 0;
-                    let row: Vec<RichBlockTableCell> = row_cols
+                    let mut row: Vec<RichBlockTableCell> = row_cols
                         .into_iter()
                         .enumerate()
                         .map(|(idx, c)| {
                             let is_rtl = col_is_rtl.get(idx).copied().unwrap_or(false);
                             let align = resolve_table_cell_align(None, is_rtl, c);
-                            RichBlockTableCell::new(parse_inline(c), is_hdr, Some(align))
+                            let is_numeric = is_ascii_numeric_cell(c);
+                            let formatted_c = if (table_is_rtl || is_rtl) && is_numeric {
+                                rtl::to_eastern_arabic_digits(c)
+                            } else {
+                                c.to_string()
+                            };
+                            RichBlockTableCell::new(parse_inline(&formatted_c), is_hdr, Some(align))
                         })
                         .collect();
+                    if table_is_rtl && !is_message_rtl {
+                        row.reverse();
+                    }
                     table_cells.push(row);
                 }
 
@@ -2050,7 +2104,7 @@ static RE_BLOCK_DIVIDER: LazyLock<Regex> = LazyLock::new(|| {
 static RE_BLOCK_BULLET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[-*•]\s+").expect("valid static regex"));
 static RE_BLOCK_NUMBERED: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\d+[\.)]\s+").expect("valid static regex"));
+    LazyLock::new(|| Regex::new(r"^(\d+|[\u0660-\u0669]+)[\.)]\s+").expect("valid static regex"));
 
 pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
     if text.trim().is_empty() {
@@ -2062,6 +2116,7 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
         return Vec::new();
     }
 
+    let is_message_rtl = rtl::is_rtl_text(&sanitized);
     let isolated = isolate_embedded_media_blocks(&sanitized);
     let lines: Vec<String> = isolated
         .replace("\r\n", "\n")
@@ -2446,7 +2501,7 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
         {
             let cap = inner.trim();
             if !cap.is_empty() && i + 1 < n {
-                let (t_cells, has_hdr, next_i) = try_parse_table(&lines, i + 1);
+                let (t_cells, has_hdr, next_i) = try_parse_table(&lines, i + 1, is_message_rtl);
                 if let Some(cells) = t_cells {
                     blocks.push(RichBlock::Table {
                         cells,
@@ -2462,7 +2517,7 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
             }
         }
 
-        let (t_cells, has_hdr, next_i) = try_parse_table(&lines, i);
+        let (t_cells, has_hdr, next_i) = try_parse_table(&lines, i, is_message_rtl);
         if let Some(cells) = t_cells {
             let mut caption: Option<String> = None;
             let mut final_next_i = next_i;
@@ -2507,9 +2562,14 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 }
                 if is_ordered && RE_BLOCK_NUMBERED.is_match(curr) {
                     let item_text = RE_BLOCK_NUMBERED.replace(curr, "").trim().to_string();
-                    let value = curr
-                        .split_once(['.', ')'])
-                        .and_then(|(prefix, _)| prefix.parse::<i64>().ok());
+                    let value = curr.split_once(['.', ')']).and_then(|(prefix, _)| {
+                        let prefix_clean = prefix.trim();
+                        let ascii = rtl::from_eastern_arabic_digits(prefix_clean);
+                        ascii
+                            .parse::<i64>()
+                            .ok()
+                            .or_else(|| prefix_clean.parse::<i64>().ok())
+                    });
                     list_items.push(RichBlockListItem::ordered(
                         vec![json!({
                             "type": "paragraph",
@@ -2556,7 +2616,7 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 || RE_BLOCK_BULLET.is_match(s_curr)
                 || RE_BLOCK_NUMBERED.is_match(s_curr)
                 || RE_BLOCK_DIVIDER.is_match(s_curr)
-                || try_parse_table(&lines, i).0.is_some()
+                || try_parse_table(&lines, i, is_message_rtl).0.is_some()
             {
                 break;
             }
@@ -3265,5 +3325,142 @@ Contoh inline: $44\text{cm}$ dan $7,5\text{hari}$."#;
             !json_str.contains(r#""plain_text""#),
             "No plain_text discriminator should ever appear in rich message entities"
         );
+    }
+
+    #[test]
+    fn indonesian_nahwu_lesson_preserves_ltr_canvas_and_correct_table_order() {
+        let md = r#"### 4. Contoh Analisis Kalimat Sederhana
+
+Mari kita bedah kalimat ini:
+> **كَتَبَ التِّلْمِيْذُ الدَّرْسَ** (*Kataba at-tilmiidzu ad-darsa*)
+Artinya: *Murid itu telah menulis pelajaran.*
+
+1. **كَتَبَ** (*Kataba*): Fi'il Madhi (Kata kerja lampau).
+2. **التِّلْمِيْذُ** (*At-tilmiidzu*): Fa'il (Pelaku), wajib berstatus *Rofa'*.
+3. **الدَّرْسَ** (*Ad-darsa*): Maf'ul Bih (Objek), wajib berstatus *Nashab*.
+
+| Nama I'rab | Tanda Asli (Harakat) | Biasanya Dipakai Untuk | Contoh |
+| :--- | :---: | :--- | ---: |
+| **Rofa'** | Dhammah (ـُ) | Subjek / Pelaku (*Fa'il*) | جَاءَ رَجُلٌ |
+| **Nashab** | Fathah (ـَ) | Objek penderita (*Maf'ul Bih*) | رَأَيْتُ رَجُلاً |
+
+### Ringkasan untuk Pemula:
+1. Kenali dulu apakah suatu kata itu Benda (Isim), Kerja (Fi'il), atau Huruf.
+2. Perhatikan awal kalimatnya: dimulai Isim atau Fi'il.
+"#;
+        let msg = build_full_rich_message(md, None);
+        // The message is predominantly Indonesian, so is_rtl MUST be None
+        assert_eq!(
+            msg.is_rtl, None,
+            "Mixed Indonesian lesson must not trigger global is_rtl"
+        );
+
+        // Verify the table block
+        let table_block = msg
+            .blocks
+            .iter()
+            .find(|b| matches!(b, RichBlock::Table { .. }))
+            .expect("must contain a table block");
+
+        let RichBlock::Table { cells, .. } = table_block else {
+            panic!("expected table");
+        };
+
+        // Table column 0 must remain "Nama I'rab" (LTR column order preserved)
+        let col0_header_text = &cells[0][0].text;
+        assert!(
+            serde_json::to_string(col0_header_text)
+                .expect("serialize")
+                .contains("Nama I'rab"),
+            "Column 0 must remain 'Nama I'rab' on the left"
+        );
+
+        // Column 3 must be "Contoh" with right alignment
+        let col3_header_text = &cells[0][3].text;
+        assert!(
+            serde_json::to_string(col3_header_text)
+                .expect("serialize")
+                .contains("Contoh"),
+            "Column 3 must be 'Contoh'"
+        );
+        assert_eq!(cells[0][3].align.as_deref(), Some("right"));
+        assert_eq!(cells[1][3].align.as_deref(), Some("right"));
+
+        // Verify lists
+        let list_blocks: Vec<_> = msg
+            .blocks
+            .iter()
+            .filter(|b| matches!(b, RichBlock::List { .. }))
+            .collect();
+        assert_eq!(list_blocks.len(), 2, "Must contain 2 lists");
+    }
+
+    #[test]
+    fn arabic_table_inside_ltr_message_is_reversed_with_eastern_arabic_digits() {
+        let md = r#"Berikut adalah daftar santri teladan:
+
+| الرقم | الاسم |
+| :---: | :---: |
+| 1 | أحمد |
+| 2 | فاطمة |
+
+Semoga bermanfaat untuk kita semua.
+"#;
+        let msg = build_full_rich_message(md, None);
+        // Surrounding text is Indonesian -> is_rtl is None
+        assert_eq!(msg.is_rtl, None);
+
+        let table_block = msg
+            .blocks
+            .iter()
+            .find(|b| matches!(b, RichBlock::Table { .. }))
+            .expect("must contain a table block");
+
+        let RichBlock::Table { cells, .. } = table_block else {
+            panic!("expected table");
+        };
+
+        // Because header is pure Arabic (| الرقم | الاسم |) in an LTR message,
+        // columns are reversed so that Column 0 (الرقم) appears visually on the right
+        let col0_text = serde_json::to_string(&cells[0][0].text).expect("serialize");
+        let col1_text = serde_json::to_string(&cells[0][1].text).expect("serialize");
+        assert!(
+            col0_text.contains("الاسم"),
+            "Reversed: 'الاسم' should be at index 0"
+        );
+        assert!(
+            col1_text.contains("الرقم"),
+            "Reversed: 'الرقم' should be at index 1 (right edge)"
+        );
+
+        // Digits in the number column are converted to Eastern Arabic numerals
+        let row1_num_cell = serde_json::to_string(&cells[1][1].text).expect("serialize");
+        assert!(
+            row1_num_cell.contains('١'),
+            "Row 1 number should be Eastern Arabic '١'"
+        );
+
+        let row2_num_cell = serde_json::to_string(&cells[2][1].text).expect("serialize");
+        assert!(
+            row2_num_cell.contains('٢'),
+            "Row 2 number should be Eastern Arabic '٢'"
+        );
+    }
+
+    #[test]
+    fn eastern_arabic_ordered_list_parses_value_correctly() {
+        let md = r#"١. كتب الطالب الدرس
+٢. قرأ زيد الكتاب
+٣. جلس المعلم في الفصل
+"#;
+        let blocks = parse_markdown_to_rich_blocks(md);
+        assert_eq!(blocks.len(), 1);
+        let RichBlock::List { items } = &blocks[0] else {
+            panic!("expected list");
+        };
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].value, Some(1));
+        assert_eq!(items[1].value, Some(2));
+        assert_eq!(items[2].value, Some(3));
     }
 }
