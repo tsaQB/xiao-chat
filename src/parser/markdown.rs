@@ -42,6 +42,21 @@ static RE_HTML_LEAKED_TAGS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)</?(?:b|strong|i|em|s|strike|del|u|ins|code|pre|blockquote|a|tg-spoiler|span|p|div|mark|kbd)(?:\s+[^>]*)?>").expect("valid static regex")
 });
 
+fn try_format_standalone_logic_symbol(inner: &str) -> Option<Value> {
+    let clean_cmd = inner.trim_end_matches(r"\ ").trim();
+    match clean_cmd {
+        r"\therefore" => Some(json!({
+            "type": "plain_text",
+            "text": "∴"
+        })),
+        r"\because" => Some(json!({
+            "type": "plain_text",
+            "text": "∵"
+        })),
+        _ => None,
+    }
+}
+
 pub fn parse_inline(input_str: &str) -> Value {
     if input_str.is_empty() {
         return Value::String(String::new());
@@ -270,6 +285,11 @@ pub fn parse_inline(input_str: &str) -> Value {
                 if end > 0 && !rest[1..].starts_with('$') {
                     let inner = rest[1..1 + end].trim();
                     if !inner.is_empty() {
+                        if let Some(sym) = try_format_standalone_logic_symbol(inner) {
+                            out.push(sym);
+                            rest = &rest[1 + end + 1..];
+                            continue;
+                        }
                         let sanitized = sanitize_latex_for_telegram(inner);
                         out.push(json!({
                             "type": "mathematical_expression",
@@ -287,6 +307,11 @@ pub fn parse_inline(input_str: &str) -> Value {
             if let Some(end) = rest[2..].find(r"\)") {
                 let inner = rest[2..2 + end].trim();
                 if !inner.is_empty() {
+                    if let Some(sym) = try_format_standalone_logic_symbol(inner) {
+                        out.push(sym);
+                        rest = &rest[2 + end + 2..];
+                        continue;
+                    }
                     let sanitized = sanitize_latex_for_telegram(inner);
                     out.push(json!({
                         "type": "mathematical_expression",
@@ -1425,6 +1450,134 @@ fn resolve_table_cell_align<'a>(
     }
 }
 
+/// Splits a table row into cell strings, respecting escaping, code spans, and math blocks
+/// so that pipes `|` inside `$ ... $`, `$$ ... $$`, `\( ... \)`, `\[ ... \]`, or ` `...` `
+/// (e.g. absolute value `|x|`, norm `|v|_p`, or set builder `{x | x > 0}`) are preserved
+/// inside the cell content rather than splitting the table columns prematurely.
+fn split_table_row_cells(row_str: &str, is_box_table: bool) -> Vec<String> {
+    let trimmed = row_str.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let is_delim = |c: char| -> bool {
+        if is_box_table {
+            "│|║┃".contains(c)
+        } else {
+            c == '|'
+        }
+    };
+
+    let chars: Vec<char> = trimmed.chars().collect();
+    let n = chars.len();
+
+    // Determine if there is a leading outer border delimiter
+    let start_idx = if n > 0 && is_delim(chars[0]) { 1 } else { 0 };
+
+    // Determine if there is a trailing outer border delimiter (not escaped)
+    let end_idx = if n > start_idx && is_delim(chars[n - 1]) {
+        if n >= 2 && chars[n - 2] == '\\' {
+            n
+        } else {
+            n - 1
+        }
+    } else {
+        n
+    };
+
+    let mut cells: Vec<String> = Vec::new();
+    let mut current_cell = String::new();
+
+    let mut in_code = false;
+    let mut in_inline_math = false;
+    let mut in_display_math = false;
+    let mut in_paren_math = false;
+    let mut in_bracket_math = false;
+
+    let mut i = start_idx;
+    while i < end_idx {
+        let ch = chars[i];
+
+        // Check for escaping
+        if ch == '\\' {
+            if i + 1 < end_idx {
+                let next = chars[i + 1];
+                if next == '|' {
+                    // Escaped pipe \| -> keep pipe in cell!
+                    current_cell.push('|');
+                    i += 2;
+                    continue;
+                } else if next == '(' && !in_code {
+                    in_paren_math = true;
+                    current_cell.push(ch);
+                    current_cell.push(next);
+                    i += 2;
+                    continue;
+                } else if next == ')' && !in_code {
+                    in_paren_math = false;
+                    current_cell.push(ch);
+                    current_cell.push(next);
+                    i += 2;
+                    continue;
+                } else if next == '[' && !in_code {
+                    in_bracket_math = true;
+                    current_cell.push(ch);
+                    current_cell.push(next);
+                    i += 2;
+                    continue;
+                } else if next == ']' && !in_code {
+                    in_bracket_math = false;
+                    current_cell.push(ch);
+                    current_cell.push(next);
+                    i += 2;
+                    continue;
+                }
+            }
+            current_cell.push(ch);
+            i += 1;
+            continue;
+        }
+
+        // Code span
+        if ch == '`' {
+            in_code = !in_code;
+            current_cell.push(ch);
+            i += 1;
+            continue;
+        }
+
+        // Math handling when not in code
+        if !in_code && ch == '$' {
+            if i + 1 < end_idx && chars[i + 1] == '$' {
+                in_display_math = !in_display_math;
+                current_cell.push('$');
+                current_cell.push('$');
+                i += 2;
+                continue;
+            } else if !in_display_math {
+                in_inline_math = !in_inline_math;
+                current_cell.push('$');
+                i += 1;
+                continue;
+            }
+        }
+
+        let in_math = in_inline_math || in_display_math || in_paren_math || in_bracket_math;
+
+        if is_delim(ch) && !in_code && !in_math {
+            cells.push(current_cell.trim().to_string());
+            current_cell.clear();
+        } else {
+            current_cell.push(ch);
+        }
+
+        i += 1;
+    }
+
+    cells.push(current_cell.trim().to_string());
+    cells
+}
+
 fn try_parse_table(
     lines: &[String],
     i: usize,
@@ -1435,11 +1588,7 @@ fn try_parse_table(
     // 1. Standard Markdown Table (| Col 1 | Col 2 |\n| --- | --- |)
     if line.contains('|') && i + 1 < n {
         let next_line = lines[i + 1].trim();
-        let sep_cells: Vec<&str> = next_line
-            .trim_matches('|')
-            .split('|')
-            .map(|c| c.trim())
-            .collect();
+        let sep_cells = split_table_row_cells(next_line, false);
 
         let is_sep = !sep_cells.is_empty()
             && sep_cells.iter().any(|c| {
@@ -1467,14 +1616,7 @@ fn try_parse_table(
                 }
             }
 
-            let unescaped_marker = "\u{E000}";
-            let safe_line = line.replace(r"\|", unescaped_marker);
-            let header_raw: Vec<String> = safe_line
-                .trim_matches('|')
-                .split('|')
-                .map(|c| c.trim().replace(unescaped_marker, "|"))
-                .collect();
-
+            let header_raw = split_table_row_cells(line, false);
             let mut raw_rows: Vec<Vec<String>> = Vec::new();
             let mut idx_line = i + 2;
 
@@ -1483,13 +1625,7 @@ fn try_parse_table(
                 if row_str.is_empty() || !row_str.contains('|') {
                     break;
                 }
-                let safe_row = row_str.replace(r"\|", unescaped_marker);
-                let row_raw: Vec<String> = safe_row
-                    .trim_matches('|')
-                    .split('|')
-                    .map(|c| c.trim().replace(unescaped_marker, "|"))
-                    .collect();
-
+                let row_raw = split_table_row_cells(row_str, false);
                 raw_rows.push(row_raw);
                 idx_line += 1;
             }
@@ -1578,14 +1714,7 @@ fn try_parse_table(
                     }
                     continue;
                 }
-                let mut row_content = *l;
-                row_content = row_content.trim_start_matches(|c| "│|║┃".contains(c));
-                row_content = row_content.trim_end_matches(|c| "│|║┃".contains(c));
-
-                let cols: Vec<&str> = row_content
-                    .split(|c| "│|║┃".contains(c))
-                    .map(|col| col.trim())
-                    .collect();
+                let cols: Vec<String> = split_table_row_cells(l, true);
 
                 if !cols.is_empty() && cols.iter().any(|c| !c.is_empty()) {
                     raw_rows.push(cols);
@@ -1594,7 +1723,13 @@ fn try_parse_table(
             }
 
             if !raw_rows.is_empty() {
-                let col_is_rtl = compute_column_rtl_flags(&raw_rows);
+                let col_is_rtl = {
+                    let mut all_rows: Vec<Vec<&str>> = Vec::with_capacity(raw_rows.len());
+                    for r in &raw_rows {
+                        all_rows.push(r.iter().map(|s| s.as_str()).collect());
+                    }
+                    compute_column_rtl_flags(&all_rows)
+                };
                 let mut table_cells = Vec::with_capacity(raw_rows.len());
 
                 for (r_idx, row_cols) in raw_rows.into_iter().enumerate() {
@@ -1604,8 +1739,8 @@ fn try_parse_table(
                         .enumerate()
                         .map(|(idx, c)| {
                             let is_rtl = col_is_rtl.get(idx).copied().unwrap_or(false);
-                            let align = resolve_table_cell_align(None, is_rtl, c);
-                            RichBlockTableCell::new(parse_inline(c), is_hdr, Some(align))
+                            let align = resolve_table_cell_align(None, is_rtl, &c);
+                            RichBlockTableCell::new(parse_inline(&c), is_hdr, Some(align))
                         })
                         .collect();
                     table_cells.push(row);
@@ -3043,5 +3178,60 @@ Contoh inline: $44\text{cm}$ dan $7,5\text{hari}$."#;
         // Col 1 is pure Latin "Score" / "98", so it remains "left"
         assert_eq!(cells[0][1].align.as_deref(), Some("left"));
         assert_eq!(cells[1][1].align.as_deref(), Some("left"));
+    }
+
+    #[test]
+    fn test_split_table_row_cells_preserves_math_pipes() {
+        let row = r"| $|v|_p$ | Norma- $p$ | $\left( \sum |v_i|^p \right)^{1/p}$ |";
+        let cells = split_table_row_cells(row, false);
+        assert_eq!(cells.len(), 3);
+        assert_eq!(cells[0], r"$|v|_p$");
+        assert_eq!(cells[1], r"Norma- $p$");
+        assert_eq!(cells[2], r"$\left( \sum |v_i|^p \right)^{1/p}$");
+    }
+
+    #[test]
+    fn test_norm_table_with_math_pipes_parses_three_columns() {
+        let md = "| Simbol | Nama | Definisi |\n| :---: | :--- | :--- |\n| $|v|_p$ | Norma- $p$ | $\\left( \\sum |v_i|^p \\right)^{1/p}$ |\n";
+        let blocks = parse_markdown_to_rich_blocks(md);
+        assert_eq!(blocks.len(), 1);
+        let Some(RichBlock::Table { cells, .. }) = blocks.first() else {
+            panic!("expected table block");
+        };
+        assert_eq!(cells.len(), 2); // 1 header row, 1 data row
+        assert_eq!(cells[0].len(), 3); // 3 header columns
+        assert_eq!(cells[1].len(), 3); // 3 data columns!
+
+        // Check third cell of second row contains single mathematical_expression
+        let json = serde_json::to_string(&cells[1][2]).expect("cell serializes");
+        assert!(json.contains("mathematical_expression"));
+        assert!(json.contains(r"\\left( \\sum |v_i|^p \\right)^{1/p}"));
+    }
+
+    #[test]
+    fn test_standalone_therefore_and_because_render_as_unicode() {
+        let md = "| Simbol | Arti / Nama | Penjelasan |\n| :---: | :--- | :--- |\n| $\\therefore$ | Oleh karena itu | Kesimpulan logis |\n| $\\because$ | Karena | Alasan/Premis |\n| $\\implies$ | Implikasi | Jika... maka... |\n| $\\impliedby$ | Implikasi balik | ...jika... |\n";
+        let blocks = parse_markdown_to_rich_blocks(md);
+        assert_eq!(blocks.len(), 1);
+        let Some(RichBlock::Table { cells, .. }) = blocks.first() else {
+            panic!("expected table block");
+        };
+        assert_eq!(cells.len(), 5);
+
+        // Row 1: \therefore -> text "∴"
+        let cell_therefore = serde_json::to_string(&cells[1][0]).expect("cell serializes");
+        assert!(cell_therefore.contains(r#""text":"∴""#));
+
+        // Row 2: \because -> text "∵"
+        let cell_because = serde_json::to_string(&cells[2][0]).expect("cell serializes");
+        assert!(cell_because.contains(r#""text":"∵""#));
+
+        // Row 3: \implies -> mathematical_expression \implies
+        let cell_implies = serde_json::to_string(&cells[3][0]).expect("cell serializes");
+        assert!(cell_implies.contains(r#""expression":"\\implies""#));
+
+        // Row 4: \impliedby -> normalized to \Longleftarrow for SwiftMath
+        let cell_impliedby = serde_json::to_string(&cells[4][0]).expect("cell serializes");
+        assert!(cell_impliedby.contains(r#""expression":"\\Longleftarrow""#));
     }
 }

@@ -32,6 +32,21 @@ static RE_ALL_DOTS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\\(?:dots[bmic]?|dotso)\b|…|\.{3,}").expect("valid static regex")
 });
 
+/// Regex to normalize LaTeX commands that are unsupported by Telegram iOS SwiftMath
+/// but have direct visual/semantic equivalents natively supported across both Android and iOS.
+static RE_UNSUPPORTED_SWIFTMATH_COMMANDS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\\(?P<cmd>sphericalangle|Diamond|blacksquare|oiint|oiiint|impliedby|therefore|because)(?P<tail>[^a-zA-Z]|$)",
+    )
+    .expect("valid static regex")
+});
+
+/// Regex to normalize negated relation commands that trigger syntax errors in SwiftMath,
+/// mapping them to SwiftMath's dedicated built-in atoms (e.g. \not\ni -> \notni, \not\in -> \notin).
+static RE_NEGATED_RELATIONS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\not\s*\\(?P<cmd>ni|in)(?P<tail>[^a-zA-Z]|$)").expect("valid static regex")
+});
+
 /// TeX binary operator and relation commands that determine centered ellipsis context (\cdots).
 const BIN_REL_COMMANDS: &[&str] = &[
     r"\times", r"\cdot", r"\pm", r"\mp", r"\div", r"\oplus", r"\otimes", r"\odot", r"\wedge",
@@ -188,8 +203,38 @@ pub fn sanitize_latex_for_telegram(input: &str) -> String {
     // 5. Ensure spacing between math roman and trailing hyphen/minus
     let hyphens_spaced = RE_HYPHEN_AFTER_MATHROMAN.replace_all(&text_normalized, "$1 - $after");
 
-    // 6. Normalize dots for cross-platform iOS (SwiftMath) and Android (JLaTeXMath) rendering
-    let dots_sanitized = sanitize_dots_for_telegram(&hyphens_spaced);
+    // 6. Normalize negated relations to dedicated atoms (\not\ni -> \notni, \not\in -> \notin)
+    let negated_normalized =
+        RE_NEGATED_RELATIONS.replace_all(&hyphens_spaced, |caps: &regex::Captures| {
+            let tail = &caps["tail"];
+            match &caps["cmd"] {
+                "ni" => format!(r"\notni{tail}"),
+                "in" => format!(r"\notin{tail}"),
+                _ => String::new(),
+            }
+        });
+
+    // 7. Normalize unsupported SwiftMath commands to cross-platform safe equivalents
+    let commands_normalized = RE_UNSUPPORTED_SWIFTMATH_COMMANDS.replace_all(
+        &negated_normalized,
+        |caps: &regex::Captures| {
+            let tail = &caps["tail"];
+            match &caps["cmd"] {
+                "sphericalangle" => format!(r"\measuredangle{tail}"),
+                "Diamond" => format!(r"\diamond{tail}"),
+                "blacksquare" => format!(r"\square{tail}"),
+                "oiint" => format!(r"\oint{tail}"),
+                "oiiint" => format!(r"\oint{tail}"),
+                "impliedby" => format!(r"\Longleftarrow{tail}"),
+                "therefore" => format!(r"\vdash{tail}"),
+                "because" => format!(r"\dashv{tail}"),
+                _ => String::new(),
+            }
+        },
+    );
+
+    // 8. Normalize dots for cross-platform iOS (SwiftMath) and Android (JLaTeXMath) rendering
+    let dots_sanitized = sanitize_dots_for_telegram(&commands_normalized);
 
     dots_sanitized.trim().to_string()
 }
@@ -367,5 +412,62 @@ mod tests {
         // Ensure \dots was completely eliminated and replaced by \ldots in the AST
         assert!(!json.contains(r"\\dots"));
         assert!(json.contains(r"\\ldots"));
+    }
+
+    #[test]
+    fn test_swiftmath_symbols_normalized() {
+        // \sphericalangle -> \measuredangle
+        assert_eq!(
+            sanitize_latex_for_telegram(r"\sphericalangle ABC"),
+            r"\measuredangle ABC"
+        );
+
+        // \Diamond -> \diamond, \blacksquare -> \square
+        assert_eq!(
+            sanitize_latex_for_telegram(r"\Diamond , \blacksquare , \square"),
+            r"\diamond , \square , \square"
+        );
+
+        // \oiint, \oiiint -> \oint
+        assert_eq!(
+            sanitize_latex_for_telegram(
+                r"\oiint_S \mathbf{E} \cdot d\mathbf{A} = \frac{Q}{\varepsilon_0}"
+            ),
+            r"\oint_S \mathbf{E} \cdot d\mathbf{A} = \frac{Q}{\varepsilon_0}"
+        );
+        assert_eq!(
+            sanitize_latex_for_telegram(r"\oiiint_V \rho \, dV"),
+            r"\oint_V \rho \, dV"
+        );
+
+        // \impliedby -> \Longleftarrow
+        assert_eq!(
+            sanitize_latex_for_telegram(r"A \impliedby B"),
+            r"A \Longleftarrow B"
+        );
+
+        // \therefore -> \vdash, \because -> \dashv
+        assert_eq!(
+            sanitize_latex_for_telegram(r"A \therefore B"),
+            r"A \vdash B"
+        );
+        assert_eq!(sanitize_latex_for_telegram(r"A \because B"), r"A \dashv B");
+    }
+
+    #[test]
+    fn test_swiftmath_negated_relations() {
+        // \not\ni and \not \ni -> \notni
+        assert_eq!(
+            sanitize_latex_for_telegram(r"\ni , \not\ni"),
+            r"\ni , \notni"
+        );
+        assert_eq!(
+            sanitize_latex_for_telegram(r"\ni , \not \ni"),
+            r"\ni , \notni"
+        );
+
+        // \not\in and \not \in -> \notin
+        assert_eq!(sanitize_latex_for_telegram(r"x \not\in S"), r"x \notin S");
+        assert_eq!(sanitize_latex_for_telegram(r"x \not \in S"), r"x \notin S");
     }
 }
