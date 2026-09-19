@@ -82,20 +82,28 @@ fn video_probe_payload(model: &str) -> Value {
 }
 
 async fn validate_image_generation_probe_body(body: &Value) -> bool {
-    let Some(item) = body
+    if let Some(item) = body
         .get("data")
         .and_then(Value::as_array)
         .and_then(|data| data.first())
-    else {
-        return false;
-    };
+    {
+        if let Some(encoded) = item.get("b64_json").and_then(Value::as_str) {
+            return decode_generated_image_base64(encoded).is_ok();
+        }
+        if let Some(url) = item.get("url").and_then(Value::as_str) {
+            return download_generated_image(url).await.is_ok();
+        }
+    }
 
-    if let Some(encoded) = item.get("b64_json").and_then(Value::as_str) {
-        return decode_generated_image_base64(encoded).is_ok();
+    if let Ok(source) = extract_image_from_chat_response(body) {
+        return match source {
+            ExtractedImageSource::Base64(encoded) => {
+                decode_generated_image_base64(&encoded).is_ok()
+            }
+            ExtractedImageSource::Url(url) => download_generated_image(&url).await.is_ok(),
+        };
     }
-    if let Some(url) = item.get("url").and_then(Value::as_str) {
-        return download_generated_image(url).await.is_ok();
-    }
+
     false
 }
 
@@ -106,7 +114,10 @@ use super::routing::{
     GenerationModelSnapshot, ModelRole, ModelRoute, ModelRoutingConfig, ResolvedModelRoute,
     RouteOrigin,
 };
-use super::service::{decode_generated_image_base64, download_generated_image, AIChatService};
+use super::service::{
+    decode_generated_image_base64, download_generated_image, extract_image_from_chat_response,
+    AIChatService, ExtractedImageSource,
+};
 use super::storage::{
     load_provider_store, persist_capability_registry, persist_model_routing, CapabilityEvidence,
     CapabilityEvidenceSource, CapabilityKind, CapabilityRecord, CapabilityRegistry,
@@ -883,17 +894,18 @@ impl AIChatService {
                 .header("Content-Type", "application/json")
                 .json(&json!({
                     "model": model,
-                    "messages": [{"role": "user", "content": "Ping"}],
-                    "stream": false,
-                    "max_tokens": 4
+                    "messages": [{"role": "user", "content": "Generate an image: A simple solid gray square. Capability probe."}],
+                    "stream": false
                 }))
-                .timeout(Duration::from_secs(15));
+                .timeout(Duration::from_secs(30));
             let chat_req = apply_provider_auth_header(chat_req, &provider.api_key);
             if let Ok(chat_resp) = chat_req.send().await {
                 if chat_resp.status().is_success() {
-                    return CapabilityProbeResponse::Success(json!({
-                        "data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}]
-                    }));
+                    if let Ok(body) = read_bounded_provider_json(chat_resp).await {
+                        if validate_image_generation_probe_body(&body).await {
+                            return CapabilityProbeResponse::Success(body);
+                        }
+                    }
                 }
             }
         }
@@ -2072,6 +2084,30 @@ mod tests {
             }]
         });
         assert!(validate_image_generation_probe_body(&valid).await);
+
+        let valid_chat_images = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "images": [{
+                        "image_url": {
+                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP8z0AaYCJR/aiGUQ1DSAMAQC4BH2bjRnMAAAAASUVORK5CYII="
+                        }
+                    }]
+                }
+            }]
+        });
+        assert!(validate_image_generation_probe_body(&valid_chat_images).await);
+
+        let valid_chat_markdown = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Here is your image: ![result](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP8z0AaYCJR/aiGUQ1DSAMAQC4BH2bjRnMAAAAASUVORK5CYII=)"
+                }
+            }]
+        });
+        assert!(validate_image_generation_probe_body(&valid_chat_markdown).await);
 
         let invalid = json!({
             "data": [{"b64_json": "bm90IGFuIGltYWdl"}]

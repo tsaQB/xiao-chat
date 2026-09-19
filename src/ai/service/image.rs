@@ -1,4 +1,6 @@
+use regex::Regex;
 use serde_json::{json, Value};
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -182,15 +184,26 @@ pub(crate) fn external_image_fallback_enabled(value: &str) -> bool {
     value.trim().eq_ignore_ascii_case("pollinations")
 }
 
+static MARKDOWN_IMAGE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"!\[.*?\]\((data:image/[^;)]+;base64,[^)]+|https?://[^)\s]+)\)"#)
+        .expect("valid regex")
+});
+
+static DATA_URI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"data:image/[a-zA-Z0-9.+_-]+;base64,[A-Za-z0-9+/=]+"#).expect("valid regex")
+});
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ImageGenerationProtocol {
+pub enum ImageGenerationProtocol {
     OpenAiImages,
+    ChatCompletionsMultimodal,
 }
 
 impl ImageGenerationProtocol {
     pub(crate) fn endpoint(self, base: &str) -> String {
         match self {
             Self::OpenAiImages => provider_url(base, "images/generations"),
+            Self::ChatCompletionsMultimodal => provider_url(base, "chat/completions"),
         }
     }
 
@@ -203,8 +216,153 @@ impl ImageGenerationProtocol {
                 "size": format!("{width}x{height}"),
                 "response_format": "b64_json"
             }),
+            Self::ChatCompletionsMultimodal => json!({
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": format!("Generate an image: {prompt}")
+                    }
+                ]
+            }),
         }
     }
+}
+
+pub fn select_initial_image_protocol(model: &str) -> ImageGenerationProtocol {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("gemini")
+        || lower.contains("flash-image")
+        || lower.contains("image-preview")
+        || lower.contains("imagen-3")
+        || lower.contains("chat")
+    {
+        ImageGenerationProtocol::ChatCompletionsMultimodal
+    } else {
+        ImageGenerationProtocol::OpenAiImages
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtractedImageSource {
+    Base64(String),
+    Url(String),
+}
+
+pub fn parse_data_uri_or_url(source: &str) -> Option<ExtractedImageSource> {
+    let trimmed = source.trim();
+    if let Some(pos) = trimmed.find(";base64,") {
+        if trimmed.starts_with("data:image/") || trimmed.starts_with("data:") {
+            let b64_part = &trimmed[pos + 8..];
+            let clean_b64: String = b64_part.chars().filter(|c| !c.is_whitespace()).collect();
+            if !clean_b64.is_empty() {
+                return Some(ExtractedImageSource::Base64(clean_b64));
+            }
+        }
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(ExtractedImageSource::Url(trimmed.to_string()));
+    }
+    None
+}
+
+pub fn extract_image_from_chat_response(
+    body: &Value,
+) -> Result<ExtractedImageSource, ImageGenerationError> {
+    let choice = body
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .ok_or_else(|| {
+            ImageGenerationError::new(
+                ImageGenerationErrorKind::InvalidResponse,
+                "Respons chat completions tidak memiliki choices.",
+            )
+        })?;
+
+    let message = choice.get("message").ok_or_else(|| {
+        ImageGenerationError::new(
+            ImageGenerationErrorKind::InvalidResponse,
+            "Respons chat completions tidak memiliki message.",
+        )
+    })?;
+
+    // Tier 1: choices[0].message.images (format CLIProxyAPI / Antigravity / OneAPI)
+    if let Some(images) = message.get("images").and_then(Value::as_array) {
+        for item in images {
+            let url_str = item
+                .pointer("/image_url/url")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("url").and_then(Value::as_str));
+            if let Some(raw) = url_str {
+                if let Some(source) = parse_data_uri_or_url(raw) {
+                    return Ok(source);
+                }
+                let clean: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+                if clean.len() >= 16 {
+                    return Ok(ExtractedImageSource::Base64(clean));
+                }
+            }
+        }
+    }
+
+    // Tier 2: choices[0].message.content (string or parts array)
+    if let Some(content) = message.get("content").and_then(Value::as_str) {
+        // Tier 2a: Markdown image tag ![...](...)
+        if let Some(caps) = MARKDOWN_IMAGE_REGEX.captures(content) {
+            if let Some(matched) = caps.get(1) {
+                if let Some(source) = parse_data_uri_or_url(matched.as_str()) {
+                    return Ok(source);
+                }
+            }
+        }
+
+        // Tier 2b: Direct Data URI
+        if let Some(matched) = DATA_URI_REGEX.find(content) {
+            if let Some(source) = parse_data_uri_or_url(matched.as_str()) {
+                return Ok(source);
+            }
+        }
+
+        // Tier 2c: Direct standalone URL
+        let trimmed = content.trim();
+        if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+            && !trimmed.contains('\n')
+            && !trimmed.contains(' ')
+        {
+            return Ok(ExtractedImageSource::Url(trimmed.to_string()));
+        }
+    } else if let Some(parts) = message.get("content").and_then(Value::as_array) {
+        for part in parts {
+            let url_str = part
+                .pointer("/image_url/url")
+                .and_then(Value::as_str)
+                .or_else(|| part.get("url").and_then(Value::as_str));
+            if let Some(raw) = url_str {
+                if let Some(source) = parse_data_uri_or_url(raw) {
+                    return Ok(source);
+                }
+            }
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                if let Some(caps) = MARKDOWN_IMAGE_REGEX.captures(text) {
+                    if let Some(matched) = caps.get(1) {
+                        if let Some(source) = parse_data_uri_or_url(matched.as_str()) {
+                            return Ok(source);
+                        }
+                    }
+                }
+                if let Some(matched) = DATA_URI_REGEX.find(text) {
+                    if let Some(source) = parse_data_uri_or_url(matched.as_str()) {
+                        return Ok(source);
+                    }
+                }
+            }
+        }
+    }
+
+    Err(ImageGenerationError::new(
+        ImageGenerationErrorKind::InvalidResponse,
+        "Respons chat completions tidak memiliki data gambar yang dikenali.",
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,129 +450,208 @@ impl AIChatService {
         })?;
 
         let generation_timeout = timeout_from_env(IMAGE_GENERATION_TIMEOUT_ENV, 120);
-        let protocol = ImageGenerationProtocol::OpenAiImages;
-        let gen_url = protocol.endpoint(&route.provider.endpoint);
-        let payload = protocol.payload(&route.model, clean_prompt, width, height);
-        let mut req = self
-            .client
-            .post(&gen_url)
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .timeout(generation_timeout);
-
-        if !route.provider.api_key.is_empty()
-            && !["none", "-", "no"]
-                .iter()
-                .any(|key| route.provider.api_key.eq_ignore_ascii_case(key))
-        {
-            req = req.header(
-                "Authorization",
-                format!("Bearer {}", route.provider.api_key),
-            );
-        }
-
-        let provider_result = tokio::select! {
-            changed = cancel_rx.changed() => {
-                if changed.is_ok() && *cancel_rx.borrow() {
-                    return Err(ImageGenerationError::new(
-                        ImageGenerationErrorKind::Cancelled,
-                        "Pembuatan gambar dibatalkan.",
-                    ));
-                }
-                Err(ImageGenerationError::new(
-                    ImageGenerationErrorKind::Provider,
-                    "Kanal pembatalan image generation ditutup.",
-                ))
+        let initial_protocol = select_initial_image_protocol(&route.model);
+        let secondary_protocol = match initial_protocol {
+            ImageGenerationProtocol::OpenAiImages => {
+                ImageGenerationProtocol::ChatCompletionsMultimodal
             }
-            response = req.send() => {
-                match response {
-                    Err(error) if error.is_timeout() => Err(timeout_image_error(
-                        "Image Generation Model",
-                        generation_timeout,
-                    )),
-                    Err(error) => Err(ImageGenerationError::new(
-                        ImageGenerationErrorKind::Provider,
-                        format!("Koneksi ke Image Generation Model gagal: {}", error.without_url()),
-                    )),
-                    Ok(response) if !response.status().is_success() => {
-                        let status = response.status();
-                        let detail = read_bounded_response_bytes(response, 64 * 1024)
-                            .await
-                            .ok()
-                            .and_then(|bytes| String::from_utf8(bytes).ok())
-                            .unwrap_or_default();
-                        let kind = match status.as_u16() {
-                            401 | 403 => ImageGenerationErrorKind::Auth,
-                            429 => ImageGenerationErrorKind::RateLimited,
-                            404 | 405 => ImageGenerationErrorKind::ProtocolMismatch,
-                            400 if detail.to_ascii_lowercase().contains("not supported")
-                                || detail.to_ascii_lowercase().contains("not an image model")
-                                || detail.to_ascii_lowercase().contains("unsupported") => {
-                                ImageGenerationErrorKind::ProtocolMismatch
-                            }
-                            _ => ImageGenerationErrorKind::HttpStatus,
-                        };
-                        Err(ImageGenerationError::new(
-                            kind,
-                            format!(
-                                "Image Generation Model mengembalikan HTTP {}. Periksa konfigurasi endpoint/model dan batas provider.",
-                                status.as_u16()
-                            ),
-                        ))
+            ImageGenerationProtocol::ChatCompletionsMultimodal => {
+                ImageGenerationProtocol::OpenAiImages
+            }
+        };
+        let protocols_to_try = [initial_protocol, secondary_protocol];
+
+        let mut last_provider_error = None;
+        let mut successful_image = None;
+
+        for (attempt_idx, &protocol) in protocols_to_try.iter().enumerate() {
+            if *cancel_rx.borrow() {
+                return Err(ImageGenerationError::new(
+                    ImageGenerationErrorKind::Cancelled,
+                    "Pembuatan gambar dibatalkan.",
+                ));
+            }
+
+            let gen_url = protocol.endpoint(&route.provider.endpoint);
+            let payload = protocol.payload(&route.model, clean_prompt, width, height);
+            let mut req = self
+                .client
+                .post(&gen_url)
+                .header("Content-Type", "application/json")
+                .json(&payload)
+                .timeout(generation_timeout);
+
+            if !route.provider.api_key.is_empty()
+                && !["none", "-", "no"]
+                    .iter()
+                    .any(|key| route.provider.api_key.eq_ignore_ascii_case(key))
+            {
+                req = req.header(
+                    "Authorization",
+                    format!("Bearer {}", route.provider.api_key),
+                );
+            }
+
+            let send_result = tokio::select! {
+                changed = cancel_rx.changed() => {
+                    if changed.is_ok() && *cancel_rx.borrow() {
+                        return Err(ImageGenerationError::new(
+                            ImageGenerationErrorKind::Cancelled,
+                            "Pembuatan gambar dibatalkan.",
+                        ));
                     }
-                    Ok(response) => {
-                        let body = read_bounded_json(response).await.map_err(|error| {
-                            ImageGenerationError::new(
-                                ImageGenerationErrorKind::InvalidResponse,
-                                format!("Respons image generation tidak valid: {error}"),
-                            )
-                        })?;
-                        let data = body
-                            .get("data")
-                            .and_then(|value| value.get(0))
-                            .ok_or_else(|| {
+                    Err(ImageGenerationError::new(
+                        ImageGenerationErrorKind::Provider,
+                        "Kanal pembatalan image generation ditutup.",
+                    ))
+                }
+                response = req.send() => {
+                    match response {
+                        Err(error) if error.is_timeout() => Err(timeout_image_error(
+                            "Image Generation Model",
+                            generation_timeout,
+                        )),
+                        Err(error) => Err(ImageGenerationError::new(
+                            ImageGenerationErrorKind::Provider,
+                            format!("Koneksi ke Image Generation Model gagal: {}", error.without_url()),
+                        )),
+                        Ok(response) if !response.status().is_success() => {
+                            let status = response.status();
+                            let detail = read_bounded_response_bytes(response, 64 * 1024)
+                                .await
+                                .ok()
+                                .and_then(|bytes| String::from_utf8(bytes).ok())
+                                .unwrap_or_default();
+                            let kind = match status.as_u16() {
+                                401 | 403 => ImageGenerationErrorKind::Auth,
+                                429 => ImageGenerationErrorKind::RateLimited,
+                                404 | 405 => ImageGenerationErrorKind::ProtocolMismatch,
+                                400 if detail.to_ascii_lowercase().contains("not supported")
+                                    || detail.to_ascii_lowercase().contains("not an image model")
+                                    || detail.to_ascii_lowercase().contains("unsupported")
+                                    || detail.to_ascii_lowercase().contains("unknown url")
+                                    || detail.to_ascii_lowercase().contains("not found") => {
+                                    ImageGenerationErrorKind::ProtocolMismatch
+                                }
+                                _ => ImageGenerationErrorKind::HttpStatus,
+                            };
+                            Err(ImageGenerationError::new(
+                                kind,
+                                format!(
+                                    "Image Generation Model mengembalikan HTTP {}. Periksa konfigurasi endpoint/model dan batas provider.",
+                                    status.as_u16()
+                                ),
+                            ))
+                        }
+                        Ok(response) => {
+                            let body = read_bounded_json(response).await.map_err(|error| {
                                 ImageGenerationError::new(
                                     ImageGenerationErrorKind::InvalidResponse,
-                                    "Respons image generation tidak memiliki data gambar.",
+                                    format!("Respons image generation tidak valid: {error}"),
                                 )
                             })?;
 
-                        let bytes = if let Some(encoded) =
-                            data.get("b64_json").and_then(|value| value.as_str())
-                        {
-                            decode_generated_image_base64(encoded)?
-                        } else if let Some(url) = data.get("url").and_then(|value| value.as_str()) {
-                            download_generated_image(url).await?
-                        } else {
-                            return Err(ImageGenerationError::new(
-                                ImageGenerationErrorKind::InvalidResponse,
-                                "Provider tidak mengembalikan b64_json atau URL gambar.",
-                            ));
-                        };
+                            match protocol {
+                                ImageGenerationProtocol::OpenAiImages => {
+                                    let data = body
+                                        .get("data")
+                                        .and_then(|value| value.get(0))
+                                        .ok_or_else(|| {
+                                            ImageGenerationError::new(
+                                                ImageGenerationErrorKind::InvalidResponse,
+                                                "Respons image generation tidak memiliki data gambar.",
+                                            )
+                                        })?;
 
-                        Ok(GeneratedImage {
-                            bytes,
-                            provider_name: route.provider.name.clone(),
-                            model: route.model.clone(),
-                            used_external_fallback: false,
-                            primary_failure: None,
-                        })
+                                    let bytes = if let Some(encoded) =
+                                        data.get("b64_json").and_then(|value| value.as_str())
+                                    {
+                                        decode_generated_image_base64(encoded)?
+                                    } else if let Some(url) = data.get("url").and_then(|value| value.as_str()) {
+                                        download_generated_image(url).await?
+                                    } else {
+                                        return Err(ImageGenerationError::new(
+                                            ImageGenerationErrorKind::InvalidResponse,
+                                            "Provider tidak mengembalikan b64_json atau URL gambar.",
+                                        ));
+                                    };
+
+                                    Ok(GeneratedImage {
+                                        bytes,
+                                        provider_name: route.provider.name.clone(),
+                                        model: route.model.clone(),
+                                        used_external_fallback: false,
+                                        primary_failure: None,
+                                    })
+                                }
+                                ImageGenerationProtocol::ChatCompletionsMultimodal => {
+                                    let source = extract_image_from_chat_response(&body)?;
+                                    let bytes = match source {
+                                        ExtractedImageSource::Base64(encoded) => {
+                                            decode_generated_image_base64(&encoded)?
+                                        }
+                                        ExtractedImageSource::Url(url) => {
+                                            download_generated_image(&url).await?
+                                        }
+                                    };
+
+                                    Ok(GeneratedImage {
+                                        bytes,
+                                        provider_name: route.provider.name.clone(),
+                                        model: route.model.clone(),
+                                        used_external_fallback: false,
+                                        primary_failure: None,
+                                    })
+                                }
+                            }
+                        }
                     }
                 }
-            }
-        };
+            };
 
-        let primary_failure = match provider_result {
-            Ok(image) => return Ok(image),
-            Err(error) if error.kind == ImageGenerationErrorKind::Cancelled => return Err(error),
-            Err(error) if error.kind == ImageGenerationErrorKind::Timeout => return Err(error),
-            Err(provider_error) => {
+            match send_result {
+                Ok(image) => {
+                    successful_image = Some(image);
+                    break;
+                }
+                Err(error) if error.kind == ImageGenerationErrorKind::Cancelled => {
+                    return Err(error);
+                }
+                Err(error) if error.kind == ImageGenerationErrorKind::Timeout => {
+                    return Err(error);
+                }
+                Err(error)
+                    if error.kind == ImageGenerationErrorKind::ProtocolMismatch
+                        && attempt_idx + 1 < protocols_to_try.len() =>
+                {
+                    last_provider_error = Some(error);
+                    continue;
+                }
+                Err(error) => {
+                    last_provider_error = Some(error);
+                    break;
+                }
+            }
+        }
+
+        if let Some(image) = successful_image {
+            return Ok(image);
+        }
+
+        let primary_failure = match last_provider_error {
+            Some(err) => {
                 let fallback =
                     std::env::var("IMAGE_FALLBACK_PROVIDER").unwrap_or_else(|_| "none".to_string());
                 if !external_image_fallback_enabled(&fallback) {
-                    return Err(provider_error);
+                    return Err(err);
                 }
-                truncate_chars(&provider_error.message, 240)
+                truncate_chars(&err.message, 240)
+            }
+            None => {
+                return Err(ImageGenerationError::new(
+                    ImageGenerationErrorKind::Provider,
+                    "Image generation gagal pada seluruh protokol provider.",
+                ));
             }
         };
 

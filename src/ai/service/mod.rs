@@ -20,8 +20,9 @@ pub use self::context::{ContextMessageItem, ContextStats};
 pub use self::generation::{next_draft_id, GenerationGuard, GenerationInput, PendingToolCall};
 #[allow(unused_imports)]
 pub use self::image::{
-    decode_generated_image_base64, download_generated_image, GeneratedImage, ImageGenerationError,
-    ImageGenerationErrorKind,
+    decode_generated_image_base64, download_generated_image, extract_image_from_chat_response,
+    parse_data_uri_or_url, select_initial_image_protocol, ExtractedImageSource, GeneratedImage,
+    ImageGenerationError, ImageGenerationErrorKind, ImageGenerationProtocol,
 };
 #[allow(unused_imports)]
 pub use self::multimodal::{resolve_audio_file_and_mime, SpecialistObservationInput};

@@ -916,3 +916,178 @@ fn next_draft_id_is_strictly_monotonic() {
     assert!(id2 > id1);
     assert!(id3 > id2);
 }
+
+#[test]
+fn protocol_selection_heuristic_identifies_chat_models() {
+    assert_eq!(
+        select_initial_image_protocol("gemini-3.1-flash-image"),
+        ImageGenerationProtocol::ChatCompletionsMultimodal
+    );
+    assert_eq!(
+        select_initial_image_protocol("gemini-2.5-flash-image-preview"),
+        ImageGenerationProtocol::ChatCompletionsMultimodal
+    );
+    assert_eq!(
+        select_initial_image_protocol("imagen-3.0-generate-002"),
+        ImageGenerationProtocol::ChatCompletionsMultimodal
+    );
+    assert_eq!(
+        select_initial_image_protocol("dall-e-3"),
+        ImageGenerationProtocol::OpenAiImages
+    );
+    assert_eq!(
+        select_initial_image_protocol("flux-schnell"),
+        ImageGenerationProtocol::OpenAiImages
+    );
+}
+
+#[test]
+fn chat_completions_multimodal_extracts_images_array() {
+    let body = json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "images": [{
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                    }
+                }]
+            }
+        }]
+    });
+    let source = extract_image_from_chat_response(&body).expect("extract succeeds");
+    match source {
+        ExtractedImageSource::Base64(b64) => {
+            assert!(b64.starts_with("iVBORw0KGgoAAA"));
+        }
+        ExtractedImageSource::Url(_) => panic!("expected base64"),
+    }
+}
+
+#[test]
+fn chat_completions_multimodal_extracts_markdown_base64() {
+    let body = json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Ini gambar yang kamu minta:\n\n![hasil gambar](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==)\n\nSemoga suka!"
+            }
+        }]
+    });
+    let source = extract_image_from_chat_response(&body).expect("extract succeeds");
+    match source {
+        ExtractedImageSource::Base64(b64) => {
+            assert!(b64.starts_with("iVBORw0KGgoAAA"));
+        }
+        ExtractedImageSource::Url(_) => panic!("expected base64"),
+    }
+}
+
+#[test]
+fn chat_completions_multimodal_extracts_direct_data_uri() {
+    let body = json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            }
+        }]
+    });
+    let source = extract_image_from_chat_response(&body).expect("extract succeeds");
+    match source {
+        ExtractedImageSource::Base64(b64) => {
+            assert!(b64.starts_with("iVBORw0KGgoAAA"));
+        }
+        ExtractedImageSource::Url(_) => panic!("expected base64"),
+    }
+}
+
+#[tokio::test]
+async fn image_generation_adaptive_fallback_on_400() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener succeeds");
+    let address = listener.local_addr().expect("local_addr succeeds");
+
+    let server = tokio::spawn(async move {
+        let mut request_paths = Vec::new();
+
+        // Request 1: /images/generations -> return 400 Bad Request unsupported endpoint
+        {
+            let (mut socket, _) = listener.accept().await.expect("accept 1 succeeds");
+            let mut buffer = [0u8; 4096];
+            let count = socket.read(&mut buffer).await.expect("read 1 succeeds");
+            let req_str = String::from_utf8_lossy(&buffer[..count]);
+            let first_line = req_str.lines().next().unwrap_or_default().to_string();
+            request_paths.push(first_line);
+
+            let body = r#"{"error":{"message":"Endpoint /images/generations is not supported for this model"}}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write 1 succeeds");
+        }
+
+        // Request 2: /chat/completions -> return 200 OK with images array
+        {
+            let (mut socket, _) = listener.accept().await.expect("accept 2 succeeds");
+            let mut buffer = [0u8; 4096];
+            let count = socket.read(&mut buffer).await.expect("read 2 succeeds");
+            let req_str = String::from_utf8_lossy(&buffer[..count]);
+            let first_line = req_str.lines().next().unwrap_or_default().to_string();
+            request_paths.push(first_line);
+
+            let body = r#"{"choices":[{"message":{"images":[{"image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}}]}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write 2 succeeds");
+        }
+
+        request_paths
+    });
+
+    let provider = ProviderConfig {
+        id: "adaptive-test".into(),
+        name: "Adaptive Test".into(),
+        endpoint: format!("http://{address}/v1"),
+        api_key: String::new(),
+        api_key_ref: None,
+        models: vec!["custom-image-model".into()],
+        active_model: "custom-image-model".into(),
+    };
+    let service = isolated_service(provider.clone());
+    let mut snapshot = service.generation_model_snapshot().await;
+    snapshot.routing.image_gen = ModelRoute::MainModel;
+
+    let (_cancel, mut receiver) = watch::channel(false);
+    let result = service
+        .generate_image_with_snapshot(0, "a cute kitten", 1024, 1024, &snapshot, &mut receiver)
+        .await
+        .expect("image generation adaptive fallback succeeds");
+
+    assert_eq!(result.provider_name, "Adaptive Test");
+    assert_eq!(result.model, "custom-image-model");
+    assert!(!result.used_external_fallback);
+    assert!(!result.bytes.is_empty());
+
+    let paths = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server completed")
+        .expect("server join succeeds");
+
+    assert_eq!(paths.len(), 2);
+    assert!(paths[0].contains("/images/generations"));
+    assert!(paths[1].contains("/chat/completions"));
+}
