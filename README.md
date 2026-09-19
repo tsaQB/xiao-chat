@@ -1,346 +1,426 @@
-# Xiao (小)
-
-A hardened, single-owner personal AI assistant for Telegram built in Rust targeting **Telegram Bot API 10.3**.
-
-Xiao combines streaming draft responses, rich structured messages (AST blocks), a durable SQLite intake queue, three-tier long-term memory, and modular multimodal routing across any OpenAI-compatible provider.
-
----
-
-## Highlights
-
-- **Telegram Bot API 10.3 Native**: Implements streaming drafts (`sendRichMessageDraft`, `sendMessageDraft`), native stop controls (`stopped_message_generation`), bidirectional RTL layout support (`is_rtl`), and rich AST layout blocks (expandable blockquotes, multi-column tables with right-aligned RTL/Hindi number support, buttons, collages, slideshows, maps, and thinking blocks).
-- **Hardened Single-Owner Security**: Strictly enforces `OWNER_USER_ID`. Non-owner messages and unauthorized groups are dropped silently at the network boundary without acknowledgment or leakage.
-- **Zero-Slash Gateway**: Runs with empty command menus (`set_my_commands(&[])`). Interacts naturally through conversational intent, context-aware mentions, media attachments, or dedicated workspaces.
-- **Modular Multi-Role Routing**: Separates roles for `Main`, `Vision`, `Video`, `Audio STT`, `Image Generation`, and `Curator`. Specialist models receive minimal transient payloads to prevent context pollution and token exhaustion.
-- **Three-Tier Long-Term Memory**:
-  - **Tier 1 (Facts)**: Background extraction of persistent user profile attributes (`user_memories`).
-  - **Tier 2 (Topic Summary)**: Periodic summarization of older conversational turns per chat and forum thread (`scoped_summaries`).
-  - **Tier 3 (Canonical Turns)**: Full thread-scoped message history (`messages`).
-- **Durable Intake Queue & Per-Scope Mailboxes**: Ingests updates directly into an ACID SQLite inbox (`telegram_inbox`) before acknowledgment. Dispatches to per-scope FIFO mailboxes (`chat_id`, `thread_id`) with task-level panic isolation, bounded retry (2 attempts), and poison-pill quarantine.
-- **In-Memory Document & Archive Inspection**: Safely reads plain text, source code, DOCX, XLSX, PDF (text and scanned page rendering for Vision), and archives (ZIP, TAR, TAR.GZ, 7Z) with strict memory quotas and anti-zip-bomb limits.
-- **Tool Calling**: Built-in `web_search` (with multi-provider fallbacks across Brave, Tavily, Exa, and DuckDuckGo) and `fetch_url` with HTML sanitization.
-- **Secret Isolation**: Sensitive credentials (bot tokens, AI keys) are stored in isolated, permission-hardened local files (`0o600`) and referenced internally via `secret://` identifiers.
-
----
-
-## Architecture Overview
+<div align="center">
 
 ```
-                          ┌───────────────────┐
-                          │   Telegram Bot API    │
-                          └─────────┬─────────┘
-                                      │ (Long Polling)
-                                      ▼
-                          ┌────────────────────┐
-                          │   TelegramBotClient    │
-                          │   (SSRF Firewall)      │
-                          └─────────┬──────────┘
-                                      │
-                                      ▼
-                          ┌────────────────────┐
-                          │ Durable Intake Queue   │
-                          │ (SQLite WAL Inbox)     │
-                          └─────────┬──────────┘
-                                      │
-                                      ▼
-                          ┌────────────────────┐
-                          │   ChatRouteScope       │
-                          │ (Single-Owner Filter)  │
-                          └─────────┬──────────┘
-                                      │
-                                      ▼
-                          ┌────────────────────┐
-                          │     AIChatService      │
-                          └─────┬───────┬──────┘
-                                 │         │
-            ┌─────────────────┘        └─────────────────────┐
-            ▼                                                        ▼
-┌──────────────────────────┐                    ┌────────────────────┐
-│       Model Role Router       │                    │   Three-Tier Memory    │
-│ ├─ Main (Canonical History)   │                    │ ├─ User Memories      │
-│ ├─ Vision (Transient Media)   │                    │ ├─ Topic Summaries    │
-│ ├─ Video (Bounded Frames)     │                    │ └─ Canonical Messages │
-│ ├─ Audio STT (Transcription)  │                    └────────────────────┘
-│ ├─ Image Gen (OpenAI/Fallback)│
-│ └─ Curator (Fact Extraction)  │
-└──────────────────────────┘
+██╗  ██╗██╗ █████╗  ██████╗ 
+╚██╗██╔╝██║██╔══██╗██╔═══██╗
+ ╚███╔╝ ██║███████║██║   ██║
+ ██╔██╗ ██║██╔══██║██║   ██║
+██╔╝ ██╗██║██║  ██║╚██████╔╝
+╚═╝  ╚═╝╚═╝╚═╝  ╚═╝ ╚═════╝ 
+```
+
+### Xiao (小)
+**A hardened, single-owner AI assistant for Telegram built with Rust.**  
+*Engineered for Telegram Bot API 10.3 • Durable SQLite Intake Queue • Three-Tier Memory • Multimodal Routing*
+
+---
+
+[![CI](https://github.com/tsaQB/xiao-chat/actions/workflows/build.yml/badge.svg)](https://github.com/tsaQB/xiao-chat/actions)
+![Telegram Bot API](https://img.shields.io/badge/Telegram%20Bot%20API-10.3-2CA5E0?logo=telegram&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-2021%20Edition-DEA584?logo=rust&logoColor=white)
+![MSRV](https://img.shields.io/badge/MSRV-1.80%2B-lightgrey)
+![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Armbian%20%7C%20Termux-097ABB?logo=linux&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+
+[Key Features](#-key-features) • [Architecture](#-architecture) • [Quickstart](#-quickstart) • [Installation](#-multi-platform-installation) • [CLI & Terminal Chat](#-cli--terminal-chat) • [Configuration](#-configuration-reference)
+
+---
+
+</div>
+
+## 🌟 Highlights
+
+Xiao is an autonomous, single-owner AI gateway designed to run continuously on low-overhead environments—from cloud servers to single-board computers (Armbian) and edge smartphones (Android Termux). It treats Telegram not as a simple chat wrapper, but as a rich display surface powered by **Telegram Bot API 10.3**.
+
+- **Telegram Bot API 10.3 Native**: Real-time streaming drafts (`sendRichMessageDraft`), native stop controls, AST layout blocks (tables, expandable quotes, collages, slideshows, buttons, thinking indicators), and cross-platform LaTeX rendering.
+- **Hardened Single-Owner Boundary**: Zero information leakage. Non-owner updates are dropped silently at the network boundary without acknowledging bot existence.
+- **Pure Zero-Slash Gateway**: Runs with empty command menus (`set_my_commands(&[])`). Interacts naturally through conversational intent, context-aware mentions, media attachments, or dedicated forum topics.
+- **Durable SQLite WAL Intake Queue**: Ingests updates to an ACID SQLite inbox (`telegram_inbox`) before acknowledgment. Dispatches to per-scope FIFO mailboxes with task-level panic isolation, bounded retry (2 attempts), and poison-pill quarantine.
+- **Three-Tier Long-Term Memory**: Tier 1 (Autonomous profile facts), Tier 2 (Sliding-window topic summaries), and Tier 3 (Full thread-scoped turns).
+- **Specialist Context Isolation**: Routes queries across `Main`, `Vision`, `Video`, `Audio STT`, `Image Generation`, and `Curator`. Specialist models only receive transient media payloads, preventing token context exhaustion and preserving privacy.
+- **In-Memory Document & Anti-Bomb Inspection**: Safe extraction of PDF, DOCX, XLSX, text, code, and archives (ZIP, TAR, 7Z) with strict memory quotas and anti-zip-bomb limits.
+- **Autonomous Tool Calling**: Built-in `web_search` (keyless Exa MCP protocol, Tavily, Brave, and DuckDuckGo fallbacks) and SSRF-hardened `fetch_url`.
+
+---
+
+## 🏛️ Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       xiao CLI / Daemon                     │
+└──────────────┬───────────────────────────────┬──────────────┘
+               │ (Telegram Long Polling)       │ (Direct Terminal REPL)
+               ▼                               │
+┌───────────────────────────────┐              │
+│      TelegramBotClient        │              │
+│   (SSRF Firewall & Fallback)  │              │
+└──────────────┬────────────────┘              │
+               ▼                               │
+┌───────────────────────────────┐              │
+│     Durable Intake Queue      │              │
+│    (SQLite WAL telegram_inbox)│              │
+└──────────────┬────────────────┘              │
+               ▼                               │
+┌───────────────────────────────┐              │
+│    ChatRouteScope Evaluator   │              │
+│  (Hard Single-Owner Gateway)  │              │
+└──────────────┬────────────────┘              ▼
+               │                  ┌───────────────────────────┐
+               └─────────────────►│       AIChatService       │
+                                  └─────────────┬─────────────┘
+                                                │
+         ┌──────────────────────────────────────┴──────────────────────────────────────┐
+         ▼                                                                             ▼
+┌───────────────────────────────────┐                         ┌───────────────────────────────────┐
+│         Model Role Router         │                         │         Three-Tier Memory         │
+│  ├─ Main (Canonical History)      │                         │  ├─ Tier 1: User Profile Facts    │
+│  ├─ Vision (Transient Media)      │                         │  ├─ Tier 2: Scoped Topic Summaries│
+│  ├─ Video (Bounded Frames)        │                         │  └─ Tier 3: Scoped Canonical Turns│
+│  ├─ Audio STT (Whisper Stream)    │                         └───────────────────────────────────┘
+│  ├─ Image Gen (OpenAI/Pollinations)                         │         SQLite WAL Storage        │
+│  └─ Curator (Fact Extraction)     │                         │      (~/.local/share/xiaoai/)     │
+└───────────────────────────────────┘                         └───────────────────────────────────┘
 ```
 
 ---
 
-## Prerequisites
+## 🚀 Key Features
 
-- **Rust**: Version `1.80` or later (tested on Rust `1.98.0`).
-- **Telegram Bot Token**: Created via [@BotFather](https://t.me/BotFather).
-- **Telegram User ID**: Your numerical Telegram account ID.
-- **OpenAI-Compatible AI Provider**: Any local or cloud endpoint offering a `/v1` interface (e.g., Ollama, vLLM, Groq, OpenRouter, OpenAI).
+### 1. 🎨 Native Telegram Bot API 10.3 Engine
+- **Streaming Draft Synchronization**: Responses stream live into Telegram drafts using `sendRichMessageDraft` and `sendMessageDraft`, complete with rotating progress spinners and activity indicators.
+- **Real-Time Stop Controls**: Interrupt generation at any time with native Telegram stop actions (`stopped_message_generation`). Stop signals bypass worker queues for instant in-flight cancellation.
+- **Rich Message AST**: Parses extended Markdown directly into Telegram Bot API 10.3 rich blocks:
+  - **Tables**: Multi-column tables with custom text alignments. Unspecified columns in Right-to-Left (Arabic/Hebrew) or Eastern Arabic numeral contexts automatically mirror to the right.
+  - **Expandable Quotes & Callouts**: GitHub-style alerts (`> [!NOTE]`, `> [!WARNING]`) and expandable blockquotes.
+  - **Visual Media Groups**: Native photo collages and horizontal media slideshows.
+  - **Interactive Action Buttons**: Copy-text buttons, URLs, and ephemeral interactive buttons.
+- **Cross-Platform LaTeX Sanitizer**: Mathematical expressions (`$...$`, `$$...$$`, `\(...\)`) are sanitized downstream to render flawlessly on both Android (`JLaTeXMath`) and iOS (`SwiftMath`), normalizing units (`44\ \mathrm{cm}`), decimal commas, and LaTeX operator symbols.
+
+### 2. 🛡️ Hardened Security & Zero-Slash UX
+- **Strict Single-Owner Boundary**: Xiao ignores all non-owner interactions at the network gate. Messages from unauthorized users or rogue groups are discarded with `RouteDecision::Ignore`, leaking zero information about the bot's presence.
+- **Zero-Slash Gateway**: On startup, Xiao executes `set_my_commands(&[])` to clear Telegram slash menus. Interaction is completely natural—speak naturally, drop files, send voice messages, or mention the bot.
+- **Filesystem Secret Vault**: Plaintext API keys and bot tokens are never stored in SQLite or environment dumps. They are isolated in permission-hardened local files (`~/.local/share/xiaoai/secrets/`, permissions `0o600`/`0o700`) and referenced internally via opaque `secret://` URIs.
+- **Outbound SSRF Firewall**: Remote fetches (`fetch_url`, media downloads) pass through strict IP validation, blocking RFC 1918 private subnets, loopback addresses (`127.0.0.0/8`, `::1`), link-local spaces, and SIIT/NAT64 translated ranges.
+
+### 3. 🧠 Three-Tier Memory & Multimodal Routing
+- **Tier 1 (Facts)**: Autonomous background analysis extracts long-term user facts, preferences, and technical stack details into `user_memories`.
+- **Tier 2 (Topic Summaries)**: Older conversation turns in busy chats or forum topics are periodically condensed into concise topic summaries (`scoped_summaries`), keeping active context windows lean.
+- **Tier 3 (Canonical Turns)**: Complete scoped message logs stored in SQLite WAL tables for exact replay and reference.
+- **Specialist Context Isolation**: Canonically, conversation history belongs solely to the `Main` model. Specialists (`Vision`, `Video`, `Audio STT`) only receive the immediate media artifact and user prompt, returning bounded observation turns to `Main`. This eliminates context pollution and token exhaustion.
+
+### 4. ⚡ Durable SQLite WAL Queue & Fault Isolation
+- **At-Least-Once Intake Guarantee**: Telegram long-polling commits updates directly to SQLite table `telegram_inbox` with status `pending` before Telegram acknowledgment.
+- **Per-Scope Keyed Mailboxes**: Updates are dispatched into dedicated per-scope FIFO queues (`ScopeKey { chat_id, thread_id }`). Messages within the same chat/topic maintain strict sequential order, while different chats process concurrently up to a global semaphore limit (8 permits).
+- **Panic Isolation & Bounded Retry**: Each processing task runs within an isolated `tokio::spawn` wrapper with unwinding panic protection. Transient panics release concurrency permits immediately and trigger a 1.5-second backoff sleep with up to 2 retry attempts. Updates exceeding retry limits are quarantined as `failed` ("poison pills") to prevent infinite daemon crash loops.
+- **Crash Recovery**: On process startup, `recover_telegram_processing_async()` resets in-flight `processing` updates back to `pending`, ensuring zero message loss across reboots.
 
 ---
 
-## Quickstart
+## 📦 Multi-Platform Installation
 
-### 1. Clone & Setup Environment
+Xiao is distributed as a single static binary with pure Rust dependencies. Choose your deployment environment:
+
+### Option A: Linux x86_64 Server (Systemd Service)
+
+Ideal for dedicated servers, VPS instances (Ubuntu, Debian, Arch Linux), or home servers.
+
+1. **Download the latest release binary**:
+   ```bash
+   sudo mkdir -p /usr/local/bin /var/lib/xiaoai
+   # Download xiao binary from GitHub Releases / Actions to /usr/local/bin/xiao
+   sudo chmod +x /usr/local/bin/xiao
+   ```
+
+2. **Create a dedicated system user**:
+   ```bash
+   sudo useradd -r -s /usr/sbin/nologin -d /var/lib/xiaoai xiao
+   sudo chown -R xiao:xiao /var/lib/xiaoai
+   sudo chmod 700 /var/lib/xiaoai
+   ```
+
+3. **Install the hardened Systemd service**:
+   Create `/etc/systemd/system/xiao.service`:
+   ```ini
+   [Unit]
+   Description=Xiao Telegram AI Assistant Daemon
+   After=network.target network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Type=simple
+   User=xiao
+   Group=xiao
+   WorkingDirectory=/var/lib/xiaoai
+   ExecStart=/usr/local/bin/xiao start
+   Restart=on-failure
+   RestartSec=5s
+   LimitNOFILE=65535
+
+   # Security Sandboxing
+   ProtectSystem=strict
+   ProtectHome=read-only
+   ReadWritePaths=/var/lib/xiaoai
+   PrivateTmp=true
+   NoNewPrivileges=true
+
+   Environment=XIAO_DATA_DIR=/var/lib/xiaoai
+   EnvironmentFile=-/var/lib/xiaoai/.env
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+4. **Configure credentials & start**:
+   ```bash
+   sudo cp .env.example /var/lib/xiaoai/.env
+   sudo nano /var/lib/xiaoai/.env
+   sudo chown xiao:xiao /var/lib/xiaoai/.env && sudo chmod 600 /var/lib/xiaoai/.env
+
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now xiao
+   sudo systemctl status xiao
+   ```
+
+---
+
+### Option B: Armbian / Single-Board Computers (ARM64)
+
+Optimized for Orange Pi, Raspberry Pi, Radxa, or any SBC running Armbian or Debian ARM64 (`aarch64-unknown-linux-gnu`).
+
+1. **Download pre-built ARM64 binary**:
+   GitHub Actions automatically compiles `xiao-linux-arm64-armbian` on every commit:
+   ```bash
+   sudo curl -L -o /usr/local/bin/xiao "<RELEASE_OR_ARTIFACT_URL>"
+   sudo chmod +x /usr/local/bin/xiao
+   ```
+
+2. **Quick onboarding setup**:
+   ```bash
+   # Run the interactive onboarding wizard to configure bot token and AI provider
+   xiao setup
+   ```
+
+3. **Enable systemd background service**:
+   ```bash
+   sudo systemctl enable --now xiao
+   journalctl -u xiao -f
+   ```
+
+---
+
+### Option C: Android Termux (Zero-Root Mobile Edge)
+
+Run Xiao 24/7 directly on your Android device without requiring root access.
+
+1. **Install required packages in Termux**:
+   ```bash
+   pkg update && pkg install -y git clang rust openssl termux-api
+   ```
+
+2. **Clone & build native Android binary**:
+   ```bash
+   git clone https://github.com/tsaQB/xiao-chat.git
+   cd xiao-chat
+   cargo build --release --locked
+   cp target/release/xiao $PREFIX/bin/
+   ```
+
+3. **Acquire Termux wake-lock & start daemon**:
+   ```bash
+   termux-wake-lock
+   xiao setup
+   xiao start
+   ```
+
+---
+
+### Option D: Build from Source
+
+Requirements: **Rust 1.80+** (`cargo`, `rustc`).
 
 ```bash
-git clone https://github.com/Assaqib/xiao-chat.git
+git clone https://github.com/tsaQB/xiao-chat.git
 cd xiao-chat
 
-# Copy sample configuration
+# Verify compilation
+cargo check --locked
+
+# Build optimized release binary
+cargo build --release --locked
+
+# Binary is available at target/release/xiao
+./target/release/xiao --help
+```
+
+---
+
+## ⚡ Quickstart
+
+### 1. Configure Environment
+Xiao reads configuration in the following order:
+1. `.env` in the current working directory
+2. `~/.xiao.env`
+3. `~/xiao/.env`
+4. `~/XiaoAI/.env`
+
+Create `.env` based on the template:
+```bash
 cp .env.example .env
 ```
 
-### 2. Configure Credentials
-
-Edit `.env` with your editor of choice:
-
+Edit the core settings:
 ```env
-# Required Telegram Settings
+# Required Telegram Gateway Credentials
 BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
-OWNER_USER_ID=987654321
+OWNER_USER_ID=5385399301
 
-# Default AI Provider (OpenRouter)
+# Primary AI Provider (Defaults to OpenRouter, or any OpenAI-compatible /v1 endpoint)
 AI_ENDPOINT=https://openrouter.ai/api/v1
-AI_API_KEY=sk-or-v1-...
+AI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
 AI_MODEL=google/gemini-2.0-flash-001
 ```
 
 > [!TIP]
-> **Zero-Prompt Headless Startup**: Populating `.env` allows `xiao start` to immediately auto-seed your AI provider and start the daemon with zero interactive prompts (ideal for Docker, systemd, or automated scripts).
-> Alternatively, you can run the interactive onboarding wizard anytime to configure the gateway and test connections visually:
+> **Zero-Prompt Headless Startup**: Populating `.env` allows `xiao start` to initialize the database, seed provider credentials, and run the Telegram long-polling loop with zero interactive prompts.
+> If you prefer a visual onboarding walkthrough, simply run:
 > ```bash
 > cargo run -- setup
 > ```
 
-### 3. Run Xiao
-
+### 2. Start the Daemon
 ```bash
-# Start the Telegram bot daemon
 cargo run --release -- start
 ```
 
 ---
 
-## CLI Usage
+## 💻 CLI & Terminal Chat
 
-Xiao includes an administrative and interactive CLI:
+Xiao includes a feature-rich terminal CLI for administration, diagnostics, and direct interactive chat without opening Telegram:
 
 ```bash
-xiao <command> [arguments]
+xiao <subcommand> [arguments]
 ```
 
-| Command | Description |
+### CLI Command Reference
+
+| Subcommand | Description |
 | :--- | :--- |
-| `start` | Run the Telegram polling daemon (default). |
-| `chat [prompt]` | Terminal chat mode: run an interactive REPL or execute a one-shot query without Telegram. |
-| `setup` | Interactive initial configuration wizard. |
-| `status` | Display status dashboard for SQLite database, active models, and providers. |
-| `context [chat] [th]` | Inspect estimated token consumption and breakdown for a chat/thread. |
-| `memory` | Manage Tier-1 user memories (`xiao memory`, `xiao memory rm <key>`, `xiao memory clear`). |
-| `ai` | Interactive AI hub for provider management, model switching, and diagnostics. |
-| `ai use <model>` | Switch the active Main model directly. |
-| `ai addon` | Configure multimodal specialist roles (`Vision`, `Video`, `Audio STT`, `Image Generation`, `Curator`). |
-| `ai test [role]` | Run live diagnostic capability probes against active endpoints. |
-| `mcp [action]` | Manage Model Context Protocol search endpoints (`xiao mcp`, `xiao mcp url <URL>`, `xiao mcp test`, `xiao mcp search`, `xiao mcp tools`, `xiao mcp [brave|tavily|exa]`, `xiao mcp reset`). |
-| `gateway` | Manage Telegram Bot Token connectivity and verify `OWNER_USER_ID`. |
-| `version` | Display version information. |
-| `help` | Display command-line help. |
+| `start` | Start the Telegram polling daemon (default mode). |
+| `chat [prompt]` | Terminal chat mode: run an interactive REPL or execute a one-shot query. |
+| `setup` | Interactive initial configuration and onboarding wizard. |
+| `status` | Display system status dashboard, SQLite database size, and active models. |
+| `context [chat] [th]` | Inspect token usage, sliding-window consumption, and context breakdown. |
+| `memory` | Inspect and manage Tier-1 persistent user profile memories. |
+| `memory rm <key>` | Delete a specific profile fact from Tier-1 memory. |
+| `memory clear` | Wipe all Tier-1 persistent memories. |
+| `ai` | Interactive AI hub for model catalog, capability tests, and routing. |
+| `ai use <model>` | Switch the active Main model instantly. |
+| `ai addon` | Configure multimodal specialist roles (`Vision`, `Video`, `Audio STT`, etc.). |
+| `ai test [role]` | Run live diagnostic capability probes against configured endpoints. |
+| `mcp [action]` | Manage Model Context Protocol search endpoints and tool integrations. |
+| `gateway` | Inspect Telegram Bot Token connectivity, verify owner, and test polling. |
+| `version` | Display version and target build metadata. |
+| `help` | Display command-line help screen. |
 
-### Terminal Chat REPL & Commands
-Xiao provides an interactive terminal REPL when invoked with `cargo run -- chat`:
+### Terminal Interactive REPL
+Launch direct chat mode without Telegram:
+```bash
+cargo run -- chat
+```
 
+Inside the REPL, manage independent chat sessions seamlessly:
 ```text
 Xiao Interactive Chat REPL Commands:
-  /sessions         List all conversation sessions with IDs and message counts
-  /switch <id>      Switch active conversation session
-  /rm <id>          Remove conversation session by ID
-  /new [name]       Create and switch to a new conversation session
-  /clear            Reset conversation history in the active session
+  /sessions         List all conversation sessions with IDs and turn counts
+  /switch <id>      Switch to a different conversation session
+  /new [name]       Create and switch to a new isolated session
+  /rm <id>          Remove a conversation session
+  /clear            Reset conversation history in active session
   /model            Inspect active Main model and provider endpoint
   /help             Show available REPL commands
   /exit             Exit chat mode (or Ctrl+C / Ctrl+D)
 ```
 
-You can also run one-shot queries without entering the REPL:
-
+Run one-shot queries directly from shell scripts:
 ```bash
-cargo run -- chat "Summarize recent advances in Rust async runtimes"
+xiao chat "Analyze the concurrency guarantees of SQLite in WAL mode"
 ```
 
 ---
 
-## Configuration Reference
+## 📋 Document & Media Processing
 
-Settings can be defined in `.env` (or `~/.xiao.env`, `~/xiao/.env`) or managed dynamically through the CLI and persisted in SQLite.
+Xiao inspects documents and rich media locally inside bounded memory buffers:
 
-| Variable | Default | Description |
+| Media Type | Processing & Ingestion Method |
+| :--- | :--- |
+| **Plain Text / Code** | UTF-8 sanitized ingestion (with UTF-8 BOM stripping and Latin-1 lossy fallback). |
+| **Photos & Images** | Analyzed via `Vision` specialist role (JPEG, PNG, WEBP). |
+| **Voice Notes & Audio** | Transcribed via `Audio STT` (Whisper-compatible `/v1/audio/transcriptions` endpoints). |
+| **Video & Video Notes** | Bounded frame extraction processed via `Video` specialist role. |
+| **PDF Documents** | Text extracted via `lopdf`. Scanned pages (up to 6) are rendered to images and routed to `Vision`. |
+| **DOCX Documents** | In-memory XML text and paragraph extraction. |
+| **XLSX Spreadsheets** | In-memory streaming XML parsing of sheets and shared string tables (`<si>`). |
+| **Archives (ZIP, TAR, 7Z)** | In-memory text extraction with strict safety caps: max 30 MB uncompressed, max 2 MB per file, no recursive bomb unpacking. |
+
+---
+
+## ⚙️ Configuration Reference
+
+Settings can be provided via `.env` or managed dynamically through the CLI:
+
+| Environment Variable | Default | Description |
 | :--- | :--- | :--- |
-| `BOT_TOKEN` | *Required* | Telegram Bot API token. |
-| `OWNER_USER_ID` | *Required* | Telegram numerical ID of the authorized owner. |
-| `ALLOWED_CHAT_IDS` | *Empty* | Comma-separated list of additional group chat IDs permitted to use the bot. |
-| `DEDICATED_CHAT_IDS` | *Empty* | Comma-separated list of forum supergroups configured as dedicated workspaces (answers all topics without mention). |
-| `AI_ENDPOINT` | `https://openrouter.ai/api/v1` | Base URL for OpenAI-compatible completions and chat endpoints (defaults to OpenRouter). |
+| `BOT_TOKEN` | *Required* | Telegram Bot API token from [@BotFather](https://t.me/BotFather). |
+| `OWNER_USER_ID` | *Required* | Numerical Telegram user ID of the authorized owner. |
+| `ALLOWED_CHAT_IDS` | *Empty* | Comma-separated list of guest group IDs permitted to use the bot. |
+| `DEDICATED_CHAT_IDS` | *Empty* | Comma-separated list of forum supergroups acting as dedicated workspaces. |
+| `AI_ENDPOINT` | `https://openrouter.ai/api/v1` | OpenAI-compatible completions API endpoint base URL. |
 | `AI_API_KEY` | *Required* | Bearer authentication token for the AI endpoint. |
-| `AI_MODEL` | `google/gemini-2.0-flash-001` | Default model identifier for conversation. |
+| `AI_MODEL` | `google/gemini-2.0-flash-001` | Default model identifier for general conversation. |
 | `IMAGE_FALLBACK_PROVIDER` | `none` | Fallback provider for image generation (`none` or `pollinations`). |
-| `AI_PROVIDER_CONNECT_TIMEOUT_SECS` | `10` | Connect timeout for standard AI API requests. |
+| `AI_PROVIDER_CONNECT_TIMEOUT_SECS` | `10` | HTTP connect timeout for standard AI API requests. |
 | `IMAGE_GENERATION_TIMEOUT_SECS` | `120` | Request timeout for image generation endpoints. |
 | `IMAGE_DOWNLOAD_TIMEOUT_SECS` | `30` | Timeout for retrieving generated image payloads. |
 | `BRAVE_API_KEY` | *Optional* | API key for Brave Search integration in `web_search`. |
 | `TAVILY_API_KEY` | *Optional* | API key for Tavily AI search integration. |
 | `EXA_API_KEY` | *Optional* | API key for Exa search integration. |
-| `EXA_MCP_URL` | `https://mcp.exa.ai/` | Model Context Protocol search server endpoint (keyless Exa MCP protocol). |
+| `EXA_MCP_URL` | `https://mcp.exa.ai/` | Model Context Protocol search server endpoint. |
+| `XIAO_DATA_DIR` | `~/.local/share/xiaoai` | Base filesystem directory for database, secrets, and attachments. |
 
 ---
 
-## Chat Routing & Workspaces
+## 🧪 Verification & Quality Gates
 
-Xiao enforces a multi-tier routing policy inside `ChatRouteScope`:
-
-1. **Owner Invariant**: Messages from non-owners are discarded immediately (`RouteDecision::Ignore`).
-2. **Private Chat**: 1-on-1 chats with `OWNER_USER_ID` are always active and processed.
-3. **Dedicated Personal Workspaces**:
-   - Configured via `DEDICATED_CHAT_IDS` or any forum supergroup where Xiao holds administrator rights.
-   - Xiao responds to all messages across all forum topics without requiring bot mentions, replies, or command prefixes.
-4. **Guest Groups**:
-   - Chat ID must be present in `ALLOWED_CHAT_IDS`.
-   - Requires an explicit mention (`@bot_username`) or a direct reply to one of Xiao's messages.
-5. **Native Stop**:
-   - Sending a stop command or clicking stop in Telegram dispatches a `stopped_message_generation` update.
-   - Stop signals bypass the intake queue for immediate in-flight stream cancellation.
-
----
-
-## Supported Media & Documents
-
-| Input Type | Extraction & Processing Method |
-| :--- | :--- |
-| **Plain Text** | Direct conversation, code instructions, and tool invocations. |
-| **Photos / Images** | Routed to configured `Vision` role (or `Main` if multimodal). Supports JPEG, PNG, WEBP. |
-| **Voice Notes & Audio** | Extracted via `Audio STT` (Whisper-compatible `/v1/audio/transcriptions`) or native audio processing. |
-| **Video & Video Notes** | Bounded frame extraction processed through the `Video` specialist role. |
-| **PDF Documents** | Text extracted via `lopdf`. Scanned pages (up to 6) are rendered to images and forwarded to `Vision`. |
-| **DOCX Documents** | In-memory XML text and paragraph extraction. |
-| **XLSX Documents** | In-memory XML parsing of sheets and shared string tables (`<si>`) within bounded memory quotas. |
-| **Archives (ZIP, TAR, 7Z)** | In-memory extraction of text files up to 30 MB uncompressed limit. Flat single-level inspection prevents zip bombs. |
-
----
-
-## Security Invariants
-
-> [!IMPORTANT]
-> The security boundaries below are strictly maintained across the entire codebase:
-
-- **SSRF Mitigation**: Outbound media downloads and `fetch_url` requests pass through `url_policy`. Requests targeting private IPv4/IPv6 ranges (RFC 1918, RFC 4193), loopback addresses (`127.0.0.0/8`, `::1`), link-local spaces, and SIIT/NAT64 mapped addresses are rejected.
-- **Credential Storage**: Raw API keys and bot tokens are isolated on the filesystem under `~/.local/share/xiaoai/secrets/` with strict mode `0o600` (directory `0o700`). The SQLite database retains only opaque `secret://` references.
-- **Context Privacy**: Specialist models (`Vision`, `Video`, `Audio STT`) never receive the full conversation history. They only receive the immediate media artifact and query, returning bounded observation summaries to `Main`.
-
----
-
-## Durable Processing & Operational Semantics
-
-Xiao operates with durable **at-least-once** delivery semantics backed by SQLite WAL mode:
-
-1. **Per-Scope FIFO Mailboxes**: Updates within the same conversation scope (`chat_id`, `thread_id`) are processed strictly in FIFO sequence by a dedicated scoped worker, while independent chats are processed concurrently up to a global semaphore limit (8 permits).
-2. **Panic Isolation & Bounded Retry**: Each update runs in an isolated task protected against unwinding panics:
-   - Upon transient panic, the global concurrency permit is immediately released (`drop(permit)`).
-   - The update status is marked for retry in SQLite and waits through a 1.5-second backoff sleep.
-   - The worker retries the update immediately up to a maximum of 2 attempts (`attempts <= 2`).
-   - If an update fails consecutively or exceeds 2 attempts, it is quarantined to `failed` ("poison pill") to protect the queue from infinite crash loops.
-3. **Operational Trade-Off & Duplicate Side-Effect Risk**:
-   - Because in-worker retries trigger rapidly (~1.5s) on *any* panic without killing the daemon process, external side effects executed before an unexpected panic (e.g. an outbound Telegram message draft/reply already dispatched or an intermediate turn committed to SQLite before final inbox checkpointing) **will repeat upon retry**.
-   - This is an intentional operational trade-off of at-least-once processing semantics: Xiao guarantees zero message loss over exactly-once execution.
-4. **Crash Recovery**: On daemon startup, `recover_telegram_processing_async()` resets in-flight `processing` updates back to `pending` for at-least-once replay, while pre-filtering and quarantining records with `attempts >= 2`.
-
----
-
-## Production Deployment (Systemd)
-
-For production server deployments (e.g., Ubuntu, Debian, Arch Linux), run Xiao as a managed systemd service.
-
-### Service Unit Template (`xiao.service`)
-
-Create `/etc/systemd/system/xiao.service`:
-
-```ini
-[Unit]
-Description=Xiao Telegram AI Assistant Daemon
-After=network.target network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=xiao
-Group=xiao
-WorkingDirectory=/opt/xiao-chat
-ExecStart=/opt/xiao-chat/target/release/xiao start
-Restart=on-failure
-RestartSec=5s
-LimitNOFILE=65535
-
-# Security hardening directives
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/opt/xiao-chat /var/lib/xiaoai
-PrivateTmp=true
-NoNewPrivileges=true
-
-# Environment and secrets
-Environment=XIAO_DATA_DIR=/var/lib/xiaoai
-EnvironmentFile=-/opt/xiao-chat/.env
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Installation & Management
+The codebase strictly enforces clean quality gates and zero `.unwrap()` calls across both production code and test suites:
 
 ```bash
-# 1. Create dedicated system user and runtime data directory
-sudo useradd -r -s /usr/sbin/nologin -d /var/lib/xiaoai xiao
-sudo mkdir -p /var/lib/xiaoai
-sudo chown -R xiao:xiao /var/lib/xiaoai
-sudo chmod 700 /var/lib/xiaoai
-
-# 2. Build optimized release binary
-cargo build --release --locked
-
-# 3. Install systemd unit
-sudo cp xiao.service /etc/systemd/system/xiao.service
-sudo systemctl daemon-reload
-
-# 4. Enable and start daemon
-sudo systemctl enable --now xiao
-
-# 5. Inspect daemon logs and status
-sudo systemctl status xiao
-journalctl -u xiao -f
-```
-
----
-
-## Verification & Quality Gates
-
-Run the automated quality suite locally:
-
-```bash
-# Format check
+# Code formatting check (CI enforced)
 cargo fmt --all -- --check
 
-# Compiler check
+# Compiler check without emitting binaries
 cargo check --locked
 
-# Unit tests and Bot API 10.3 contract suite
+# Unit tests and Telegram Bot API 10.3 contract suite (415+ tests)
 cargo test --locked
 
-# Clippy linter
+# Strict Clippy lint check (CI enforced)
 cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
 ---
 
-## Cross-Compilation Targets
+## 🔒 Security Invariants
 
-Xiao is regularly built and tested for:
-- **Linux x86_64**: Standard server and desktop environments.
-- **Linux aarch64 (Armbian / SBCs)**: Single-board computers like Raspberry Pi and Orange Pi (`aarch64-unknown-linux-gnu`).
-- **Android aarch64**: Native execution in Termux or standalone deployment via `cargo-ndk` (`aarch64-linux-android`).
+1. **Hard Single-Owner Invariant**: Non-owner updates are dropped silently at the gateway (`src/bot/router.rs`). Never acknowledge unauthorized Telegram IDs.
+2. **Pure Zero-Slash Gateway**: Menus are cleared on boot. Xiao interacts conversationally or via CLI.
+3. **Outbound SSRF Firewall**: Remote downloads validate target IPs against RFC 1918, RFC 4193, loopback, and SIIT/NAT64 ranges.
+4. **Secret Isolation**: Secrets are stored in `~/.local/share/xiaoai/secrets/` with mode `0o600`/`0o700`. Database only stores `secret://` URIs.
+5. **Zero `.unwrap()` Policy**: Handled idiomatically with `?`, pattern matching, or `.expect()` with descriptive invariant explanations in tests.
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
