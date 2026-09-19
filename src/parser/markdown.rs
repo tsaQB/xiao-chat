@@ -42,17 +42,11 @@ static RE_HTML_LEAKED_TAGS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)</?(?:b|strong|i|em|s|strike|del|u|ins|code|pre|blockquote|a|tg-spoiler|span|p|div|mark|kbd)(?:\s+[^>]*)?>").expect("valid static regex")
 });
 
-fn try_format_standalone_logic_symbol(inner: &str) -> Option<Value> {
+fn try_format_standalone_logic_symbol(inner: &str) -> Option<&'static str> {
     let clean_cmd = inner.trim_end_matches(r"\ ").trim();
     match clean_cmd {
-        r"\therefore" => Some(json!({
-            "type": "plain_text",
-            "text": "∴"
-        })),
-        r"\because" => Some(json!({
-            "type": "plain_text",
-            "text": "∵"
-        })),
+        r"\therefore" => Some("∴"),
+        r"\because" => Some("∵"),
         _ => None,
     }
 }
@@ -286,7 +280,7 @@ pub fn parse_inline(input_str: &str) -> Value {
                     let inner = rest[1..1 + end].trim();
                     if !inner.is_empty() {
                         if let Some(sym) = try_format_standalone_logic_symbol(inner) {
-                            out.push(sym);
+                            out.push(Value::String(sym.to_string()));
                             rest = &rest[1 + end + 1..];
                             continue;
                         }
@@ -308,7 +302,7 @@ pub fn parse_inline(input_str: &str) -> Value {
                 let inner = rest[2..2 + end].trim();
                 if !inner.is_empty() {
                     if let Some(sym) = try_format_standalone_logic_symbol(inner) {
-                        out.push(sym);
+                        out.push(Value::String(sym.to_string()));
                         rest = &rest[2 + end + 2..];
                         continue;
                     }
@@ -3218,13 +3212,15 @@ Contoh inline: $44\text{cm}$ dan $7,5\text{hari}$."#;
         };
         assert_eq!(cells.len(), 5);
 
-        // Row 1: \therefore -> text "∴"
+        // Row 1: \therefore -> text "∴" (must be plain string, not unsupported plain_text entity)
         let cell_therefore = serde_json::to_string(&cells[1][0]).expect("cell serializes");
         assert!(cell_therefore.contains(r#""text":"∴""#));
+        assert!(!cell_therefore.contains(r#""type":"plain_text""#));
 
-        // Row 2: \because -> text "∵"
+        // Row 2: \because -> text "∵" (must be plain string, not unsupported plain_text entity)
         let cell_because = serde_json::to_string(&cells[2][0]).expect("cell serializes");
         assert!(cell_because.contains(r#""text":"∵""#));
+        assert!(!cell_because.contains(r#""type":"plain_text""#));
 
         // Row 3: \implies -> mathematical_expression \implies
         let cell_implies = serde_json::to_string(&cells[3][0]).expect("cell serializes");
@@ -3233,5 +3229,41 @@ Contoh inline: $44\text{cm}$ dan $7,5\text{hari}$."#;
         // Row 4: \impliedby -> normalized to \Longleftarrow for SwiftMath
         let cell_impliedby = serde_json::to_string(&cells[4][0]).expect("cell serializes");
         assert!(cell_impliedby.contains(r#""expression":"\\Longleftarrow""#));
+    }
+
+    #[test]
+    fn test_reproduce_math_logic_table_no_unsupported_plain_text() {
+        let md = r#"### 4. Logika Matematika & Pembuktian
+
+| Simbol | Nama / Arti | Makna / Contoh |
+| :---: | :--- | :--- |
+| $\neg$ / $\sim$ | Negasi / Ingkaran | Menyangkal pernyataan ("bukan" / $\neg P$) |
+| $\land$ | Konjungsi | Logika "dan" ($P \land Q$) |
+| $\lor$ | Disjungsi | Logika "atau" ($P \lor Q$) |
+| $\oplus$ | *Exclusive OR* (XOR) | Benar jika salah satu benar, tapi tidak keduanya |
+| $\implies$ / $\to$ | Implikasi | "Jika $P$ maka $Q$" ($P \implies Q$) |
+| $\iff$ / $\leftrightarrow$ | Biimplikasi | "Jika dan hanya jika" ($P \iff Q$) |
+| $\forall$ | Kuantor Universal | "Untuk setiap / untuk semua" ($\forall x \in \mathbb{R}$) |
+| $\exists$ | Kuantor Eksistensial | "Ada / terdapat setidaknya satu" ($\exists x$) |
+| $\nexists$ | Negasi Eksistensial | "Tidak ada" |
+| $\exists!$ | Keunikan | "Ada tepat satu" |
+| $\therefore$ | Maka / Oleh karena itu | Penarikan kesimpulan (*Therefore*) |
+| $\because$ | Karena | Memberikan alasan (*Because*) |
+| $\blacksquare$ / Q.E.D. | Akhir pembuktian | *Quod Erat Demonstrandum* (telah terbukti) |
+"#;
+        let blocks = parse_markdown_to_rich_blocks(md);
+        let msg = crate::bot::models::InputRichMessage::new(blocks);
+        let val_res = msg.validate();
+        assert!(val_res.is_ok(), "Validation failed: {:?}", val_res);
+
+        let json_str = serde_json::to_string(&msg).expect("serialize rich message");
+        assert!(
+            !json_str.contains(r#""type":"plain_text""#),
+            "Telegram Bot API rejects 'plain_text' as an unsupported rich text type"
+        );
+        assert!(
+            !json_str.contains(r#""plain_text""#),
+            "No plain_text discriminator should ever appear in rich message entities"
+        );
     }
 }
