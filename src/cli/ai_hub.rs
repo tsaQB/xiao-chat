@@ -632,7 +632,6 @@ pub(crate) async fn run_cli_model_picker(ai_service: &AIChatService, initial_fil
     }
 }
 
-
 pub(crate) async fn run_cli_addon_menu(ai_service: &AIChatService) {
     load_environment();
     loop {
