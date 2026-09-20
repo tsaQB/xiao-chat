@@ -74,7 +74,7 @@ async fn run_interactive_memory_menu(owner_id: i64) {
 
         match idx {
             0 => {
-                println!("\n\x1b[1;36m== Stored Long-Term Facts (Tier 1) ==\x1b[0m");
+                crate::cli::tui::print_mini_header("Stored Long-Term Facts (Tier 1)");
                 if memories.is_empty() {
                     println!("  \x1b[38;5;244m(No facts stored yet. Xiao will automatically remember important facts during conversations.)\x1b[0m\n");
                 } else {
@@ -246,7 +246,7 @@ pub(crate) async fn run_cli_memory(
             }
 
             let memories = crate::ai::storage::get_user_memories_async(owner_id).await;
-            println!("\n\x1b[1;36m== Xiao Long-Term Memory (Tier 1 Facts) ==\x1b[0m");
+            crate::cli::tui::print_mini_header("Xiao Long-Term Memory (Tier 1 Facts)");
             println!("  \x1b[38;5;245mOwner ID :\x1b[0m \x1b[1;37m{owner_id}\x1b[0m");
             println!(
                 "  \x1b[38;5;245mTotal    :\x1b[0m \x1b[1;37m{} facts remembered\x1b[0m\n",

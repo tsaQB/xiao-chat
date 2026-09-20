@@ -104,7 +104,7 @@ fn handle_search_key_subcommand(key_name: &str, provider_label: &str, target: Op
 }
 
 pub fn print_tools_summary() {
-    println!("\n\x1b[1;36m== Registered Function Calling Tools ==\x1b[0m\n");
+    crate::cli::tui::print_mini_header("Registered Function Calling Tools");
     let tools_value = crate::ai::tools::get_tools_definition();
     if let Some(tools_arr) = tools_value.as_array() {
         for item in tools_arr {
@@ -150,20 +150,36 @@ async fn run_cli_configure_keys_submenu() {
             .map(mask_api_key)
             .unwrap_or_else(|| "(not set)".to_string());
 
+        let bar_width = crate::cli::tui::get_terminal_bar_width();
+        let pkg_ver = env!("CARGO_PKG_VERSION");
+        let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › MCP › Search API Keys\x1b[0m";
+        let title_left_vis = 2 + 7 + 2 + 28;
+        let ver_str = format!("v{pkg_ver}");
+        let ver_vis = crate::cli::tui::visible_width(&ver_str);
+        let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
+        let mini_header = format!(
+            "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m",
+            " ".repeat(pad),
+            "─".repeat(bar_width.saturating_sub(4))
+        );
+
+        let hud_rows = [
+            ("BRAVE SEARCH", brave_mask.as_str()),
+            ("TAVILY SEARCH", tavily_mask.as_str()),
+            ("EXA REST", exa_mask.as_str()),
+        ];
+        let hud =
+            crate::cli::tui::render_hud_box("SEARCH API KEYS TELEMETRY", &hud_rows, bar_width);
+
         let title = format!(
-            "== Configure Search API Keys ==\r\n\
-             • Brave Search API: {}\r\n\
-             • Tavily Search API: {}\r\n\
-             • Exa REST API:     {}\r\n\r\n  \
-             Select Provider to Configure:",
-            brave_mask, tavily_mask, exa_mask
+            "{mini_header}\r\n\r\n{hud}\r\n\r\n  \x1b[1;37mSelect Provider to Configure:\x1b[0m"
         );
 
         let items = vec![
-            format!("Brave Search API      (Current: {brave_mask})"),
-            format!("Tavily Search API     (Current: {tavily_mask})"),
-            format!("Exa REST API          (Current: {exa_mask})"),
-            "Back                  (Return to MCP Menu)".to_string(),
+            "Brave Search API           (Fast privacy-focused web search)".to_string(),
+            "Tavily Search API          (AI-agent optimized search engine)".to_string(),
+            "Exa REST API               (Neural semantic search engine)".to_string(),
+            "Back to MCP Menu           (Return to Search & MCP Hub)".to_string(),
         ];
 
         let sel = terminal_interactive_select(&title, &items, 0, false, None);
@@ -460,9 +476,7 @@ pub(crate) async fn run_cli_mcp_hub(
                 return;
             }
 
-            println!(
-                "\n\x1b[1;36mModel Context Protocol (MCP) & Web Search Configuration\x1b[0m\n"
-            );
+            crate::cli::tui::print_mini_header("Search Engine & MCP Tool Hub");
             println!(
                 "  \x1b[38;5;245mActive Engine :\x1b[0m \x1b[1;37m{}\x1b[0m",
                 search_engine_str

@@ -292,8 +292,7 @@ pub(crate) async fn run_cli_provider_menu(ai_service: &AIChatService, action: Op
 }
 
 pub(crate) async fn run_cli_provider_add(ai_service: &AIChatService) {
-    println!("\n\x1b[1;36mAdd New AI Provider\x1b[0m");
-    println!("\x1b[38;5;238m────────────────────────────────────────────────────────────\x1b[0m");
+    crate::cli::tui::print_mini_header("AI Hub › Add New AI Provider");
 
     let stdin = io::stdin();
     let mut reader = stdin.lock();
@@ -452,8 +451,21 @@ pub(crate) async fn run_cli_provider_remove(ai_service: &AIChatService) {
         })
         .collect();
 
-    let selected =
-        terminal_interactive_select("Select Provider to Remove:", &items, 0, false, None);
+    let bar_width = crate::cli::tui::get_terminal_bar_width();
+    let pkg_ver = env!("CARGO_PKG_VERSION");
+    let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › AI Hub › Remove Provider\x1b[0m";
+    let title_left_vis = 2 + 7 + 2 + 31;
+    let ver_str = format!("v{pkg_ver}");
+    let ver_vis = crate::cli::tui::visible_width(&ver_str);
+    let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
+    let mini_header = format!(
+        "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m",
+        " ".repeat(pad),
+        "─".repeat(bar_width.saturating_sub(4))
+    );
+    let title = format!("{mini_header}\r\n\r\n  \x1b[1;37mSelect Provider to Remove:\x1b[0m");
+
+    let selected = terminal_interactive_select(&title, &items, 0, false, None);
 
     if let Some(idx) = selected {
         let target = store.providers[idx].clone();
@@ -1129,10 +1141,7 @@ pub(crate) async fn run_cli_probe_all_active(ai_service: &AIChatService) {
 }
 
 async fn run_cli_probe_test_role(ai_service: &AIChatService, role: ModelRole) {
-    println!(
-        "\n\x1b[1;36mDiagnostics & Live Test: {}\x1b[0m",
-        role.display_name()
-    );
+    crate::cli::tui::print_mini_header(&format!("Diagnostic Probe › {}", role.display_name()));
     println!("  Optional route diagnostics, not a requirement for usage...");
     match ai_service
         .probe_addon_role_with_observer(role, print_probe_event)
@@ -1165,48 +1174,48 @@ async fn run_cli_probe_test_role(ai_service: &AIChatService, role: ModelRole) {
 }
 
 async fn run_cli_probe_test_image_gen(ai_service: &AIChatService) {
-    println!("\n\x1b[1;36mLive Test: Image Generation\x1b[0m");
+    crate::cli::tui::print_mini_header("Diagnostic Probe › Image Generation");
     println!(
-        "\x1b[33mWarning: This test will generate a test image and may consume API credits.\x1b[0m"
+        "  \x1b[33mWarning: This test will generate a test image and may consume API credits.\x1b[0m"
     );
-    print!("Proceed with test? [y/N]: ");
+    print!("  Proceed with test? [y/N]: ");
     let _ = io::stdout().flush();
     let mut ans = String::new();
     let _ = io::stdin().read_line(&mut ans);
     if !ans.trim().eq_ignore_ascii_case("y") {
-        println!("○ Test cancelled.");
+        println!("  ○ Test cancelled.\n");
         return;
     }
 
-    println!("Generating test image...");
+    println!("  Generating test image...");
     match ai_service
         .probe_image_generation_active_with_observer(ModelRole::ImageGeneration, print_probe_event)
         .await
     {
         Ok((_rec, ProbeOutcome::Supported)) => {
             println!(
-                "  \x1b[1;32m✔ Success: Image generated successfully and passed runtime validation.\x1b[0m"
+                "  \x1b[1;32m✔ Success: Image generated successfully and passed runtime validation.\x1b[0m\n"
             );
         }
         Ok((rec, outcome)) => {
             println!(
-                "  \x1b[31m✖ Failed: Probe result {:?}, saved status {:?}.\x1b[0m",
+                "  \x1b[31m✖ Failed: Probe result {:?}, saved status {:?}.\x1b[0m\n",
                 outcome,
                 rec.effective_state_for(CapabilityKind::ImageGeneration)
             );
         }
         Err(e) => {
-            println!("  \x1b[31m✖ Error: {e}\x1b[0m");
+            println!("  \x1b[31m✖ Error: {e}\x1b[0m\n");
         }
     }
 }
 
 async fn run_cli_probe_show_registry() {
     let registry = crate::ai::service::load_capability_registry();
-    println!(
-        "\n\x1b[1;36mCapability Registry (Total {} models):\x1b[0m\n",
+    crate::cli::tui::print_mini_header(&format!(
+        "Capability Registry ({} models)",
         registry.models.len()
-    );
+    ));
     if registry.models.is_empty() {
         println!("  \x1b[38;5;244mNo model capabilities saved in registry yet.\x1b[0m\n");
         return;

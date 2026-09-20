@@ -247,7 +247,7 @@ pub(crate) async fn run_cli_gateway_hub(action: Option<&str>, target: Option<&st
 
 pub(crate) async fn check_telegram_connection() -> bool {
     load_environment();
-    println!("\n\x1b[1;36mTelegram Gateway Status\x1b[0m");
+    crate::cli::tui::print_mini_header("Telegram Gateway Status");
 
     let token = get_configured_token().unwrap_or_default();
     if token.is_empty() || token == "YOUR_TELEGRAM_BOT_TOKEN_HERE" {
