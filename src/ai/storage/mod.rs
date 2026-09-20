@@ -342,6 +342,7 @@ mod tests {
     fn xiao_data_dir_resolves_xdg_data_home_when_configured() {
         let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
         let orig_xiao = std::env::var("XIAO_DATA_DIR").ok();
+        #[cfg(windows)]
         let orig_appdata = std::env::var("APPDATA").ok();
         let orig_xdg = std::env::var("XDG_DATA_HOME").ok();
 
