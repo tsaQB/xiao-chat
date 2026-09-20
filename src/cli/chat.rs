@@ -145,6 +145,7 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
     ];
     let hud = crate::cli::tui::render_hud_box("ACTIVE CHAT SESSION", &hud_rows, bar_width);
     println!("{hud}\r\n");
+    println!("  \x1b[38;5;244mTip: Type /help for chat commands, or run '\x1b[1;37mxiao menu\x1b[0m\x1b[38;5;244m' for Control Center.\x1b[0m\r\n");
 
     let stdin = io::stdin();
     loop {
@@ -293,6 +294,7 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
                     println!(
                         "  \x1b[36m/exit\x1b[0m           - Exit chat mode (or Ctrl+C / Ctrl+D)\n"
                     );
+                    println!("  \x1b[38;5;244mTip: Run '\x1b[1;37mxiao menu\x1b[0m\x1b[38;5;244m' outside chat to access the full Control Center.\x1b[0m\n");
                     continue;
                 }
                 ChatCliCommand::Unknown(cmd_str) => {

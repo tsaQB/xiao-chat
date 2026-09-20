@@ -159,7 +159,15 @@ async fn main() {
     let ai_service = Arc::new(AIChatService::new());
 
     match subcommand {
-        None | Some("menu") => {
+        None => {
+            if std::io::stdout().is_terminal() {
+                run_cli_chat(&ai_service, None).await;
+            } else {
+                print_cli_help();
+            }
+            return;
+        }
+        Some("menu") => {
             if std::io::stdout().is_terminal() {
                 run_cli_launcher(&ai_service).await;
             } else {

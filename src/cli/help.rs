@@ -3,13 +3,14 @@ pub(crate) fn print_cli_help() {
     crate::cli::tui::print_mini_header("Help & Command Reference");
 
     println!("\n  \x1b[1;37mUsage:\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao\x1b[0m                                \x1b[38;5;250mStart terminal chat (default)\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao\x1b[0m \x1b[38;5;245m<command>\x1b[0m \x1b[38;5;245m[arguments...]\x1b[0m\n");
 
     println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mCORE\x1b[0m");
-    println!("    \x1b[1;38;5;45mstart\x1b[0m                     \x1b[38;5;250mRun bot daemon (default)\x1b[0m");
-    println!("    \x1b[1;38;5;45mchat\x1b[0m \x1b[38;5;245m[prompt]\x1b[0m             \x1b[38;5;250mInteractive terminal chat or one-shot prompt\x1b[0m");
+    println!("    \x1b[1;38;5;45mchat\x1b[0m \x1b[38;5;245m[prompt]\x1b[0m             \x1b[38;5;250mTerminal chat or one-shot prompt\x1b[0m");
     println!("    \x1b[1;38;5;45mmenu\x1b[0m                      \x1b[38;5;250mOpen interactive Control Center (TUI)\x1b[0m");
-    println!("    \x1b[1;38;5;45msetup\x1b[0m                     \x1b[38;5;250mInteractive first-time setup wizard\x1b[0m\n");
+    println!("    \x1b[1;38;5;45msetup\x1b[0m                     \x1b[38;5;250mInteractive first-time setup wizard\x1b[0m");
+    println!("    \x1b[1;38;5;45mstart\x1b[0m                     \x1b[38;5;250mRun Telegram bot daemon\x1b[0m\n");
 
     println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mAI & INTELLIGENCE\x1b[0m");
     println!("    \x1b[1;38;5;45mai\x1b[0m \x1b[38;5;245m[use|list|add|test]\x1b[0m    \x1b[38;5;250mManage models, providers, & multimodal routes\x1b[0m");
@@ -29,6 +30,8 @@ pub(crate) fn print_cli_help() {
     );
 
     println!("  \x1b[1;37mQuick Examples:\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao\x1b[0m                             \x1b[38;5;242m# Start chatting immediately\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao menu\x1b[0m                        \x1b[38;5;242m# Open Control Center TUI\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao chat \"Explain Rust async\"\x1b[0m   \x1b[38;5;242m# One-shot terminal query\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao ai use gpt-4o\x1b[0m               \x1b[38;5;242m# Instantly switch active main model\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao context\x1b[0m                     \x1b[38;5;242m# View current session context gauge\x1b[0m");

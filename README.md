@@ -306,9 +306,11 @@ xiao <subcommand> [arguments]
 
 | Subcommand | Description |
 | :--- | :--- |
-| `start` | Start the Telegram polling daemon (default mode). |
+| *(none)* | Start terminal chat session (default mode; auto-launches setup on first run). |
+| `menu` | Open interactive Control Center (TUI). |
 | `chat [prompt]` | Terminal chat mode: run an interactive REPL or execute a one-shot query. |
 | `setup` | Interactive initial configuration and onboarding wizard. |
+| `start` | Start the Telegram polling daemon. |
 | `status` | Display system status dashboard, SQLite database size, and active models. |
 | `context [chat] [th]` | Inspect token usage, sliding-window consumption, and context breakdown. |
 | `memory` | Inspect and manage Tier-1 persistent user profile memories. |
@@ -326,7 +328,9 @@ xiao <subcommand> [arguments]
 ### Terminal Interactive REPL
 Launch direct chat mode without Telegram:
 ```bash
-cargo run -- chat
+xiao
+# Or with cargo:
+cargo run
 ```
 
 Inside the REPL, manage independent chat sessions seamlessly:
