@@ -1,5 +1,5 @@
 use crate::ai::AIChatService;
-use crate::cli::tui::get_terminal_bar_width;
+use crate::cli::tui::{get_terminal_bar_width, print_mini_header, render_hud_box};
 use crate::{get_configured_owner_id, load_environment};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -66,13 +66,13 @@ pub(crate) async fn run_cli_context(
             println!("If omitted, defaults to the owner's private chat session.\n");
         }
         ContextCliArgs::InvalidChatId(s) => {
-            println!("\x1b[31m✖ Error: Chat ID '{s}' harus berupa angka (integer).\x1b[0m");
-            println!("  Jalankan 'xiao context help' untuk panduan penggunaan.\n");
+            println!("\x1b[31m✖ Error: Chat ID '{s}' must be an integer.\x1b[0m");
+            println!("  Run 'xiao context help' for usage instructions.\n");
             std::process::exit(1);
         }
         ContextCliArgs::InvalidThreadId(s) => {
-            println!("\x1b[31m✖ Error: Thread ID '{s}' harus berupa angka (integer).\x1b[0m");
-            println!("  Jalankan 'xiao context help' untuk panduan penggunaan.\n");
+            println!("\x1b[31m✖ Error: Thread ID '{s}' must be an integer.\x1b[0m");
+            println!("  Run 'xiao context help' for usage instructions.\n");
             std::process::exit(1);
         }
         ContextCliArgs::Inspect {
@@ -87,41 +87,47 @@ pub(crate) async fn run_cli_context(
                 .get_scoped_context_stats(chat_id, thread_id, owner_id)
                 .await;
             let bar_width = get_terminal_bar_width();
+            print_mini_header("Context Window & Token Breakdown");
 
-            println!("\n\x1b[1;36m== Xiao Context Window & Memory Gauge ==\x1b[0m\n");
-            println!(
-                "  \x1b[38;5;245mScope           :\x1b[0m \x1b[1;37m{}\x1b[0m \x1b[38;5;244m(chat: {chat_id}, thread: {thread_id})\x1b[0m",
+            let scope_val = format!(
+                "{} (chat: {chat_id}, thread: {thread_id})",
                 stats.session_name
             );
-            println!(
-                "  \x1b[38;5;245mMain Model      :\x1b[0m \x1b[1;37m{}\x1b[0m",
-                stats.model_name
+            let model_val = stats.model_name.clone();
+            let limit_val = format!("{} tokens ({})", stats.limit_tokens, stats.limit_str);
+            let usage_val = format!(
+                "{} tokens (~{} chars) · {:.1}%",
+                stats.total_tokens, stats.total_chars, stats.usage_pct
             );
-            println!("  \x1b[38;5;245mContext Limit   :\x1b[0m \x1b[1;37m{} tokens\x1b[0m \x1b[38;5;244m({})\x1b[0m", stats.limit_tokens, stats.limit_str);
-            println!("  \x1b[38;5;245mActive Tokens   :\x1b[0m \x1b[1;37m{} tokens\x1b[0m \x1b[38;5;244m(~{} chars)\x1b[0m", stats.total_tokens, stats.total_chars);
-            println!(
-                "  \x1b[38;5;245mOutput Reserve  :\x1b[0m \x1b[1;37m{} tokens\x1b[0m",
-                stats.output_reserve_tokens
-            );
-            println!("  \x1b[38;5;245mSliding Window  :\x1b[0m \x1b[1;37m{} messages\x1b[0m \x1b[38;5;244m({} turns)\x1b[0m", stats.total_messages, stats.total_turns);
-            println!(
-                "  \x1b[38;5;245mAttachments     :\x1b[0m \x1b[1;37m{}\x1b[0m",
-                stats.attachment_count
-            );
+            let reserve_val = format!("{} tokens", stats.output_reserve_tokens);
+
+            let hud_rows = [
+                ("ACTIVE SESSION", scope_val.as_str()),
+                ("MAIN MODEL", model_val.as_str()),
+                ("CONTEXT LIMIT", limit_val.as_str()),
+                ("TOKEN USAGE", usage_val.as_str()),
+                ("OUTPUT RESERVE", reserve_val.as_str()),
+            ];
+            let hud = render_hud_box("TOKEN & CONTEXT BUDGET", &hud_rows, bar_width);
+            println!("\n{hud}");
 
             let gauge_len = 30;
             let (bar, gauge_color) = format_context_gauge(stats.usage_pct, gauge_len);
-            println!("\n  \x1b[1;37mContext Utilization:\x1b[0m");
+            println!("\n  \x1b[1;37m▸ CONTEXT UTILIZATION GAUGE\x1b[0m");
             println!(
-                "  {}[{}]\x1b[0m \x1b[1;37m{:.1}%\x1b[0m",
+                "    {}[{}]\x1b[0m \x1b[1;37m{:.1}%\x1b[0m",
                 gauge_color, bar, stats.usage_pct
             );
 
             let memories = crate::ai::storage::get_user_memories_async(owner_id).await;
-            println!("\n  \x1b[1;37mLong-Term Facts (Tier 1):\x1b[0m \x1b[1;36m{} facts stored\x1b[0m \x1b[38;5;244m(manage with 'xiao memory')\x1b[0m", memories.len());
+            println!("\n  \x1b[1;37m▸ TIER-1 LONG-TERM FACTS\x1b[0m");
+            println!(
+                "    • Total Stored   : \x1b[1;36m{} facts recorded\x1b[0m \x1b[38;5;244m(manage with 'xiao memory')\x1b[0m",
+                memories.len()
+            );
 
             if !stats.messages_breakdown.is_empty() {
-                println!("\n  \x1b[1;37mActive Sliding Window Breakdown (Recent):\x1b[0m");
+                println!("\n  \x1b[1;37m▸ SLIDING WINDOW BREAKDOWN (RECENT)\x1b[0m");
                 println!(
                     "  \x1b[38;5;238m{}\x1b[0m",
                     "─".repeat(bar_width.saturating_sub(4))

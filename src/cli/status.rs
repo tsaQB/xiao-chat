@@ -5,6 +5,7 @@ use crate::ai::service::{
 };
 use crate::ai::AIChatService;
 use crate::bot::client::TelegramBotClient;
+use crate::cli::tui::{get_terminal_bar_width, print_mini_header, render_hud_box};
 use crate::{get_configured_owner_id, load_environment};
 
 pub(crate) fn addon_route_text(route: &ModelRoute, providers: &[ProviderConfig]) -> String {
@@ -24,7 +25,8 @@ pub(crate) fn addon_route_text(route: &ModelRoute, providers: &[ProviderConfig])
 
 pub(crate) async fn run_cli_status(ai_service: &AIChatService) {
     load_environment();
-    println!("\n\x1b[1;36mxiao Status\x1b[0m\n");
+    let bar_width = get_terminal_bar_width();
+    print_mini_header("System Health & Telemetry Status");
 
     let token = env::var("BOT_TOKEN")
         .ok()
@@ -33,8 +35,8 @@ pub(crate) async fn run_cli_status(ai_service: &AIChatService) {
     let owner_id = get_configured_owner_id();
 
     // 1. Gateway Status
-    if token.is_empty() || token == "YOUR_TELEGRAM_BOT_TOKEN_HERE" {
-        println!("  Gateway      ○ Telegram: Belum dikonfigurasi (Jalankan 'xiao gateway')");
+    let gateway_str = if token.is_empty() || token == "YOUR_TELEGRAM_BOT_TOKEN_HERE" {
+        "○ Telegram: Not configured".to_string()
     } else {
         let bot = TelegramBotClient::new(&token);
         match bot.get_me().await {
@@ -44,16 +46,14 @@ pub(crate) async fn run_cli_status(ai_service: &AIChatService) {
                     let owner_str = owner_id
                         .map(|id| format!(" · Owner: {id}"))
                         .unwrap_or_default();
-                    println!("  Gateway      ● Telegram (@{uname}{owner_str})");
+                    format!("● Telegram (@{uname}{owner_str})")
                 } else {
-                    println!("  Gateway      ✖ Telegram: Tidak ada info bot");
+                    "✖ Telegram: No bot info".to_string()
                 }
             }
-            Ok(_) | Err(_) => {
-                println!("  Gateway      ✖ Telegram: Token tidak valid / Error koneksi");
-            }
+            Ok(_) | Err(_) => "✖ Telegram: Invalid token / Connection error".to_string(),
         }
-    }
+    };
 
     // 2. Provider & Model Status (evidence-based)
     let store = load_provider_store();
@@ -63,31 +63,52 @@ pub(crate) async fn run_cli_status(ai_service: &AIChatService) {
         store.providers.first().cloned()
     };
 
-    if let Some(p) = active_p {
+    let (provider_str, model_str, cap_record) = if let Some(ref p) = active_p {
         let (ok, res) = ai_service
             .fetch_models_from_endpoint(&p.endpoint, &p.api_key)
             .await;
         let provider_health = if ok {
             format!(
-                "\x1b[32mHealthy\x1b[0m ({} models available)",
+                "Healthy ({} models available)",
                 res.map(|m| m.len()).unwrap_or(p.models.len())
             )
         } else {
             let err = res.err().unwrap_or_else(|| "unreachable".to_string());
-            format!("\x1b[31mUnhealthy\x1b[0m ({err})")
+            format!("Unhealthy ({err})")
         };
-
-        println!("  Provider     ● {} — {}", p.name, provider_health);
-        println!(
-            "  Main Model   ◆ {} ({} configured models)",
+        let p_str = format!("● {} — {}", p.name, provider_health);
+        let m_str = format!(
+            "◆ {} ({} configured models)",
             p.active_model,
             p.models.len()
         );
-
-        let cap_record = ai_service
+        let cap = ai_service
             .capability_record(&p.endpoint, &p.active_model)
             .await;
-        println!("\n  \x1b[1;37mModel Capabilities (Evidence-Based):\x1b[0m");
+        (p_str, m_str, cap)
+    } else {
+        (
+            "○ No active AI Provider".to_string(),
+            "○ None".to_string(),
+            None,
+        )
+    };
+
+    // 3. Web Search & Tools Status
+    let (search_engine_str, mcp_url) = crate::ai::tools::get_search_engine_status();
+
+    let hud_rows = [
+        ("GATEWAY", gateway_str.as_str()),
+        ("MAIN PROVIDER", provider_str.as_str()),
+        ("MAIN MODEL", model_str.as_str()),
+        ("SEARCH PIPELINE", search_engine_str.as_str()),
+    ];
+    let hud = render_hud_box("SYSTEM INFRASTRUCTURE", &hud_rows, bar_width);
+    println!("\n{hud}");
+
+    // Tagged section 1: Model Capabilities
+    if active_p.is_some() {
+        println!("\n  \x1b[1;37m▸ MODEL CAPABILITIES (Evidence-Based)\x1b[0m");
 
         let text_chat_state = cap_record
             .as_ref()
@@ -173,12 +194,10 @@ pub(crate) async fn run_cli_status(ai_service: &AIChatService) {
                 "Context Limit", ctx
             );
         }
-    } else {
-        println!("  Provider     ○ Belum ada AI Provider (Jalankan 'xiao provider')");
     }
 
-    // 3. Addon Routing
-    println!("\nAddon Routes:");
+    // Tagged section 2: Addon Routing
+    println!("\n  \x1b[1;37m▸ MULTIMODAL SPECIALIST ROUTES\x1b[0m");
     let providers = ai_service.get_user_providers(0).await;
     let routing = ai_service.model_routing_config().await;
     for role in ModelRole::addon_roles() {
@@ -191,14 +210,16 @@ pub(crate) async fn run_cli_status(ai_service: &AIChatService) {
             Ok(_) => "\x1b[32mavailable\x1b[0m",
             Err(_) => "\x1b[38;5;244munavailable\x1b[0m",
         };
-        println!("  {:<12} → {} ({health})", role.display_name(), route_text);
+        println!(
+            "    • {:<14} → {} ({health})",
+            role.display_name(),
+            route_text
+        );
     }
 
-    // 4. Web Search & Tools Status
-    println!("\nWeb Search & Tools:");
-    let (search_engine_str, mcp_url) = crate::ai::tools::get_search_engine_status();
-    println!("  Search Engine → {}", search_engine_str);
-    println!("  MCP Hosted    → {}", mcp_url);
-    println!("  Fetch Engine  → \x1b[32mEnabled\x1b[0m (Auto Link Reader & Extract)");
-    println!();
+    // Tagged section 3: Web Search & Tools Status
+    println!("\n  \x1b[1;37m▸ WEB SEARCH & MCP PIPELINE\x1b[0m");
+    println!("    • Search Engine  → {}", search_engine_str);
+    println!("    • MCP Hosted     → {}", mcp_url);
+    println!("    • Fetch Engine   → \x1b[32mEnabled\x1b[0m (Auto Link Reader & Extract)\n");
 }

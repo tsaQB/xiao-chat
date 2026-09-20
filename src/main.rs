@@ -152,77 +152,64 @@ pub(crate) fn get_configured_token() -> Option<String> {
 #[tokio::main]
 async fn main() {
     load_environment();
+    use std::io::IsTerminal;
     let args: Vec<String> = env::args().collect();
-    let subcommand = args.get(1).map(|s| s.as_str()).unwrap_or("start");
+    let subcommand = args.get(1).map(|s| s.as_str());
 
     let ai_service = Arc::new(AIChatService::new());
 
     match subcommand {
-        "-v" | "--version" | "version" => {
+        None | Some("menu") => {
+            if std::io::stdout().is_terminal() {
+                run_cli_launcher(&ai_service).await;
+            } else {
+                print_cli_help();
+            }
+            return;
+        }
+        Some("-v") | Some("--version") | Some("version") => {
             println!("xiao v{}", env!("CARGO_PKG_VERSION"));
             return;
         }
-        "ai" => {
+        Some("ai") => {
             let action_arg = args.get(2).map(|s| s.as_str());
             let target_arg = args.get(3).map(|s| s.as_str());
             run_cli_ai_hub(&ai_service, action_arg, target_arg).await;
             return;
         }
-        "setup" => {
+        Some("setup") => {
             let _ = run_cli_quickstart_wizard(&ai_service).await;
             return;
         }
-        "status" => {
+        Some("status") => {
             run_cli_status(&ai_service).await;
             return;
         }
-        "context" => {
+        Some("context") => {
             let chat_arg = args.get(2).map(|s| s.as_str());
             let thread_arg = args.get(3).map(|s| s.as_str());
             run_cli_context(&ai_service, chat_arg, thread_arg).await;
             return;
         }
-        "memory" => {
+        Some("memory") => {
             let action_arg = args.get(2).map(|s| s.as_str());
             let target_arg = args.get(3).map(|s| s.as_str());
             run_cli_memory(&ai_service, action_arg, target_arg).await;
             return;
         }
-        "gateway" => {
+        Some("gateway") => {
             let action_arg = args.get(2).map(|s| s.as_str());
             let target_arg = args.get(3).map(|s| s.as_str());
             run_cli_gateway_hub(action_arg, target_arg).await;
             return;
         }
-        "mcp" => {
+        Some("mcp") => {
             let action_arg = args.get(2).map(|s| s.as_str());
             let target_arg = args.get(3).map(|s| s.as_str());
             run_cli_mcp_hub(&ai_service, action_arg, target_arg).await;
             return;
         }
-        "doctor" | "probe" => {
-            run_cli_probe_menu(&ai_service).await;
-            return;
-        }
-        "provider" => {
-            let action_arg = args.get(2).map(|s| s.as_str());
-            run_cli_provider_menu(&ai_service, action_arg).await;
-            return;
-        }
-        "model" => {
-            let filter_arg = args.get(2).map(|s| s.as_str());
-            if filter_arg == Some("addon") || filter_arg == Some("addons") {
-                run_cli_addon_menu(&ai_service).await;
-            } else {
-                run_cli_model_picker(&ai_service, filter_arg).await;
-            }
-            return;
-        }
-        "addon" => {
-            run_cli_addon_menu(&ai_service).await;
-            return;
-        }
-        "chat" => {
+        Some("chat") => {
             let prompt_arg = if args.len() > 2 {
                 Some(args[2..].join(" "))
             } else {
@@ -231,15 +218,15 @@ async fn main() {
             run_cli_chat(&ai_service, prompt_arg).await;
             return;
         }
-        "help" | "--help" | "-h" => {
+        Some("help") | Some("--help") | Some("-h") => {
             print_cli_help();
             return;
         }
-        "start" => {
+        Some("start") => {
             crate::bot::daemon::run_daemon(ai_service).await;
         }
-        unknown => {
-            println!("\x1b[31m✖ Error: Perintah '{unknown}' tidak dikenal. Jalankan 'xiao help' untuk bantuan.\x1b[0m");
+        Some(unknown) => {
+            println!("\x1b[31m✖ Error: Unknown command '{unknown}'. Run 'xiao help' for usage instructions.\x1b[0m");
             std::process::exit(1);
         }
     }

@@ -60,12 +60,27 @@ pub async fn bootstrap_bot(
                 error!("Telegram getMe returned ok=true without a result");
                 std::process::exit(1);
             };
-            println!(
-                "\n🚀 xiao @{} online menggunakan Telegram Bot API 10.3!",
-                bot_info.username.as_deref().unwrap_or_default()
+            let bar_width = crate::cli::tui::get_terminal_bar_width();
+            let uname = bot_info.username.as_deref().unwrap_or("XiaoBot");
+            let first_name = bot_info.first_name.as_str();
+            let bot_val = format!(
+                "\x1b[38;2;16;185;129m●\x1b[0m \x1b[1;37m@{uname}\x1b[0m \x1b[38;5;244m({first_name})\x1b[0m"
             );
-            println!("⚡ Streaming Timeline + Native Stop Active!");
-            println!("🌐 Custom OpenAI-Compatible Provider Setup Active (via CLI)\n");
+            let proto_val = "\x1b[38;2;6;182;212m●\x1b[0m \x1b[1;37mTelegram Bot API 10.3\x1b[0m \x1b[38;5;244m(Rich Messages + Drafts)\x1b[0m";
+            let timeline_val = "\x1b[38;2;139;92;246m●\x1b[0m \x1b[1;37mStreaming Timeline\x1b[0m \x1b[38;5;244m· Native Stop Button Active\x1b[0m";
+            let engine_val = "\x1b[38;2;16;185;129m●\x1b[0m \x1b[1;37mOpenAI-Compatible Core\x1b[0m \x1b[38;5;244m· Long-Polling Active\x1b[0m";
+
+            let daemon_rows = [
+                ("BOT NAME", bot_val.as_str()),
+                ("PROTOCOL", proto_val),
+                ("RUNTIME", timeline_val),
+                ("ENGINE", engine_val),
+            ];
+            crate::cli::tui::print_mini_header("Daemon Service");
+            let hud =
+                crate::cli::tui::render_hud_box("TELEGRAM DAEMON ACTIVE", &daemon_rows, bar_width);
+            println!("{hud}");
+            println!("\n  \x1b[38;5;244mService actively running. Press \x1b[1;37m[Ctrl+C]\x1b[0m \x1b[38;5;244mto stop daemon.\x1b[0m\n");
             (Some(bot_info.id), bot_info.username)
         }
         Ok(resp) => {
@@ -145,7 +160,7 @@ pub async fn poll_loop(
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                println!("\n🛑 Menerima sinyal berhenti (SIGINT). Bot dimatikan secara aman.");
+                println!("\nReceived shutdown signal (SIGINT). Shutting down gracefully.");
                 break;
             }
             _ = async {
@@ -204,7 +219,7 @@ pub async fn poll_loop(
                 #[cfg(not(any(unix, windows)))]
                 std::future::pending::<()>().await;
             } => {
-                println!("\n🛑 Menerima sinyal terminasi. Bot dimatikan secara aman.");
+                println!("\nReceived termination signal. Shutting down gracefully.");
                 break;
             }
             updates_res = bot.get_updates(

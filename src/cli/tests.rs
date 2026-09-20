@@ -4,11 +4,13 @@ use crate::cli::ai_hub::{find_model_in_store, parse_ai_cli_action, AiCliAction};
 use crate::cli::chat::{parse_chat_cli_command, ChatCliCommand};
 use crate::cli::context::{format_context_gauge, parse_context_cli_args, ContextCliArgs};
 use crate::cli::gateway::{parse_gateway_cli_action, GatewayCliAction};
+use crate::cli::launcher::build_telemetry_hud;
 use crate::cli::mcp::{mask_api_key, parse_mcp_cli_action, McpCliAction};
 use crate::cli::memory::{parse_memory_cli_action, MemoryCliAction};
 use crate::cli::status::addon_route_text;
 use crate::cli::tui::{
-    cycle_next, cycle_prev, format_tui_title, get_terminal_bar_width, visible_width, MENU_BAR_WIDTH,
+    cycle_next, cycle_prev, format_tui_title, get_terminal_bar_width, truncate_visible,
+    visible_width, MENU_BAR_WIDTH,
 };
 
 #[test]
@@ -122,24 +124,35 @@ fn test_interactive_cursor_wrap_around() {
 fn test_visible_width() {
     assert_eq!(visible_width(""), 0);
     assert_eq!(visible_width("Hello World"), 11);
-    assert_eq!(visible_width("\x1b[1;32m[AKTIF]\x1b[0m"), 7);
+    assert_eq!(visible_width("\x1b[1;32m[ACTIVE]\x1b[0m"), 8);
     assert_eq!(visible_width("\x1b[38;5;81m ▸ \x1b[0m"), 3);
     assert_eq!(
         visible_width("\x1b[48;5;237m\x1b[1;38;5;81m ▸ \x1b[1;37m 1. Model\x1b[0m"),
         12
     );
     assert_eq!(
-        visible_width("OpenAI \x1b[1;32m[AKTIF]\x1b[0m (gpt-4o)"),
-        23
+        visible_width("OpenAI \x1b[1;32m[ACTIVE]\x1b[0m (gpt-4o)"),
+        24
+    );
+}
+
+#[test]
+fn test_truncate_visible() {
+    assert_eq!(truncate_visible("Hello World", 20), "Hello World");
+    assert_eq!(truncate_visible("Hello World", 11), "Hello World");
+    assert_eq!(truncate_visible("Hello World", 8), "Hello W…\x1b[0m");
+    assert_eq!(
+        truncate_visible("\x1b[1;32mHello World\x1b[0m", 8),
+        "\x1b[1;32mHello W…\x1b[0m"
     );
 }
 
 #[test]
 fn test_format_tui_title() {
     // Single line title
-    let single = format_tui_title("Pilih Main Model:");
+    let single = format_tui_title("Select Main Model:");
     assert_eq!(single.len(), 1);
-    assert!(single[0].contains("Pilih Main Model:"));
+    assert!(single[0].contains("Select Main Model:"));
     assert!(single[0].contains("\x1b[1;38;5;45m"));
 
     // Single line already containing ANSI
@@ -163,6 +176,30 @@ fn test_format_tui_title() {
 fn test_menu_bar_width_bounds() {
     let width = get_terminal_bar_width();
     assert!((40..=MENU_BAR_WIDTH).contains(&width));
+}
+
+#[test]
+fn test_build_telemetry_hud() {
+    let hud = build_telemetry_hud("○ Not connected", "○ No active Provider", "Exa MCP", 76);
+    let lines: Vec<&str> = hud.lines().collect();
+    assert_eq!(lines.len(), 5);
+    assert!(lines[0].contains("STATUS TELEMETRY"));
+    assert!(lines[1].contains("GATEWAY"));
+    assert!(lines[2].contains("MAIN AI"));
+    assert!(lines[3].contains("SEARCH"));
+    assert!(lines[4].contains('╰'));
+
+    // Check visible widths of all lines match
+    let w0 = visible_width(lines[0]);
+    let w1 = visible_width(lines[1]);
+    let w2 = visible_width(lines[2]);
+    let w3 = visible_width(lines[3]);
+    let w4 = visible_width(lines[4]);
+    assert_eq!(w0, 74);
+    assert_eq!(w1, 74);
+    assert_eq!(w2, 74);
+    assert_eq!(w3, 74);
+    assert_eq!(w4, 74);
 }
 
 #[test]
@@ -446,4 +483,98 @@ fn test_addon_route_text() {
         ),
         "unknown_p :: custom-model"
     );
+}
+
+#[test]
+fn test_normalize_endpoint_url() {
+    use crate::cli::wizard::normalize_endpoint_url;
+
+    // 1. Standard HTTPS
+    assert_eq!(
+        normalize_endpoint_url("https://cpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+
+    // 2. Trailing slashes
+    assert_eq!(
+        normalize_endpoint_url("https://cpa.oxygen.web.id/v1/").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+
+    // 3. Domain without scheme (auto-infers https)
+    assert_eq!(
+        normalize_endpoint_url("cpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+
+    // 4. Domain without /v1 path (auto-appends /v1)
+    assert_eq!(
+        normalize_endpoint_url("cpa.oxygen.web.id").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+
+    // 5. Localhost and 127.0.0.1 (auto-infers http and appends /v1 if missing)
+    assert_eq!(
+        normalize_endpoint_url("127.0.0.1:8317/v1").as_deref(),
+        Ok("http://127.0.0.1:8317/v1")
+    );
+    assert_eq!(
+        normalize_endpoint_url("127.0.0.1:8317").as_deref(),
+        Ok("http://127.0.0.1:8317/v1")
+    );
+    assert_eq!(
+        normalize_endpoint_url("localhost:11434").as_deref(),
+        Ok("http://localhost:11434/v1")
+    );
+
+    // 6. Typo variations for https scheme
+    assert_eq!(
+        normalize_endpoint_url("https:cpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+    assert_eq!(
+        normalize_endpoint_url("https//cpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+    assert_eq!(
+        normalize_endpoint_url("https/cpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+    assert_eq!(
+        normalize_endpoint_url("https cpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+    assert_eq!(
+        normalize_endpoint_url("https: //cpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+    assert_eq!(
+        normalize_endpoint_url("https:// cpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+
+    // 7. Directly attached without delimiter
+    assert_eq!(
+        normalize_endpoint_url("httpscpa.oxygen.web.id/v1").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+
+    // 8. Single-word remote domains (preserves host name)
+    assert_eq!(
+        normalize_endpoint_url("httpserver.com/v1").as_deref(),
+        Ok("https://httpserver.com/v1")
+    );
+
+    // 9. Surrounding quotes & angle brackets
+    assert_eq!(
+        normalize_endpoint_url("<https://cpa.oxygen.web.id/v1>").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+    assert_eq!(
+        normalize_endpoint_url("\"https://cpa.oxygen.web.id/v1\"").as_deref(),
+        Ok("https://cpa.oxygen.web.id/v1")
+    );
+
+    // 10. Errors
+    assert!(normalize_endpoint_url("   ").is_err());
 }

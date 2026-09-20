@@ -1,4 +1,7 @@
+use std::io::{self, IsTerminal, Write};
+
 use crate::ai::AIChatService;
+use crate::cli::tui::{get_terminal_bar_width, terminal_interactive_select, visible_width};
 use crate::load_environment;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,9 +58,9 @@ fn handle_search_key_subcommand(key_name: &str, provider_label: &str, target: Op
     match target {
         Some("rm") | Some("remove") | Some("clear") => {
             if crate::ai::service::save_app_setting(key_name, "").is_ok() {
-                println!("\n\x1b[1;32m✔ {provider_label} key berhasil dihapus.\x1b[0m\n");
+                println!("\n\x1b[1;32m✔ {provider_label} key successfully removed.\x1b[0m\n");
             } else {
-                println!("\n\x1b[31m✖ Gagal menghapus {provider_label} key.\x1b[0m\n");
+                println!("\n\x1b[31m✖ Failed to remove {provider_label} key.\x1b[0m\n");
                 std::process::exit(1);
             }
         }
@@ -65,11 +68,11 @@ fn handle_search_key_subcommand(key_name: &str, provider_label: &str, target: Op
             let trimmed = new_key.trim();
             if crate::ai::service::save_app_setting(key_name, trimmed).is_ok() {
                 println!(
-                    "\n\x1b[1;32m✔ {provider_label} key berhasil disimpan:\x1b[0m {}\n",
+                    "\n\x1b[1;32m✔ {provider_label} key successfully saved:\x1b[0m {}\n",
                     mask_api_key(trimmed)
                 );
             } else {
-                println!("\n\x1b[31m✖ Gagal menyimpan {provider_label} key ke database.\x1b[0m\n");
+                println!("\n\x1b[31m✖ Failed to save {provider_label} key to database.\x1b[0m\n");
                 std::process::exit(1);
             }
         }
@@ -100,6 +103,344 @@ fn handle_search_key_subcommand(key_name: &str, provider_label: &str, target: Op
     }
 }
 
+pub fn print_tools_summary() {
+    println!("\n\x1b[1;36m== Registered Function Calling Tools ==\x1b[0m\n");
+    let tools_value = crate::ai::tools::get_tools_definition();
+    if let Some(tools_arr) = tools_value.as_array() {
+        for item in tools_arr {
+            let func = item.get("function").unwrap_or(item);
+            let name = func
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let desc = func
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            println!("  \x1b[1;32m▸ {}\x1b[0m", name);
+            println!("     \x1b[38;5;252m{}\x1b[0m", desc.trim());
+            if let Some(params) = func.get("parameters") {
+                if let Ok(pretty) = serde_json::to_string_pretty(params) {
+                    for line in pretty.lines() {
+                        println!("     \x1b[38;5;244m{}\x1b[0m", line);
+                    }
+                }
+            }
+            println!();
+        }
+    }
+}
+
+async fn run_cli_configure_keys_submenu() {
+    loop {
+        let brave_key = crate::ai::tools::get_brave_key();
+        let tavily_key = crate::ai::tools::get_tavily_key();
+        let exa_key = crate::ai::tools::get_exa_key();
+
+        let brave_mask = brave_key
+            .as_deref()
+            .map(mask_api_key)
+            .unwrap_or_else(|| "(not set)".to_string());
+        let tavily_mask = tavily_key
+            .as_deref()
+            .map(mask_api_key)
+            .unwrap_or_else(|| "(not set)".to_string());
+        let exa_mask = exa_key
+            .as_deref()
+            .map(mask_api_key)
+            .unwrap_or_else(|| "(not set)".to_string());
+
+        let title = format!(
+            "== Configure Search API Keys ==\r\n\
+             • Brave Search API: {}\r\n\
+             • Tavily Search API: {}\r\n\
+             • Exa REST API:     {}\r\n\r\n  \
+             Select Provider to Configure:",
+            brave_mask, tavily_mask, exa_mask
+        );
+
+        let items = vec![
+            format!("Brave Search API      (Current: {brave_mask})"),
+            format!("Tavily Search API     (Current: {tavily_mask})"),
+            format!("Exa REST API          (Current: {exa_mask})"),
+            "Back                  (Return to MCP Menu)".to_string(),
+        ];
+
+        let sel = terminal_interactive_select(&title, &items, 0, false, None);
+        let Some(idx) = sel else { break };
+
+        let (key_name, label) = match idx {
+            0 => ("BRAVE_API_KEY", "Brave Search API"),
+            1 => ("TAVILY_API_KEY", "Tavily Search API"),
+            2 => ("EXA_API_KEY", "Exa REST API"),
+            _ => break,
+        };
+
+        println!("\n\x1b[1;36mConfigure {label}\x1b[0m");
+        print!("Enter new API key (or 'rm' to remove, or press Enter to cancel): ");
+        let _ = io::stdout().flush();
+        let mut input = String::new();
+        let _ = io::stdin().read_line(&mut input);
+        let trimmed = input.trim();
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.eq_ignore_ascii_case("rm") || trimmed.eq_ignore_ascii_case("remove") {
+            if crate::ai::service::save_app_setting(key_name, "").is_ok() {
+                println!("\x1b[1;32m✔ {label} key removed.\x1b[0m\n");
+            } else {
+                println!("\x1b[31m✖ Failed to remove {label} key.\x1b[0m\n");
+            }
+        } else if crate::ai::service::save_app_setting(key_name, trimmed).is_ok() {
+            println!(
+                "\x1b[1;32m✔ {label} key saved:\x1b[0m {}\n",
+                mask_api_key(trimmed)
+            );
+        } else {
+            println!("\x1b[31m✖ Failed to save {label} key.\x1b[0m\n");
+        }
+
+        print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
+        let _ = io::stdout().flush();
+        let mut tmp = String::new();
+        let _ = io::stdin().read_line(&mut tmp);
+    }
+}
+
+async fn run_interactive_mcp_menu() {
+    loop {
+        load_environment();
+        let current_mcp_url = crate::ai::tools::get_configured_mcp_url();
+        let (search_engine_str, _) = crate::ai::tools::get_search_engine_status();
+        let brave_key = crate::ai::tools::get_brave_key();
+        let tavily_key = crate::ai::tools::get_tavily_key();
+        let exa_key = crate::ai::tools::get_exa_key();
+
+        let brave_mask = brave_key
+            .as_deref()
+            .map(mask_api_key)
+            .unwrap_or_else(|| "not set".to_string());
+        let tavily_mask = tavily_key
+            .as_deref()
+            .map(mask_api_key)
+            .unwrap_or_else(|| "not set".to_string());
+        let exa_mask = exa_key
+            .as_deref()
+            .map(mask_api_key)
+            .unwrap_or_else(|| "not set".to_string());
+
+        let bar_width = get_terminal_bar_width();
+        let pkg_ver = env!("CARGO_PKG_VERSION");
+        let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › Search Engine & MCP Tool Hub\x1b[0m";
+        let title_left_vis = 2 + 7 + 2 + 35;
+        let ver_str = format!("v{pkg_ver}");
+        let ver_vis = visible_width(&ver_str);
+        let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
+        let mini_header = format!(
+            "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m",
+            " ".repeat(pad),
+            "─".repeat(bar_width.saturating_sub(4))
+        );
+
+        let keys_val = format!(
+            "\x1b[38;5;252mBrave: \x1b[1;36m{}\x1b[0m \x1b[38;5;244m·\x1b[0m \x1b[38;5;252mTavily: \x1b[1;36m{}\x1b[0m \x1b[38;5;244m·\x1b[0m \x1b[38;5;252mExa: \x1b[1;36m{}\x1b[0m",
+            brave_mask, tavily_mask, exa_mask
+        );
+
+        let hud_rows = [
+            ("ACTIVE ENGINE", search_engine_str.as_str()),
+            ("MCP ENDPOINT", current_mcp_url.as_str()),
+            ("SEARCH KEYS", keys_val.as_str()),
+        ];
+        let hud =
+            crate::cli::tui::render_hud_box("SEARCH ENGINE & MCP TELEMETRY", &hud_rows, bar_width);
+
+        let title = format!("{mini_header}\r\n\r\n{hud}\r\n\r\n  \x1b[1;37mSelect Action:\x1b[0m");
+
+        let items = vec![
+            "Test Web Search Pipeline        (Execute live query with active search engine)"
+                .to_string(),
+            "Probe Exa MCP Protocol          (Direct JSON-RPC health check to MCP endpoint)"
+                .to_string(),
+            "Configure Search API Keys       (Brave Search, Tavily Search, Exa REST)".to_string(),
+            "Set Custom MCP Endpoint         (Configure custom endpoint URL with SSRF guard)"
+                .to_string(),
+            "View Registered Tools & Schema   (Inspect function schemas exposed to LLM)"
+                .to_string(),
+            "Reset MCP to Default            (Restore official https://mcp.exa.ai/)".to_string(),
+            "Back to Main Menu               (Exit to Xiao Control Center)".to_string(),
+        ];
+
+        let sel = terminal_interactive_select(&title, &items, 0, false, None);
+        let Some(idx) = sel else { break };
+
+        match idx {
+            0 => {
+                println!("\n\x1b[1;36mTest Web Search Pipeline\x1b[0m");
+                print!("Enter search query [default: 'Rust 2021 edition release notes']: ");
+                let _ = io::stdout().flush();
+                let mut query_input = String::new();
+                let _ = io::stdin().read_line(&mut query_input);
+                let trimmed = query_input.trim();
+                let query = if trimmed.is_empty() {
+                    "Rust 2021 edition release notes"
+                } else {
+                    trimmed
+                };
+
+                println!("\n\x1b[1;36mExecuting Web Search...\x1b[0m");
+                println!("  Active Engine : {}", search_engine_str);
+                println!("  Query         : {}\n", query);
+                let start = std::time::Instant::now();
+                let result = crate::ai::tools::execute_web_search(query).await;
+                let elapsed = start.elapsed().as_millis();
+                if result.starts_with("Error")
+                    || result.contains("tidak dapat menemukan hasil")
+                    || result.contains("could not find results")
+                    || result.contains("no results found")
+                {
+                    println!(
+                        "\x1b[33m⚠ Search finished ({elapsed}ms) with message:\x1b[0m\n{}\n",
+                        result.trim()
+                    );
+                } else {
+                    println!(
+                        "\x1b[1;32m✔ Successfully retrieved search results ({elapsed}ms)\x1b[0m\n"
+                    );
+                    let preview = if result.len() > 500 {
+                        &result[..500]
+                    } else {
+                        &result
+                    };
+                    println!(
+                        "\x1b[38;5;244mResult Snippet:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
+                        preview.trim()
+                    );
+                }
+
+                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
+                let _ = io::stdout().flush();
+                let mut tmp = String::new();
+                let _ = io::stdin().read_line(&mut tmp);
+            }
+            1 => {
+                println!("\n\x1b[1;36mProbe Exa MCP Endpoint\x1b[0m");
+                print!("Enter probe query [default: 'Rust 2021 edition release notes']: ");
+                let _ = io::stdout().flush();
+                let mut query_input = String::new();
+                let _ = io::stdin().read_line(&mut query_input);
+                let trimmed = query_input.trim();
+                let query = if trimmed.is_empty() {
+                    "Rust 2021 edition release notes"
+                } else {
+                    trimmed
+                };
+
+                println!("\n\x1b[1;36mProbing MCP Endpoint...\x1b[0m");
+                println!("  Endpoint : {}", current_mcp_url);
+                println!("  Query    : {}\n", query);
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(15))
+                    .build()
+                    .unwrap_or_default();
+                let start = std::time::Instant::now();
+                match crate::ai::tools::search_exa_mcp(&client, &current_mcp_url, query).await {
+                    Ok(result) => {
+                        let elapsed = start.elapsed().as_millis();
+                        println!(
+                            "\x1b[1;32m✔ Successfully connected to MCP ({elapsed}ms)\x1b[0m\n"
+                        );
+                        let preview = if result.len() > 400 {
+                            &result[..400]
+                        } else {
+                            &result
+                        };
+                        println!(
+                            "\x1b[38;5;244mResponse Snippet:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
+                            preview.trim()
+                        );
+                    }
+                    Err(err) => {
+                        let elapsed = start.elapsed().as_millis();
+                        println!(
+                            "\x1b[31m✖ Failed to probe MCP ({elapsed}ms): {}\x1b[0m\n",
+                            err
+                        );
+                    }
+                }
+
+                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
+                let _ = io::stdout().flush();
+                let mut tmp = String::new();
+                let _ = io::stdin().read_line(&mut tmp);
+            }
+            2 => {
+                run_cli_configure_keys_submenu().await;
+            }
+            3 => {
+                println!("\n\x1b[1;36mSet Custom MCP Endpoint URL\x1b[0m");
+                print!("Enter endpoint URL (e.g. https://mcp.exa.ai/): ");
+                let _ = io::stdout().flush();
+                let mut url_input = String::new();
+                let _ = io::stdin().read_line(&mut url_input);
+                let trimmed = url_input.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                match crate::bot::url_policy::resolve_download_url(trimmed).await {
+                    Ok(_) => {
+                        if crate::ai::service::save_app_setting("EXA_MCP_URL", trimmed).is_ok() {
+                            println!(
+                                "\n\x1b[1;32m✔ MCP endpoint successfully saved:\x1b[0m {}\n",
+                                trimmed
+                            );
+                        } else {
+                            println!(
+                                "\n\x1b[31m✖ Failed to save MCP configuration to database.\x1b[0m\n"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        println!(
+                            "\n\x1b[31m✖ URL rejected by security policy (SSRF/Protocol): {}\x1b[0m\n",
+                            err
+                        );
+                    }
+                }
+                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
+                let _ = io::stdout().flush();
+                let mut tmp = String::new();
+                let _ = io::stdin().read_line(&mut tmp);
+            }
+            4 => {
+                print_tools_summary();
+                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
+                let _ = io::stdout().flush();
+                let mut tmp = String::new();
+                let _ = io::stdin().read_line(&mut tmp);
+            }
+            5 => {
+                let default_url = "https://mcp.exa.ai/";
+                if crate::ai::service::save_app_setting("EXA_MCP_URL", default_url).is_ok() {
+                    println!(
+                        "\n\x1b[1;32m✔ MCP endpoint successfully reset to default:\x1b[0m {}\n",
+                        default_url
+                    );
+                } else {
+                    println!("\n\x1b[31m✖ Failed to reset MCP configuration.\x1b[0m\n");
+                }
+                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
+                let _ = io::stdout().flush();
+                let mut tmp = String::new();
+                let _ = io::stdin().read_line(&mut tmp);
+            }
+            _ => break,
+        }
+    }
+}
+
 pub(crate) async fn run_cli_mcp_hub(
     _ai_service: &AIChatService,
     action: Option<&str>,
@@ -114,6 +455,11 @@ pub(crate) async fn run_cli_mcp_hub(
 
     match parse_mcp_cli_action(action, target) {
         McpCliAction::Status => {
+            if io::stdout().is_terminal() {
+                run_interactive_mcp_menu().await;
+                return;
+            }
+
             println!(
                 "\n\x1b[1;36mModel Context Protocol (MCP) & Web Search Configuration\x1b[0m\n"
             );
@@ -183,36 +529,12 @@ pub(crate) async fn run_cli_mcp_hub(
             println!("     \x1b[36mxiao mcp reset\x1b[0m               Reset MCP endpoint to https://mcp.exa.ai/\n");
         }
         McpCliAction::Tools => {
-            println!("\n\x1b[1;36m== Registered Function Calling Tools ==\x1b[0m\n");
-            let tools_value = crate::ai::tools::get_tools_definition();
-            if let Some(tools_arr) = tools_value.as_array() {
-                for item in tools_arr {
-                    let func = item.get("function").unwrap_or(item);
-                    let name = func
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    let desc = func
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    println!("  \x1b[1;32m🔧 {}\x1b[0m", name);
-                    println!("     \x1b[38;5;252m{}\x1b[0m", desc.trim());
-                    if let Some(params) = func.get("parameters") {
-                        if let Ok(pretty) = serde_json::to_string_pretty(params) {
-                            for line in pretty.lines() {
-                                println!("     \x1b[38;5;244m{}\x1b[0m", line);
-                            }
-                        }
-                    }
-                    println!();
-                }
-            }
+            print_tools_summary();
         }
         McpCliAction::Url(tgt) => {
             let Some(raw_url) = tgt else {
-                println!("\n\x1b[31m✖ Error: Parameter <URL> diperlukan.\x1b[0m");
-                println!("  Penggunaan: xiao mcp url <URL>\n");
+                println!("\n\x1b[31m✖ Error: <URL> parameter is required.\x1b[0m");
+                println!("  Usage: xiao mcp url <URL>\n");
                 std::process::exit(1);
             };
             let trimmed = raw_url.trim();
@@ -220,18 +542,21 @@ pub(crate) async fn run_cli_mcp_hub(
                 Ok(_) => {
                     if crate::ai::service::save_app_setting("EXA_MCP_URL", trimmed).is_ok() {
                         println!(
-                            "\n\x1b[1;32m✔ MCP endpoint berhasil disimpan:\x1b[0m {}\n",
+                            "\n\x1b[1;32m✔ MCP endpoint successfully saved:\x1b[0m {}\n",
                             trimmed
                         );
                     } else {
                         println!(
-                            "\n\x1b[31m✖ Gagal menyimpan konfigurasi MCP ke database.\x1b[0m\n"
+                            "\n\x1b[31m✖ Failed to save MCP configuration to database.\x1b[0m\n"
                         );
                         std::process::exit(1);
                     }
                 }
                 Err(err) => {
-                    println!("\n\x1b[31m✖ URL ditolak oleh kebijakan keamanan (SSRF/Protokol): {}\x1b[0m\n", err);
+                    println!(
+                        "\n\x1b[31m✖ URL rejected by security policy (SSRF/Protocol): {}\x1b[0m\n",
+                        err
+                    );
                     std::process::exit(1);
                 }
             }
@@ -249,20 +574,23 @@ pub(crate) async fn run_cli_mcp_hub(
             match crate::ai::tools::search_exa_mcp(&client, &current_mcp_url, query).await {
                 Ok(result) => {
                     let elapsed = start.elapsed().as_millis();
-                    println!("\x1b[1;32m✔ Sukses terhubung ke MCP ({elapsed}ms)\x1b[0m\n");
+                    println!("\x1b[1;32m✔ Successfully connected to MCP ({elapsed}ms)\x1b[0m\n");
                     let preview = if result.len() > 400 {
                         &result[..400]
                     } else {
                         &result
                     };
                     println!(
-                        "\x1b[38;5;244mCuplikan Respons:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
+                        "\x1b[38;5;244mResponse Snippet:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
                         preview.trim()
                     );
                 }
                 Err(err) => {
                     let elapsed = start.elapsed().as_millis();
-                    println!("\x1b[31m✖ Gagal probe MCP ({elapsed}ms): {}\x1b[0m\n", err);
+                    println!(
+                        "\x1b[31m✖ Failed to probe MCP ({elapsed}ms): {}\x1b[0m\n",
+                        err
+                    );
                     std::process::exit(1);
                 }
             }
@@ -275,20 +603,26 @@ pub(crate) async fn run_cli_mcp_hub(
             let start = std::time::Instant::now();
             let result = crate::ai::tools::execute_web_search(query).await;
             let elapsed = start.elapsed().as_millis();
-            if result.starts_with("Error") || result.contains("tidak dapat menemukan hasil") {
+            if result.starts_with("Error")
+                || result.contains("tidak dapat menemukan hasil")
+                || result.contains("could not find results")
+                || result.contains("no results found")
+            {
                 println!(
-                    "\x1b[33m⚠ Search selesai ({elapsed}ms) dengan pesan:\x1b[0m\n{}\n",
+                    "\x1b[33m⚠ Search finished ({elapsed}ms) with message:\x1b[0m\n{}\n",
                     result.trim()
                 );
             } else {
-                println!("\x1b[1;32m✔ Sukses mendapatkan hasil pencarian ({elapsed}ms)\x1b[0m\n");
+                println!(
+                    "\x1b[1;32m✔ Successfully retrieved search results ({elapsed}ms)\x1b[0m\n"
+                );
                 let preview = if result.len() > 500 {
                     &result[..500]
                 } else {
                     &result
                 };
                 println!(
-                    "\x1b[38;5;244mCuplikan Hasil:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
+                    "\x1b[38;5;244mResult Snippet:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
                     preview.trim()
                 );
             }
@@ -306,17 +640,17 @@ pub(crate) async fn run_cli_mcp_hub(
             let default_url = "https://mcp.exa.ai/";
             if crate::ai::service::save_app_setting("EXA_MCP_URL", default_url).is_ok() {
                 println!(
-                    "\n\x1b[1;32m✔ MCP endpoint berhasil direset ke default:\x1b[0m {}\n",
+                    "\n\x1b[1;32m✔ MCP endpoint successfully reset to default:\x1b[0m {}\n",
                     default_url
                 );
             } else {
-                println!("\n\x1b[31m✖ Gagal mereset konfigurasi MCP.\x1b[0m\n");
+                println!("\n\x1b[31m✖ Failed to reset MCP configuration.\x1b[0m\n");
                 std::process::exit(1);
             }
         }
         McpCliAction::Unknown(unknown) => {
-            println!("\n\x1b[31m✖ Error: Sub-perintah 'mcp {unknown}' tidak dikenal.\x1b[0m");
-            println!("  Jalankan 'xiao mcp help' atau 'xiao help' untuk panduan penggunaan.\n");
+            println!("\n\x1b[31m✖ Error: Unknown sub-command 'mcp {unknown}'.\x1b[0m");
+            println!("  Run 'xiao mcp help' or 'xiao help' for usage instructions.\n");
             std::process::exit(1);
         }
     }

@@ -80,11 +80,11 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
     load_environment();
 
     if !ai_service.has_configured_provider(0).await {
-        println!("\n\x1b[33m⚠ Belum ada AI Provider yang terkonfigurasi.\x1b[0m");
-        println!("\x1b[38;5;244mMenjalankan Setup Wizard untuk konfigurasi awal...\x1b[0m\n");
+        println!("\n\x1b[33m⚠ No AI Provider configured yet.\x1b[0m");
+        println!("\x1b[38;5;244mLaunching Setup Wizard for initial configuration...\x1b[0m\n");
         let _ = run_cli_quickstart_wizard(ai_service).await;
         if !ai_service.has_configured_provider(0).await {
-            println!("\n\x1b[31m✖ Setup dibatalkan. Tidak ada provider aktif untuk chat.\x1b[0m\n");
+            println!("\n\x1b[31m✖ Setup cancelled. No active provider for chat.\x1b[0m\n");
             return;
         }
     }
@@ -92,7 +92,7 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
     let main_route = match ai_service.resolve_model_route(ModelRole::Main).await {
         Ok(r) => r,
         Err(e) => {
-            println!("\n\x1b[31m✖ Error: Main Model tidak tersedia: {e}\x1b[0m\n");
+            println!("\n\x1b[31m✖ Error: Main Model not available: {e}\x1b[0m\n");
             return;
         }
     };
@@ -112,36 +112,53 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
 
     // Interactive REPL mode
     let bar_width = get_terminal_bar_width();
-    println!("\x1b[1;38;5;45m== Xiao Terminal Chat ==\x1b[0m");
+    let pkg_ver = env!("CARGO_PKG_VERSION");
+    let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › Terminal Chat REPL\x1b[0m";
+    let title_left_vis = 2 + 7 + 2 + 25;
+    let ver_str = format!("v{pkg_ver}");
+    let ver_vis = crate::cli::tui::visible_width(&ver_str);
+    let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
     println!(
-        " \x1b[38;5;245m• Model   :\x1b[0m \x1b[1;37m{} \x1b[38;5;244m({})\x1b[0m",
-        model_name, provider_name
+        "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m\r\n",
+        " ".repeat(pad),
+        "─".repeat(bar_width.saturating_sub(4))
     );
+
     let active_session = ai_service.get_active_session(user_id).await;
-    if let Some(sess) = active_session {
-        println!(
-            " \x1b[38;5;245m• Session :\x1b[0m \x1b[1;37m#{} — {}\x1b[0m \x1b[38;5;244m({} pesan)\x1b[0m",
-            sess.id, sess.name, sess.messages.len()
-        );
-    }
-    println!(
-        " \x1b[38;5;245m• Bantuan :\x1b[0m \x1b[38;5;244mKetik pesan lalu tekan Enter. Perintah: /clear, /new, /sessions, /switch, /exit\x1b[0m"
-    );
-    println!("\x1b[38;5;238m{}\x1b[0m\n", "─".repeat(bar_width));
+    let sess_str = if let Some(sess) = &active_session {
+        format!(
+            "● #{} — {} ({} messages)",
+            sess.id,
+            sess.name,
+            sess.messages.len()
+        )
+    } else {
+        "● #1 — Default Chat (0 messages)".to_string()
+    };
+    let model_str = format!("● {model_name} ({provider_name})");
+    let cmd_str = "/help · /new · /sessions · /switch · /clear · /exit";
+
+    let hud_rows = [
+        ("MAIN MODEL", model_str.as_str()),
+        ("CHAT SESSION", sess_str.as_str()),
+        ("REPL COMMANDS", cmd_str),
+    ];
+    let hud = crate::cli::tui::render_hud_box("ACTIVE CHAT SESSION", &hud_rows, bar_width);
+    println!("{hud}\r\n");
 
     let stdin = io::stdin();
     loop {
-        print!("\x1b[1;38;5;81mYou ▸ \x1b[0m");
+        print!("  \x1b[1;38;5;45mYou ▸ \x1b[0m");
         let _ = io::stdout().flush();
 
         let mut input = String::new();
         match stdin.read_line(&mut input) {
             Ok(0) => {
-                println!("\n\x1b[38;5;244mChat selesai.\x1b[0m\n");
+                println!("\n\x1b[38;5;244mChat finished.\x1b[0m\n");
                 break;
             }
             Err(_) => {
-                println!("\n\x1b[38;5;244mChat selesai.\x1b[0m\n");
+                println!("\n\x1b[38;5;244mChat finished.\x1b[0m\n");
                 break;
             }
             Ok(_) => {}
@@ -155,23 +172,23 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
         if let Some(cmd) = parse_chat_cli_command(trimmed) {
             match cmd {
                 ChatCliCommand::Exit => {
-                    println!("\x1b[38;5;244mSampai jumpa!\x1b[0m\n");
+                    println!("\x1b[38;5;244mGoodbye!\x1b[0m\n");
                     break;
                 }
                 ChatCliCommand::Clear => {
                     if ai_service.clear_history(user_id).await {
                         println!(
-                            "\x1b[1;32m✔ Riwayat percakapan sesi ini telah dibersihkan.\x1b[0m\n"
+                            "\x1b[1;32m✔ Conversation history for this session has been cleared.\x1b[0m\n"
                         );
                     } else {
-                        println!("\x1b[31m✖ Gagal membersihkan riwayat sesi.\x1b[0m\n");
+                        println!("\x1b[31m✖ Failed to clear session history.\x1b[0m\n");
                     }
                     continue;
                 }
                 ChatCliCommand::Sessions => {
                     let sessions = ai_service.get_sessions(user_id).await;
                     let active_id = ai_service.get_active_session_id(user_id).await.unwrap_or(0);
-                    println!("\n\x1b[1;37mDaftar Sesi Percakapan:\x1b[0m");
+                    println!("\n\x1b[1;37mConversation Sessions:\x1b[0m");
                     for s in &sessions {
                         let marker = if s.id == active_id {
                             "\x1b[1;32m[x]\x1b[0m"
@@ -179,12 +196,12 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
                             "\x1b[38;5;244m[ ]\x1b[0m"
                         };
                         let act_label = if s.id == active_id {
-                            " \x1b[1;32m(Aktif)\x1b[0m"
+                            " \x1b[1;32m(Active)\x1b[0m"
                         } else {
                             ""
                         };
                         println!(
-                            "  {} #{:<2} — {:<24} \x1b[38;5;244m({} pesan, {}){}\x1b[0m",
+                            "  {} #{:<2} — {:<24} \x1b[38;5;244m({} messages, {}){}\x1b[0m",
                             marker,
                             s.id,
                             s.name,
@@ -193,27 +210,33 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
                             act_label
                         );
                     }
-                    println!("\x1b[38;5;244mGunakan '/switch <id>' untuk berpindah sesi, '/rm <id>' untuk menghapus, atau '/new [nama]' untuk membuat baru.\x1b[0m\n");
+                    println!("\x1b[38;5;244mUse '/switch <id>' to switch sessions, '/rm <id>' to remove, or '/new [name]' to create a new one.\x1b[0m\n");
                     continue;
                 }
                 ChatCliCommand::Switch(target_id) => {
                     if ai_service.switch_session_by_id(user_id, target_id).await {
                         if let Some(s) = ai_service.get_active_session(user_id).await {
-                            println!("\x1b[1;32m✔ Beralih ke sesi #{}: {}\x1b[0m\n", s.id, s.name);
+                            println!(
+                                "\x1b[1;32m✔ Switched to session #{}: {}\x1b[0m\n",
+                                s.id, s.name
+                            );
                         } else {
-                            println!("\x1b[1;32m✔ Beralih ke sesi #{}\x1b[0m\n", target_id);
+                            println!("\x1b[1;32m✔ Switched to session #{}\x1b[0m\n", target_id);
                         }
                     } else {
-                        println!("\x1b[31m✖ Sesi #{} tidak ditemukan.\x1b[0m\n", target_id);
+                        println!("\x1b[31m✖ Session #{} not found.\x1b[0m\n", target_id);
                     }
                     continue;
                 }
                 ChatCliCommand::Remove(target_id) => {
                     if ai_service.remove_session_by_id(user_id, target_id).await {
-                        println!("\x1b[1;32m✔ Sesi #{} berhasil dihapus.\x1b[0m\n", target_id);
+                        println!(
+                            "\x1b[1;32m✔ Session #{} successfully deleted.\x1b[0m\n",
+                            target_id
+                        );
                     } else {
                         println!(
-                            "\x1b[31m✖ Sesi #{} tidak ditemukan atau gagal dihapus.\x1b[0m\n",
+                            "\x1b[31m✖ Session #{} not found or failed to delete.\x1b[0m\n",
                             target_id
                         );
                     }
@@ -224,11 +247,11 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
                         ai_service.create_new_session(user_id, custom_name).await
                     {
                         println!(
-                            "\x1b[1;32m✔ Sesi baru berhasil dibuat: #{} — {}\x1b[0m\n",
+                            "\x1b[1;32m✔ New session created: #{} — {}\x1b[0m\n",
                             new_sess.id, new_sess.name
                         );
                     } else {
-                        println!("\x1b[31m✖ Gagal membuat sesi baru.\x1b[0m\n");
+                        println!("\x1b[31m✖ Failed to create new session.\x1b[0m\n");
                     }
                     continue;
                 }
@@ -251,38 +274,74 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
                     continue;
                 }
                 ChatCliCommand::Help => {
-                    println!("\x1b[1;37mPerintah Chat Tersedia:\x1b[0m");
+                    println!("\x1b[1;37mAvailable Chat Commands:\x1b[0m");
+                    println!("  \x1b[36m/clear\x1b[0m          - Clear active session history");
                     println!(
-                        "  \x1b[36m/clear\x1b[0m          - Bersihkan riwayat percakapan sesi aktif"
+                        "  \x1b[36m/new [name]\x1b[0m     - Create and activate a new session"
+                    );
+                    println!("  \x1b[36m/sessions\x1b[0m       - List all conversation sessions");
+                    println!(
+                        "  \x1b[36m/switch [id]\x1b[0m    - Switch session (interactive if no id)"
                     );
                     println!(
-                        "  \x1b[36m/new [nama]\x1b[0m     - Buat dan aktifkan sesi percakapan baru"
+                        "  \x1b[36m/rm <id>\x1b[0m        - Delete conversation session by ID"
                     );
                     println!(
-                        "  \x1b[36m/sessions\x1b[0m       - Tampilkan daftar semua sesi percakapan"
+                        "  \x1b[36m/model\x1b[0m          - Show active model and provider info"
                     );
+                    println!("  \x1b[36m/help\x1b[0m           - Show command help");
                     println!(
-                        "  \x1b[36m/switch <id>\x1b[0m    - Beralih ke sesi percakapan tertentu"
+                        "  \x1b[36m/exit\x1b[0m           - Exit chat mode (or Ctrl+C / Ctrl+D)\n"
                     );
-                    println!(
-                        "  \x1b[36m/rm <id>\x1b[0m        - Hapus sesi percakapan berdasarkan ID"
-                    );
-                    println!("  \x1b[36m/model\x1b[0m          - Tampilkan informasi model dan provider aktif");
-                    println!("  \x1b[36m/help\x1b[0m           - Tampilkan bantuan perintah");
-                    println!("  \x1b[36m/exit\x1b[0m           - Keluar dari mode chat (atau Ctrl+C / Ctrl+D)\n");
                     continue;
                 }
                 ChatCliCommand::Unknown(cmd_str) => {
                     let lower_cmd = cmd_str.to_lowercase();
-                    if lower_cmd.starts_with("/switch") {
+                    if lower_cmd.trim() == "/switch" && io::stdout().is_terminal() {
+                        let sessions = ai_service.get_sessions(user_id).await;
+                        let active_id =
+                            ai_service.get_active_session_id(user_id).await.unwrap_or(0);
+                        let mut items: Vec<String> = sessions
+                            .iter()
+                            .map(|s| {
+                                let marker = if s.id == active_id { " [ACTIVE]" } else { "" };
+                                format!(
+                                    "#{:<2} — {:<24} ({} msgs){}",
+                                    s.id,
+                                    s.name,
+                                    s.messages.len(),
+                                    marker
+                                )
+                            })
+                            .collect();
+                        items.push("Cancel / Back".to_string());
+                        let sel = crate::cli::tui::terminal_interactive_select(
+                            "Select conversation session to activate:",
+                            &items,
+                            0,
+                            false,
+                            None,
+                        );
+                        if let Some(idx) = sel {
+                            if idx < sessions.len() {
+                                let target_id = sessions[idx].id;
+                                if ai_service.switch_session_by_id(user_id, target_id).await {
+                                    println!(
+                                        "\x1b[1;32m✔ Switched to session #{}: {}\x1b[0m\n",
+                                        target_id, sessions[idx].name
+                                    );
+                                }
+                            }
+                        }
+                    } else if lower_cmd.starts_with("/switch") {
                         println!(
-                            "\x1b[33mPenggunaan: /switch <id_sesi> (contoh: /switch 1)\x1b[0m\n"
+                            "\x1b[33mUsage: /switch <session_id> (example: /switch 1)\x1b[0m\n"
                         );
                     } else if lower_cmd.starts_with("/rm") || lower_cmd.starts_with("/delete") {
-                        println!("\x1b[33mPenggunaan: /rm <id_sesi> (contoh: /rm 2)\x1b[0m\n");
+                        println!("\x1b[33mUsage: /rm <session_id> (example: /rm 2)\x1b[0m\n");
                     } else {
                         println!(
-                            "\x1b[33mPerintah '{cmd_str}' tidak dikenal. Ketik /help untuk bantuan.\x1b[0m\n"
+                            "\x1b[33mUnknown command '{cmd_str}'. Type /help for assistance.\x1b[0m\n"
                         );
                     }
                     continue;
@@ -292,6 +351,108 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
 
         execute_cli_chat_turn(ai_service, user_id, trimmed, &model_name, true).await;
     }
+}
+
+pub fn render_reasoning_box(thinking: &str, bar_width: usize) -> String {
+    let card_inner = bar_width.saturating_sub(6);
+    let header = "╭─ Reasoning / Thinking ";
+    let header_vis: usize = 24;
+    let rem_top = card_inner.saturating_sub(header_vis.saturating_sub(1));
+    let top = format!(
+        "  \x1b[38;5;244m{header}{}\x1b[38;5;244m╮\x1b[0m",
+        "─".repeat(rem_top)
+    );
+
+    let max_text_width = card_inner.saturating_sub(4);
+
+    let mut lines = Vec::new();
+    lines.push(top);
+
+    for raw_line in thinking.trim().lines() {
+        let trimmed_line = raw_line.trim();
+        if trimmed_line.is_empty() {
+            lines.push(format!(
+                "  \x1b[38;5;244m│\x1b[0m  {:<w$}  \x1b[38;5;244m│\x1b[0m",
+                "",
+                w = max_text_width
+            ));
+            continue;
+        }
+
+        let words: Vec<&str> = trimmed_line.split_whitespace().collect();
+        let mut cur_line = String::new();
+        for word in words {
+            let cur_vis = crate::cli::tui::visible_width(&cur_line);
+            let word_vis = crate::cli::tui::visible_width(word);
+
+            if cur_line.is_empty() {
+                if word_vis > max_text_width {
+                    let mut start = 0;
+                    while start < word.len() {
+                        let end = (start + max_text_width).min(word.len());
+                        let slice = &word[start..end];
+                        let slice_vis = crate::cli::tui::visible_width(slice);
+                        let pad = max_text_width.saturating_sub(slice_vis);
+                        if start + max_text_width < word.len() {
+                            lines.push(format!(
+                                "  \x1b[38;5;244m│\x1b[0m  \x1b[38;5;250m{}{}\x1b[0m  \x1b[38;5;244m│\x1b[0m",
+                                slice, " ".repeat(pad)
+                            ));
+                        } else {
+                            cur_line = slice.to_string();
+                        }
+                        start = end;
+                    }
+                } else {
+                    cur_line = word.to_string();
+                }
+            } else if cur_vis + 1 + word_vis <= max_text_width {
+                cur_line.push(' ');
+                cur_line.push_str(word);
+            } else {
+                let pad = max_text_width.saturating_sub(cur_vis);
+                lines.push(format!(
+                    "  \x1b[38;5;244m│\x1b[0m  \x1b[38;5;250m{}{}\x1b[0m  \x1b[38;5;244m│\x1b[0m",
+                    cur_line,
+                    " ".repeat(pad)
+                ));
+                if word_vis > max_text_width {
+                    let mut start = 0;
+                    while start < word.len() {
+                        let end = (start + max_text_width).min(word.len());
+                        let slice = &word[start..end];
+                        let slice_vis = crate::cli::tui::visible_width(slice);
+                        let pad = max_text_width.saturating_sub(slice_vis);
+                        if start + max_text_width < word.len() {
+                            lines.push(format!(
+                                "  \x1b[38;5;244m│\x1b[0m  \x1b[38;5;250m{}{}\x1b[0m  \x1b[38;5;244m│\x1b[0m",
+                                slice, " ".repeat(pad)
+                            ));
+                        } else {
+                            cur_line = slice.to_string();
+                        }
+                        start = end;
+                    }
+                } else {
+                    cur_line = word.to_string();
+                }
+            }
+        }
+        if !cur_line.is_empty() {
+            let cur_vis = crate::cli::tui::visible_width(&cur_line);
+            let pad = max_text_width.saturating_sub(cur_vis);
+            lines.push(format!(
+                "  \x1b[38;5;244m│\x1b[0m  \x1b[38;5;250m{}{}\x1b[0m  \x1b[38;5;244m│\x1b[0m",
+                cur_line,
+                " ".repeat(pad)
+            ));
+        }
+    }
+
+    let bot = format!("  \x1b[38;5;244m╰{}╯\x1b[0m", "─".repeat(card_inner));
+    lines.push(bot);
+
+    lines.join("\r\n")
 }
 
 pub(crate) async fn execute_cli_chat_turn(
@@ -314,7 +475,7 @@ pub(crate) async fn execute_cli_chat_turn(
             while !spinner_done_clone.load(Ordering::Relaxed) {
                 let elapsed = start.elapsed().as_secs_f64();
                 print!(
-                    "\r\x1b[38;5;81m{}\x1b[0m \x1b[38;5;244mXiao sedang memproses... ({:.1}s)\x1b[0m",
+                    "\r\x1b[38;5;81m{}\x1b[0m \x1b[38;5;244mXiao is processing... ({:.1}s)\x1b[0m",
                     frames[idx % frames.len()],
                     elapsed
                 );
@@ -359,17 +520,14 @@ pub(crate) async fn execute_cli_chat_turn(
             let elapsed = start.elapsed().as_secs_f64();
 
             if cancelled {
-                println!("\r\x1b[33m⚠ Permintaan dibatalkan.\x1b[0m\n");
+                println!("\r\x1b[33m⚠ Request cancelled.\x1b[0m\n");
                 return;
             }
 
             if is_tty {
                 if let Some(think) = thinking.filter(|t| !t.trim().is_empty()) {
-                    println!("\x1b[38;5;242m┌─ Penalaran / Thinking ──────────────────────────\x1b[0m");
-                    for line in think.trim().lines() {
-                        println!("\x1b[38;5;242m│ {}\x1b[0m", line);
-                    }
-                    println!("\x1b[38;5;242m└────────────────────────────────────────────────\x1b[0m");
+                    let bar_width = get_terminal_bar_width();
+                    println!("{}\n", render_reasoning_box(&think, bar_width));
                 }
 
                 let rendered = crate::parser::render_terminal_markdown(&answer);
@@ -379,15 +537,15 @@ pub(crate) async fn execute_cli_chat_turn(
                     || rendered_trimmed.contains("┌─")
                     || rendered_trimmed.contains("▌")
                 {
-                    println!("\x1b[1;38;5;81mXiao ▸\x1b[0m\n{}", rendered_trimmed);
+                    println!("  \x1b[1;38;2;16;185;129mXiao ▸\x1b[0m\n{}", rendered_trimmed);
                 } else {
-                    println!("\x1b[1;38;5;81mXiao ▸\x1b[0m {}", rendered_trimmed);
+                    println!("  \x1b[1;38;2;16;185;129mXiao ▸\x1b[0m {}", rendered_trimmed);
                 }
 
                 if interactive {
-                    println!("\x1b[38;5;243m[{:.1}s • {}]\x1b[0m\n", elapsed, model_name);
+                    println!("\n  \x1b[38;5;243m[{:.1}s • {}]\x1b[0m\n", elapsed, model_name);
                 } else {
-                    println!("\x1b[38;5;243m[{:.1}s • {}]\x1b[0m", elapsed, model_name);
+                    println!("\n  \x1b[38;5;243m[{:.1}s • {}]\x1b[0m", elapsed, model_name);
                 }
             } else {
                 println!("{}", answer.trim());
@@ -399,7 +557,7 @@ pub(crate) async fn execute_cli_chat_turn(
                 let _ = handle.await;
             }
             let _ = cancel_tx.send(true);
-            println!("\r\x1b[33m⚠ Permintaan dibatalkan oleh pengguna (Ctrl+C).\x1b[0m\n");
+            println!("\r\x1b[33m⚠ Request cancelled by user (Ctrl+C).\x1b[0m\n");
         }
     }
 }
