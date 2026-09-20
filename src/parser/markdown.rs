@@ -284,6 +284,16 @@ pub fn parse_inline(input_str: &str) -> Value {
                             rest = &rest[1 + end + 1..];
                             continue;
                         }
+                        if rtl::has_rtl_characters(inner) {
+                            let clean_text = rtl::extract_text_from_pseudo_math(inner);
+                            let parsed = parse_inline(&clean_text);
+                            match parsed {
+                                Value::Array(arr) => out.extend(arr),
+                                other => out.push(other),
+                            }
+                            rest = &rest[1 + end + 1..];
+                            continue;
+                        }
                         let sanitized = sanitize_latex_for_telegram(inner);
                         out.push(json!({
                             "type": "mathematical_expression",
@@ -303,6 +313,16 @@ pub fn parse_inline(input_str: &str) -> Value {
                 if !inner.is_empty() {
                     if let Some(sym) = try_format_standalone_logic_symbol(inner) {
                         out.push(Value::String(sym.to_string()));
+                        rest = &rest[2 + end + 2..];
+                        continue;
+                    }
+                    if rtl::has_rtl_characters(inner) {
+                        let clean_text = rtl::extract_text_from_pseudo_math(inner);
+                        let parsed = parse_inline(&clean_text);
+                        match parsed {
+                            Value::Array(arr) => out.extend(arr),
+                            other => out.push(other),
+                        }
                         rest = &rest[2 + end + 2..];
                         continue;
                     }
@@ -2106,6 +2126,38 @@ static RE_BLOCK_BULLET: LazyLock<Regex> =
 static RE_BLOCK_NUMBERED: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d+|[\u0660-\u0669]+)[\.)]\s+").expect("valid static regex"));
 
+fn emit_math_or_quote_blocks(blocks: &mut Vec<RichBlock>, math_lines: &[String]) {
+    if math_lines.iter().any(|l| rtl::has_rtl_characters(l)) {
+        let clean_lines: Vec<String> = math_lines
+            .iter()
+            .map(|l| rtl::extract_text_from_pseudo_math(l.trim()))
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !clean_lines.is_empty() {
+            let joined = clean_lines.join("\n");
+            let lrm_text = rtl::ensure_lrm_if_needed(&joined, false);
+            blocks.push(RichBlock::BlockQuotation {
+                blocks: vec![json!({
+                    "type": "paragraph",
+                    "text": parse_inline(&lrm_text)
+                })],
+            });
+        }
+    } else {
+        for line in math_lines {
+            let trimmed_line = line.trim();
+            if !trimmed_line.is_empty() {
+                let sanitized = sanitize_latex_for_telegram(trimmed_line);
+                if !sanitized.is_empty() {
+                    blocks.push(RichBlock::MathematicalExpression {
+                        expression: sanitized,
+                    });
+                }
+            }
+        }
+    }
+}
+
 pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
     if text.trim().is_empty() {
         return Vec::new();
@@ -2198,17 +2250,7 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 }
             }
 
-            for line in math_lines {
-                let trimmed_line = line.trim();
-                if !trimmed_line.is_empty() {
-                    let sanitized = sanitize_latex_for_telegram(trimmed_line);
-                    if !sanitized.is_empty() {
-                        blocks.push(RichBlock::MathematicalExpression {
-                            expression: sanitized,
-                        });
-                    }
-                }
-            }
+            emit_math_or_quote_blocks(&mut blocks, &math_lines);
             continue;
         }
 
@@ -2236,17 +2278,7 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 math_lines.push(curr_s.to_string());
                 i += 1;
             }
-            for line in math_lines {
-                let trimmed_line = line.trim();
-                if !trimmed_line.is_empty() {
-                    let sanitized = sanitize_latex_for_telegram(trimmed_line);
-                    if !sanitized.is_empty() {
-                        blocks.push(RichBlock::MathematicalExpression {
-                            expression: sanitized,
-                        });
-                    }
-                }
-            }
+            emit_math_or_quote_blocks(&mut blocks, &math_lines);
             continue;
         }
 
@@ -2415,10 +2447,11 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
             }
             if let Some(end) = first_line.find("</blockquote>") {
                 let inner = first_line[..end].trim();
+                let lrm_text = rtl::ensure_lrm_if_needed(inner, is_message_rtl);
                 blocks.push(RichBlock::BlockQuotation {
                     blocks: vec![json!({
                         "type": "paragraph",
-                        "text": parse_inline(inner)
+                        "text": parse_inline(&lrm_text)
                     })],
                 });
                 i += 1;
@@ -2441,10 +2474,12 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 quote_lines.push(curr.to_string());
                 i += 1;
             }
+            let joined = quote_lines.join("\n");
+            let lrm_text = rtl::ensure_lrm_if_needed(&joined, is_message_rtl);
             blocks.push(RichBlock::BlockQuotation {
                 blocks: vec![json!({
                     "type": "paragraph",
-                    "text": parse_inline(&quote_lines.join("\n"))
+                    "text": parse_inline(&lrm_text)
                 })],
             });
             continue;
@@ -2484,10 +2519,12 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                     }
                 }
             }
+            let joined = quote_lines.join("\n");
+            let lrm_text = rtl::ensure_lrm_if_needed(&joined, is_message_rtl);
             blocks.push(RichBlock::BlockQuotation {
                 blocks: vec![json!({
                     "type": "paragraph",
-                    "text": parse_inline(&quote_lines.join("\n"))
+                    "text": parse_inline(&lrm_text)
                 })],
             });
             continue;
@@ -2570,19 +2607,21 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                             .ok()
                             .or_else(|| prefix_clean.parse::<i64>().ok())
                     });
+                    let lrm_text = rtl::ensure_lrm_if_needed(&item_text, is_message_rtl);
                     list_items.push(RichBlockListItem::ordered(
                         vec![json!({
                             "type": "paragraph",
-                            "text": parse_inline(&item_text)
+                            "text": parse_inline(&lrm_text)
                         })],
                         value,
                     ));
                     i += 1;
                 } else if !is_ordered && RE_BLOCK_BULLET.is_match(curr) {
                     let item_text = RE_BLOCK_BULLET.replace(curr, "").trim().to_string();
+                    let lrm_text = rtl::ensure_lrm_if_needed(&item_text, is_message_rtl);
                     list_items.push(RichBlockListItem::bullet(vec![json!({
                         "type": "paragraph",
-                        "text": parse_inline(&item_text)
+                        "text": parse_inline(&lrm_text)
                     })]));
                     i += 1;
                 } else {
@@ -2601,6 +2640,7 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
             if s_curr.is_empty()
                 || s_curr.starts_with("```")
                 || s_curr.starts_with("$$")
+                || s_curr.starts_with(r"\[")
                 || RE_BLOCK_HEADING.is_match(s_curr)
                 || s_curr.starts_with("**>")
                 || s_curr.starts_with("<blockquote")
@@ -2625,8 +2665,10 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
         }
 
         if !para_lines.is_empty() {
+            let joined = para_lines.join("\n");
+            let lrm_text = rtl::ensure_lrm_if_needed(&joined, is_message_rtl);
             blocks.push(RichBlock::Paragraph {
-                text: parse_inline(&para_lines.join("\n")),
+                text: parse_inline(&lrm_text),
             });
         }
     }
@@ -2637,8 +2679,10 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
 pub fn build_full_rich_message(answer_text: &str, footer_text: Option<&str>) -> InputRichMessage {
     let mut blocks = parse_markdown_to_rich_blocks(answer_text);
     if blocks.is_empty() {
+        let is_msg_rtl = rtl::is_rtl_text(answer_text);
+        let lrm_text = rtl::ensure_lrm_if_needed(answer_text.trim(), is_msg_rtl);
         blocks.push(RichBlock::Paragraph {
-            text: parse_inline(answer_text.trim()),
+            text: parse_inline(&lrm_text),
         });
     }
     if let Some(footer) = footer_text.map(str::trim).filter(|m| !m.is_empty()) {
@@ -3462,5 +3506,193 @@ Semoga bermanfaat untuk kita semua.
         assert_eq!(items[0].value, Some(1));
         assert_eq!(items[1].value, Some(2));
         assert_eq!(items[2].value, Some(3));
+    }
+
+    #[test]
+    fn test_arabic_in_display_math_becomes_block_quotation() {
+        let md = "Jika ditinjau:\n\n$$\\text{لَا تَقْنَطُوا مِنْ رَحْمَةِ اللَّهِ}$$\n\n* **لَا (Lā)**";
+        let blocks = parse_markdown_to_rich_blocks(md);
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(blocks[0], RichBlock::Paragraph { .. }));
+        let RichBlock::BlockQuotation {
+            blocks: quote_blocks,
+        } = &blocks[1]
+        else {
+            panic!("expected BlockQuotation, got {:?}", blocks[1]);
+        };
+        let quote_json = serde_json::to_string(&quote_blocks[0]).expect("serialize");
+        assert!(quote_json.contains("لَا تَقْنَطُوا مِنْ رَحْمَةِ اللَّهِ"));
+        assert!(!quote_json.contains(r"\text"));
+        assert!(!quote_json.contains(r"\mathrm"));
+
+        // Verify that NO MathematicalExpression contains RTL
+        let has_math_arabic = blocks.iter().any(|b| match b {
+            RichBlock::MathematicalExpression { expression } => {
+                crate::parser::rtl::has_rtl_characters(expression)
+            }
+            _ => false,
+        });
+        assert!(!has_math_arabic);
+    }
+
+    #[test]
+    fn test_arabic_in_bracket_math_becomes_block_quotation() {
+        let md = r#"Kutipan:
+\[ \text{إِنَّ مَعَ الْعُسْرِ يُسْرًا} \]
+Penjelasan berikutnya."#;
+        let blocks = parse_markdown_to_rich_blocks(md);
+        assert_eq!(blocks.len(), 3);
+        let RichBlock::BlockQuotation {
+            blocks: quote_blocks,
+        } = &blocks[1]
+        else {
+            panic!("expected BlockQuotation, got {:?}", blocks[1]);
+        };
+        let quote_json = serde_json::to_string(&quote_blocks[0]).expect("serialize");
+        assert!(quote_json.contains("إِنَّ مَعَ الْعُسْرِ يُسْرًا"));
+        assert!(!quote_json.contains(r"\text"));
+    }
+
+    #[test]
+    fn test_arabic_in_inline_math_becomes_native_inline_text() {
+        let md = "Perhatikan kata $\\text{لَا}$ di dalam kalimat.";
+        let blocks = parse_markdown_to_rich_blocks(md);
+        assert_eq!(blocks.len(), 1);
+        let RichBlock::Paragraph { text } = &blocks[0] else {
+            panic!("expected Paragraph");
+        };
+        let para_json = serde_json::to_string(text).expect("serialize");
+        assert!(para_json.contains("لَا"));
+        assert!(!para_json.contains("mathematical_expression"));
+    }
+
+    #[test]
+    fn test_genuine_math_formulas_still_produce_mathematical_expression() {
+        let md = "$$c = \\sqrt{a^2 + b^2}$$\n\nInline: $E = mc^2$";
+        let blocks = parse_markdown_to_rich_blocks(md);
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(
+            blocks[0],
+            RichBlock::MathematicalExpression { .. }
+        ));
+        let RichBlock::Paragraph { text } = &blocks[1] else {
+            panic!("expected Paragraph");
+        };
+        let para_json = serde_json::to_string(text).expect("serialize");
+        assert!(para_json.contains("mathematical_expression"));
+    }
+
+    #[test]
+    fn test_turn_34_exact_nahwu_snippet_parses_without_rtl_in_math() {
+        let md = r#"### **Sentuhan Nahwu & Kebahasaan**
+
+Jika ditinjau dari kaidah tata bahasa Arab (*nahwu*), penggalan kalimat tersebut mengandung uslub larangan (*an-nahyu*):
+
+$$\text{لَا تَقْنَطُوا مِنْ رَحْمَةِ اللَّهِ}$$
+
+* **لَا (Lā)**: Disebut **لَا النَّاهِيَةُ** (*Lā an-Nāhiyah*), yaitu huruf yang bermakna larangan ("janganlah") dan bersifat menjazamkan kata kerja mudhari' (*tajzumu al-fi'l al-mudhāri'*).
+* **تَقْنَطُوا (Taqnathū)**: Adalah **فِعْلٌ مُضَارِعٌ مَجْزُومٌ** (*fi'il mudhāri' majzūm*) dengan tanda jazam **حَذْفُ النُّونِ** (dibuangnya huruf nun) karena termasuk ke dalam kelompok **الْأَفْعَالُ الْخَمْسَةُ** (*al-af'āl al-khamsah* — bentuk asalnya sebelum kemasukan *lā* adalah *taqnathūna* / تَقْنَطُونَ).
+  * Huruf **Wawu** (و) di dalamnya berposisi sebagai dhamir fail (*fā'il* / subjek).
+* **مِنْ (Min)**: Huruf jar (*harf jarr*).
+* **رَحْمَةِ (Rahmati)**: Isim majrur tanda kasrah, sekaligus berposisi sebagai **mudhaf** (مُضَاف).
+* **اللَّهِ (Allāh)**: Lafaz jalalah sebagai **mudhaf ilaih** (مُضَاف إِلَيْهِ) yang majrur dengan kasrah di akhirnya.
+"#;
+        let rich = build_full_rich_message(md, None);
+        // Ensure no block is a MathematicalExpression with Arabic
+        for b in &rich.blocks {
+            if let RichBlock::MathematicalExpression { expression } = b {
+                assert!(
+                    !crate::parser::rtl::has_rtl_characters(expression),
+                    "MathematicalExpression should not contain Arabic: {expression}"
+                );
+            }
+        }
+        // Ensure the Arabic verse appears in a BlockQuotation
+        let has_quote = rich.blocks.iter().any(|b| {
+            if let RichBlock::BlockQuotation { blocks } = b {
+                let s = serde_json::to_string(blocks).expect("serialize");
+                s.contains("لَا تَقْنَطُوا مِنْ رَحْمَةِ اللَّهِ")
+            } else {
+                false
+            }
+        });
+        assert!(has_quote, "Arabic phrase should be inside a BlockQuotation");
+    }
+
+    #[test]
+    fn test_mixed_arabic_indonesian_list_items_get_lrm_prefix() {
+        let md = r#"
+Berikut adalah uraian I'rab:
+
+> **وَلْيَكْتُبْ بَيْنَكُمْ كَاتِبٌ بِالْعَدْلِ ۚ**
+
+* **يَا (Yā)**: *Harf nidā'* (huruf panggilan) mabni di atas sukun.
+* **أَيُّ (Ayyu)**: *Munāda* mabni di atas dhammah.
+* Fa (فَ): Rābiṭah li-jawāb asy-syarṭ (penghubung jawaban syarat).
+
+**اللَّهِ**: Lafaz jalalah sebagai mudhaf ilaih.
+"#;
+        let blocks = parse_markdown_to_rich_blocks(md);
+
+        // 1. Pure Arabic quote box should NOT have LRM prefix
+        let quote = blocks
+            .iter()
+            .find(|b| matches!(b, RichBlock::BlockQuotation { .. }))
+            .expect("find quote block");
+        let quote_json = serde_json::to_string(quote).expect("serialize quote");
+        assert!(
+            !quote_json.contains('\u{200E}'),
+            "Pure Arabic quote should NOT contain LRM"
+        );
+
+        // 2. List items
+        let list_block = blocks
+            .iter()
+            .find(|b| matches!(b, RichBlock::List { .. }))
+            .expect("find list block");
+        let RichBlock::List { items } = list_block else {
+            panic!("expected list");
+        };
+        assert_eq!(items.len(), 3);
+
+        // Item 0 starts with Arabic `يَا` and has Indonesian text -> MUST have LRM `\u{200E}`
+        let item0_json = serde_json::to_string(&items[0]).expect("serialize item 0");
+        assert!(
+            item0_json.contains('\u{200E}'),
+            "Mixed item 0 starting with Arabic must have LRM: {item0_json}"
+        );
+
+        // Item 1 starts with Arabic `أَيُّ` and has Indonesian text -> MUST have LRM `\u{200E}`
+        let item1_json = serde_json::to_string(&items[1]).expect("serialize item 1");
+        assert!(
+            item1_json.contains('\u{200E}'),
+            "Mixed item 1 starting with Arabic must have LRM: {item1_json}"
+        );
+
+        // Item 2 starts with Latin `Fa` -> MUST NOT have LRM `\u{200E}`
+        let item2_json = serde_json::to_string(&items[2]).expect("serialize item 2");
+        assert!(
+            !item2_json.contains('\u{200E}'),
+            "Item 2 starting with Latin should NOT have LRM: {item2_json}"
+        );
+
+        // 3. Mixed paragraph starting with Arabic **اللَّهِ**: Lafaz jalalah... -> MUST have LRM
+        let mixed_para = blocks
+            .iter()
+            .find(|b| {
+                if let RichBlock::Paragraph { text } = b {
+                    serde_json::to_string(text)
+                        .unwrap_or_default()
+                        .contains("mudhaf ilaih")
+                } else {
+                    false
+                }
+            })
+            .expect("find mixed paragraph");
+        let para_json = serde_json::to_string(mixed_para).expect("serialize mixed para");
+        assert!(
+            para_json.contains('\u{200E}'),
+            "Mixed paragraph starting with Arabic must have LRM: {para_json}"
+        );
     }
 }

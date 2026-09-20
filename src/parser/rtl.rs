@@ -1,4 +1,6 @@
 use crate::bot::models::{InputRichMessage, RichBlock};
+use regex::Regex;
+use std::sync::LazyLock;
 
 /// Returns true if the character belongs to a Right-to-Left (RTL) script
 /// (Arabic, Hebrew, Syriac, Thaana, Samaritan, Mandaic, etc.)
@@ -138,11 +140,70 @@ pub fn from_eastern_arabic_digits(input: &str) -> String {
         .collect()
 }
 
+/// Extracts clean human-readable text from pseudo-math expressions that contain
+/// natural language or RTL script erroneously wrapped in TeX/LaTeX commands
+/// (such as `$$\text{...}$$` or `$$\mathrm{...}$$`).
+pub fn extract_text_from_pseudo_math(input: &str) -> String {
+    static RE_MATH_TEXT_WRAPPERS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\\(?:text|mathrm|mbox|textbf|mathbf|textit|mathit|underline)\{([^{}]+)\}")
+            .expect("valid static regex")
+    });
+
+    let mut result = input.to_string();
+    // Recursively unwrap nested wrappers like \mathbf{\text{...}}
+    for _ in 0..3 {
+        let unwrapped = RE_MATH_TEXT_WRAPPERS
+            .replace_all(&result, "$1")
+            .into_owned();
+        if unwrapped == result {
+            break;
+        }
+        result = unwrapped;
+    }
+
+    // Replace TeX escaped spaces and non-breaking spaces with normal spaces
+    result = result.replace(r"\ ", " ");
+    result = result.replace(r"\,", " ");
+    result = result.replace(r"\quad", " ");
+    result = result.replace(r"\qquad", " ");
+    result = result.replace('~', " ");
+
+    // Remove escaped TeX grouping braces: \{ and \} -> { and }
+    result = result.replace(r"\{", "{").replace(r"\}", "}");
+
+    result.trim().to_string()
+}
+
 /// Checks if a string begins with an RTL character (ignoring whitespace and leading punctuation).
 pub fn is_arabic_or_rtl_leading(text: &str) -> bool {
     text.chars()
         .find(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
         .is_some_and(is_rtl_char)
+}
+
+/// Returns true if a text segment in an LTR message starts with an RTL script
+/// but contains mixed content (both RTL characters and Latin/ASCII alphabetic text).
+///
+/// In this case, prepending a Left-to-Right Mark (`\u{200E}`) prevents text layout
+/// engines (such as Android and iOS) from treating the entire paragraph as RTL,
+/// which would otherwise flip word order, punctuation, and right-align explanations.
+pub fn needs_lrm_prefix(text: &str, is_message_rtl: bool) -> bool {
+    if is_message_rtl {
+        return false;
+    }
+    if !is_arabic_or_rtl_leading(text) {
+        return false;
+    }
+    text.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// Prepends a Left-to-Right Mark (`\u{200E}`) if the text requires it.
+pub fn ensure_lrm_if_needed(text: &str, is_message_rtl: bool) -> String {
+    if needs_lrm_prefix(text, is_message_rtl) {
+        format!("\u{200E}{text}")
+    } else {
+        text.to_string()
+    }
 }
 
 /// Determines whether a table's headers are predominantly written in RTL script.
@@ -280,5 +341,69 @@ mod tests {
             "Ilmu Nahwu adalah salah satu cabang tata bahasa Arab. Perhatikan kalimat: كَتَبَ التِّلْمِيذُ";
         apply_rtl_direction(&mut msg, text);
         assert_eq!(msg.is_rtl, None);
+    }
+
+    #[test]
+    fn extracts_clean_text_from_arabic_pseudo_math() {
+        let input = r"\text{لَا تَقْنَطُوا مِنْ رَحْمَةِ اللَّهِ}";
+        assert_eq!(
+            extract_text_from_pseudo_math(input),
+            "لَا تَقْنَطُوا مِنْ رَحْمَةِ اللَّهِ"
+        );
+
+        let input_spaced = r"\text{لَا}\ \text{تَقْنَطُوا}";
+        assert_eq!(extract_text_from_pseudo_math(input_spaced), "لَا تَقْنَطُوا");
+
+        let input_nested = r"\mathbf{\text{لَا تَقْنَطُوا}}";
+        assert_eq!(extract_text_from_pseudo_math(input_nested), "لَا تَقْنَطُوا");
+
+        let raw_arabic = "لَا تَقْنَطُوا مِنْ رَحْمَةِ اللَّهِ";
+        assert_eq!(
+            extract_text_from_pseudo_math(raw_arabic),
+            "لَا تَقْنَطُوا مِنْ رَحْمَةِ اللَّهِ"
+        );
+    }
+
+    #[test]
+    fn test_needs_lrm_prefix_for_mixed_content_in_ltr() {
+        // Mixed bullet item: starts with Arabic, followed by Latin transliteration and Indonesian
+        assert!(needs_lrm_prefix(
+            "**يَا (Yā)**: Harf nidā' (huruf panggilan) mabni di atas sukun.",
+            false
+        ));
+        assert!(needs_lrm_prefix(
+            "**أَيُّ (Ayyu)**: Munāda mabni di atas dhammah.",
+            false
+        ));
+
+        // Pure Arabic verse: NO Latin letters -> should NOT prepend LRM (remains pure RTL)
+        assert!(!needs_lrm_prefix(
+            "يَا أَيُّهَا الَّذِينَ آمَنُوا إِذَا تَدَايَنْتُمْ بِدَيْنٍ إِلَىٰ أَجَلٍ مُسَمًّى فَاكْتُبُوهُ",
+            false
+        ));
+
+        // Pure Latin item: does NOT start with Arabic -> NO LRM
+        assert!(!needs_lrm_prefix(
+            "Fa (فَ): Rābiṭah li-jawāb asy-syarṭ (penghubung jawaban syarat).",
+            false
+        ));
+
+        // When message is RTL: NO LRM
+        assert!(!needs_lrm_prefix(
+            "**يَا (Yā)**: Harf nidā' (huruf panggilan) mabni di atas sukun.",
+            true
+        ));
+    }
+
+    #[test]
+    fn test_ensure_lrm_if_needed_prepends_character() {
+        let mixed = "**يَا (Yā)**: Harf nidā'";
+        assert_eq!(
+            ensure_lrm_if_needed(mixed, false),
+            format!("\u{200E}{mixed}")
+        );
+
+        let pure_arabic = "يَا أَيُّهَا الَّذِينَ آمَنُوا";
+        assert_eq!(ensure_lrm_if_needed(pure_arabic, false), pure_arabic);
     }
 }

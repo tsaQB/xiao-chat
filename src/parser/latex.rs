@@ -196,7 +196,11 @@ pub fn sanitize_latex_for_telegram(input: &str) -> String {
     // 4. Convert standalone \text{...} or \mbox{...} to \mathrm{...} with escaped spaces
     let text_normalized =
         RE_STANDALONE_TEXT.replace_all(&units_converted, |caps: &regex::Captures| {
-            let clean_inner = escape_math_roman_text(&caps["inner"]);
+            let inner = &caps["inner"];
+            if crate::parser::rtl::has_rtl_characters(inner) {
+                return format!(r"\text{{{inner}}}");
+            }
+            let clean_inner = escape_math_roman_text(inner);
             format!(r"\mathrm{{{clean_inner}}}")
         });
 
