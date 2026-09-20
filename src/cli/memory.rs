@@ -235,9 +235,59 @@ pub(crate) async fn run_cli_memory(
             }
         }
         MemoryCliAction::Remove(None) => {
-            println!("\n\x1b[31m✖ Error: <key> parameter is required.\x1b[0m");
-            println!("  Usage: xiao memory rm <key>\n");
-            std::process::exit(1);
+            if io::stdout().is_terminal() {
+                let memories = crate::ai::storage::get_user_memories_async(owner_id).await;
+                if memories.is_empty() {
+                    println!("\n\x1b[33mNo facts currently recorded to delete.\x1b[0m\n");
+                    return;
+                }
+
+                let mut fact_items: Vec<String> = memories
+                    .iter()
+                    .map(|(k, f)| {
+                        let snippet = if f.len() > 45 {
+                            format!("{}...", &f[..45])
+                        } else {
+                            f.clone()
+                        };
+                        format!("{:<20} ({snippet})", k)
+                    })
+                    .collect();
+                fact_items.push("Cancel / Back".to_string());
+
+                let sub_sel = terminal_interactive_select(
+                    "Select a fact to delete from memory:",
+                    &fact_items,
+                    0,
+                    false,
+                    None,
+                );
+
+                if let Some(fact_idx) = sub_sel {
+                    if fact_idx < memories.len() {
+                        let (target_key, _) = &memories[fact_idx];
+                        if crate::ai::storage::delete_user_memory_async(
+                            owner_id,
+                            target_key.clone(),
+                        )
+                        .await
+                        {
+                            println!(
+                                "\n\x1b[1;32m✔ Memory '{target_key}' successfully removed for Owner ({owner_id}).\x1b[0m\n"
+                            );
+                        } else {
+                            println!(
+                                "\n\x1b[31m✖ Failed to delete memory '{target_key}'.\x1b[0m\n"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            } else {
+                println!("\n\x1b[31m✖ Error: <key> parameter is required.\x1b[0m");
+                println!("  Usage: xiao memory rm <key>\n");
+                std::process::exit(1);
+            }
         }
         MemoryCliAction::List => {
             if io::stdout().is_terminal() {

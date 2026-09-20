@@ -91,14 +91,43 @@ fn handle_search_key_subcommand(key_name: &str, provider_label: &str, target: Op
                     .map(mask_api_key)
                     .unwrap_or_else(|| "(not set)".to_string())
             );
-            let cmd_prefix = key_name
-                .split('_')
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            println!("\n\x1b[38;5;244mUsage:\x1b[0m");
-            println!("  xiao mcp {cmd_prefix} <API_KEY>    - Set API key");
-            println!("  xiao mcp {cmd_prefix} rm           - Remove API key\n");
+            if io::stdout().is_terminal() {
+                print!("\nEnter new API key (or 'rm' to remove, Enter to cancel): ");
+                let _ = io::stdout().flush();
+                let mut input = String::new();
+                if io::stdin().read_line(&mut input).is_ok() {
+                    let trimmed = input.trim();
+                    if trimmed == "rm" || trimmed == "remove" || trimmed == "clear" {
+                        if crate::ai::service::save_app_setting(key_name, "").is_ok() {
+                            println!(
+                                "\n\x1b[1;32m✔ {provider_label} key successfully removed.\x1b[0m\n"
+                            );
+                        } else {
+                            println!("\n\x1b[31m✖ Failed to remove {provider_label} key.\x1b[0m\n");
+                            std::process::exit(1);
+                        }
+                    } else if !trimmed.is_empty() {
+                        if crate::ai::service::save_app_setting(key_name, trimmed).is_ok() {
+                            println!(
+                                "\n\x1b[1;32m✔ {provider_label} key successfully saved:\x1b[0m {}\n",
+                                mask_api_key(trimmed)
+                            );
+                        } else {
+                            println!("\n\x1b[31m✖ Failed to save {provider_label} key to database.\x1b[0m\n");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            } else {
+                let cmd_prefix = key_name
+                    .split('_')
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                println!("\n\x1b[38;5;244mUsage:\x1b[0m");
+                println!("  xiao mcp {cmd_prefix} <API_KEY>    - Set API key");
+                println!("  xiao mcp {cmd_prefix} rm           - Remove API key\n");
+            }
         }
     }
 }
@@ -558,7 +587,18 @@ pub(crate) async fn run_cli_mcp_hub(
             print_tools_summary();
         }
         McpCliAction::Url(tgt) => {
-            let Some(raw_url) = tgt else {
+            let raw_url = if let Some(u) = tgt {
+                u.to_string()
+            } else if io::stdout().is_terminal() {
+                print!("\nEnter new MCP Endpoint URL: ");
+                let _ = io::stdout().flush();
+                let mut input = String::new();
+                if io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
+                    println!("\x1b[33mOperation cancelled.\x1b[0m\n");
+                    return;
+                }
+                input.trim().to_string()
+            } else {
                 println!("\n\x1b[31m✖ Error: <URL> parameter is required.\x1b[0m");
                 println!("  Usage: xiao mcp url <URL>\n");
                 std::process::exit(1);

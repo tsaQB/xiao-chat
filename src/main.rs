@@ -234,8 +234,12 @@ async fn main() {
             crate::bot::daemon::run_daemon(ai_service).await;
         }
         Some(unknown) => {
-            println!("\x1b[31m✖ Error: Unknown command '{unknown}'. Run 'xiao help' for usage instructions.\x1b[0m");
-            std::process::exit(1);
+            if unknown.starts_with('-') {
+                println!("\x1b[31m✖ Error: Unknown option '{unknown}'. Run 'xiao help' for usage instructions.\x1b[0m");
+                std::process::exit(1);
+            }
+            let prompt = args[1..].join(" ");
+            run_cli_chat(&ai_service, Some(prompt)).await;
         }
     }
 }

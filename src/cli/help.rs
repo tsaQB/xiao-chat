@@ -4,6 +4,7 @@ pub(crate) fn print_cli_help() {
 
     println!("\n  \x1b[1;37mUsage:\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao\x1b[0m                                \x1b[38;5;250mStart terminal chat (default)\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao\x1b[0m \x1b[38;5;245m<question...>\x1b[0m                   \x1b[38;5;250mAsk a quick one-shot question\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao\x1b[0m \x1b[38;5;245m<command>\x1b[0m \x1b[38;5;245m[arguments...]\x1b[0m\n");
 
     println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mCORE\x1b[0m");
@@ -31,11 +32,11 @@ pub(crate) fn print_cli_help() {
 
     println!("  \x1b[1;37mQuick Examples:\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao\x1b[0m                             \x1b[38;5;242m# Start chatting immediately\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao \"Explain Rust async\"\x1b[0m        \x1b[38;5;242m# Direct one-shot terminal query\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao menu\x1b[0m                        \x1b[38;5;242m# Open Control Center TUI\x1b[0m");
-    println!("    \x1b[1;38;5;45mxiao chat \"Explain Rust async\"\x1b[0m   \x1b[38;5;242m# One-shot terminal query\x1b[0m");
-    println!("    \x1b[1;38;5;45mxiao ai use gpt-4o\x1b[0m               \x1b[38;5;242m# Instantly switch active main model\x1b[0m");
-    println!("    \x1b[1;38;5;45mxiao context\x1b[0m                     \x1b[38;5;242m# View current session context gauge\x1b[0m");
-    println!("    \x1b[1;38;5;45mxiao gateway token <TOKEN>\x1b[0m       \x1b[38;5;242m# Bind Telegram bot token\x1b[0m\n");
+    println!("    \x1b[1;38;5;45mxiao ai use\x1b[0m                      \x1b[38;5;242m# Interactive model picker\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao memory rm\x1b[0m                   \x1b[38;5;242m# Interactively select fact to delete\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao gateway token\x1b[0m               \x1b[38;5;242m# Interactively bind Telegram bot token\x1b[0m\n");
 
     println!("  \x1b[1;37mTips:\x1b[0m");
     println!("    \x1b[38;5;244mRun '\x1b[1;37mxiao <command> help\x1b[0m\x1b[38;5;244m' for subcommand details and interactive menus.\x1b[0m\n");

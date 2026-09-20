@@ -307,6 +307,7 @@ xiao <subcommand> [arguments]
 | Subcommand | Description |
 | :--- | :--- |
 | *(none)* | Start terminal chat session (default mode; auto-launches setup on first run). |
+| `<question...>` | Ask a quick one-shot question directly (e.g. `xiao "What is Rust?"`). |
 | `menu` | Open interactive Control Center (TUI). |
 | `chat [prompt]` | Terminal chat mode: run an interactive REPL or execute a one-shot query. |
 | `setup` | Interactive initial configuration and onboarding wizard. |
@@ -314,10 +315,10 @@ xiao <subcommand> [arguments]
 | `status` | Display system status dashboard, SQLite database size, and active models. |
 | `context [chat] [th]` | Inspect token usage, sliding-window consumption, and context breakdown. |
 | `memory` | Inspect and manage Tier-1 persistent user profile memories. |
-| `memory rm <key>` | Delete a specific profile fact from Tier-1 memory. |
+| `memory rm [key]` | Delete a remembered fact (interactive picker if key is omitted). |
 | `memory clear` | Wipe all Tier-1 persistent memories. |
 | `ai` | Interactive AI hub for model catalog, capability tests, and routing. |
-| `ai use <model>` | Switch the active Main model instantly. |
+| `ai use [model]` | Switch the active Main model (interactive picker if model is omitted). |
 | `ai addon` | Configure multimodal specialist roles (`Vision`, `Video`, `Audio STT`, etc.). |
 | `ai test [role]` | Run live diagnostic capability probes against configured endpoints. |
 | `mcp [action]` | Manage Model Context Protocol search endpoints and tool integrations. |
@@ -346,8 +347,10 @@ Xiao Interactive Chat REPL Commands:
   /exit             Exit chat mode (or Ctrl+C / Ctrl+D)
 ```
 
-Run one-shot queries directly from shell scripts:
+Run one-shot queries directly from shell scripts or terminal:
 ```bash
+xiao "Analyze the concurrency guarantees of SQLite in WAL mode"
+# Or:
 xiao chat "Analyze the concurrency guarantees of SQLite in WAL mode"
 ```
 
