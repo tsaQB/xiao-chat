@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     style::Print,
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
@@ -268,9 +268,15 @@ pub fn terminal_interactive_select(
         let _ = stdout.flush();
 
         if let Ok(Event::Key(KeyEvent {
-            code, modifiers, ..
+            code,
+            modifiers,
+            kind,
+            ..
         })) = event::read()
         {
+            if kind == KeyEventKind::Release {
+                continue;
+            }
             if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
                 return None;
             }

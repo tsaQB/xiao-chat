@@ -52,6 +52,8 @@ pub use provider::EvidenceFreshness;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub use session::TopicScope;
+#[cfg(test)]
+pub(crate) use tests::ENV_TEST_LOCK;
 
 use rusqlite::Connection;
 use std::path::Path;
@@ -65,12 +67,35 @@ pub(crate) fn xiao_data_dir() -> std::path::PathBuf {
             return std::path::PathBuf::from(trimmed);
         }
     }
+    #[cfg(windows)]
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let trimmed = appdata.trim();
+        if !trimmed.is_empty() {
+            return std::path::PathBuf::from(trimmed).join("xiaoai");
+        }
+    }
+    if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
+        let trimmed = xdg_data.trim();
+        if !trimmed.is_empty() {
+            return std::path::PathBuf::from(trimmed).join("xiaoai");
+        }
+    }
     let base = std::env::var("HOME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("USERPROFILE")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     base.join(".local/share/xiaoai")
 }
 
+#[cfg(unix)]
 pub(crate) fn harden_dir_mode(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(metadata) = std::fs::metadata(path) {
@@ -269,7 +294,8 @@ where
 mod tests {
     use super::*;
 
-    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[cfg(test)]
+    pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn xiao_data_dir_honors_env_override() {
@@ -283,6 +309,160 @@ mod tests {
             std::env::set_var("XIAO_DATA_DIR", val);
         } else {
             std::env::remove_var("XIAO_DATA_DIR");
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn xiao_data_dir_resolves_appdata_on_windows() {
+        let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
+        let orig_xiao = std::env::var("XIAO_DATA_DIR").ok();
+        let orig_appdata = std::env::var("APPDATA").ok();
+        std::env::remove_var("XIAO_DATA_DIR");
+        std::env::set_var("APPDATA", r"C:\TestAppData\Roaming");
+
+        assert_eq!(
+            xiao_data_dir(),
+            std::path::PathBuf::from(r"C:\TestAppData\Roaming\xiaoai")
+        );
+
+        if let Some(val) = orig_xiao {
+            std::env::set_var("XIAO_DATA_DIR", val);
+        } else {
+            std::env::remove_var("XIAO_DATA_DIR");
+        }
+        if let Some(val) = orig_appdata {
+            std::env::set_var("APPDATA", val);
+        } else {
+            std::env::remove_var("APPDATA");
+        }
+    }
+
+    #[test]
+    fn xiao_data_dir_resolves_xdg_data_home_when_configured() {
+        let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
+        let orig_xiao = std::env::var("XIAO_DATA_DIR").ok();
+        let orig_appdata = std::env::var("APPDATA").ok();
+        let orig_xdg = std::env::var("XDG_DATA_HOME").ok();
+
+        std::env::remove_var("XIAO_DATA_DIR");
+        #[cfg(windows)]
+        std::env::remove_var("APPDATA");
+
+        let custom_xdg = std::env::temp_dir().join(format!(
+            "xiaoai-xdg-test-{}-{:x}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::env::set_var("XDG_DATA_HOME", &custom_xdg);
+
+        assert_eq!(xiao_data_dir(), custom_xdg.join("xiaoai"));
+
+        if let Some(val) = orig_xiao {
+            std::env::set_var("XIAO_DATA_DIR", val);
+        } else {
+            std::env::remove_var("XIAO_DATA_DIR");
+        }
+        #[cfg(windows)]
+        if let Some(val) = orig_appdata {
+            std::env::set_var("APPDATA", val);
+        } else {
+            std::env::remove_var("APPDATA");
+        }
+        if let Some(val) = orig_xdg {
+            std::env::set_var("XDG_DATA_HOME", val);
+        } else {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+    }
+
+    #[test]
+    fn xiao_data_dir_falls_back_to_userprofile_or_home() {
+        let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
+        let orig_xiao = std::env::var("XIAO_DATA_DIR").ok();
+        let orig_appdata = std::env::var("APPDATA").ok();
+        let orig_xdg = std::env::var("XDG_DATA_HOME").ok();
+        let orig_home = std::env::var("HOME").ok();
+        let orig_profile = std::env::var("USERPROFILE").ok();
+
+        std::env::remove_var("XIAO_DATA_DIR");
+        std::env::remove_var("APPDATA");
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::remove_var("HOME");
+        let test_profile = std::env::temp_dir().join("test_user_profile");
+        std::env::set_var("USERPROFILE", &test_profile);
+
+        assert_eq!(xiao_data_dir(), test_profile.join(".local/share/xiaoai"));
+
+        if let Some(val) = orig_xiao {
+            std::env::set_var("XIAO_DATA_DIR", val);
+        } else {
+            std::env::remove_var("XIAO_DATA_DIR");
+        }
+        if let Some(val) = orig_appdata {
+            std::env::set_var("APPDATA", val);
+        } else {
+            std::env::remove_var("APPDATA");
+        }
+        if let Some(val) = orig_xdg {
+            std::env::set_var("XDG_DATA_HOME", val);
+        } else {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+        if let Some(val) = orig_home {
+            std::env::set_var("HOME", val);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(val) = orig_profile {
+            std::env::set_var("USERPROFILE", val);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+    }
+
+    #[test]
+    fn xiao_data_dir_handles_empty_home_and_falls_back_to_userprofile() {
+        let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
+        let orig_xiao = std::env::var("XIAO_DATA_DIR").ok();
+        let orig_appdata = std::env::var("APPDATA").ok();
+        let orig_xdg = std::env::var("XDG_DATA_HOME").ok();
+        let orig_home = std::env::var("HOME").ok();
+        let orig_profile = std::env::var("USERPROFILE").ok();
+
+        std::env::remove_var("XIAO_DATA_DIR");
+        std::env::remove_var("APPDATA");
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::set_var("HOME", "   ");
+        let test_profile = std::env::temp_dir().join("test_user_profile_empty_home");
+        std::env::set_var("USERPROFILE", &test_profile);
+
+        assert_eq!(xiao_data_dir(), test_profile.join(".local/share/xiaoai"));
+
+        if let Some(val) = orig_xiao {
+            std::env::set_var("XIAO_DATA_DIR", val);
+        } else {
+            std::env::remove_var("XIAO_DATA_DIR");
+        }
+        if let Some(val) = orig_appdata {
+            std::env::set_var("APPDATA", val);
+        } else {
+            std::env::remove_var("APPDATA");
+        }
+        if let Some(val) = orig_xdg {
+            std::env::set_var("XDG_DATA_HOME", val);
+        } else {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+        if let Some(val) = orig_home {
+            std::env::set_var("HOME", val);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(val) = orig_profile {
+            std::env::set_var("USERPROFILE", val);
+        } else {
+            std::env::remove_var("USERPROFILE");
         }
     }
 }

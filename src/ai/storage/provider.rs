@@ -52,11 +52,99 @@ pub struct ProviderStore {
     pub providers: Vec<ProviderConfig>,
 }
 
-pub fn get_providers_store_path() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return std::path::Path::new(&home).join(".xiao_providers.json");
+fn resolve_legacy_file_path(filename: &str) -> std::path::PathBuf {
+    // 1. Check existing legacy file in %APPDATA% (Windows)
+    #[cfg(windows)]
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let trimmed = appdata.trim();
+        if !trimmed.is_empty() {
+            let appdata_path = std::path::Path::new(trimmed);
+            let p1 = appdata_path.join(filename);
+            if p1.exists() {
+                return p1;
+            }
+            let p2 = appdata_path.join("xiaoai").join(filename);
+            if p2.exists() {
+                return p2;
+            }
+            let p3 = appdata_path.join("xiao").join(filename);
+            if p3.exists() {
+                return p3;
+            }
+            let p4 = appdata_path.join("XiaoAI").join(filename);
+            if p4.exists() {
+                return p4;
+            }
+        }
     }
-    std::path::Path::new(".xiao_providers.json").to_path_buf()
+
+    // 2. Check existing in HOME or USERPROFILE
+    let home_candidates = [
+        std::env::var("HOME").ok(),
+        std::env::var("USERPROFILE").ok(),
+    ];
+    for home_opt in home_candidates.into_iter().flatten() {
+        let trimmed = home_opt.trim();
+        if !trimmed.is_empty() {
+            let home_path = std::path::Path::new(trimmed);
+            let p1 = home_path.join(filename);
+            if p1.exists() {
+                return p1;
+            }
+            let p2 = home_path.join(".xiao").join(filename);
+            if p2.exists() {
+                return p2;
+            }
+            let p3 = home_path.join("xiao").join(filename);
+            if p3.exists() {
+                return p3;
+            }
+            let p4 = home_path.join(".xiaoai").join(filename);
+            if p4.exists() {
+                return p4;
+            }
+            let p5 = home_path.join("xiaoai").join(filename);
+            if p5.exists() {
+                return p5;
+            }
+            let p6 = home_path.join("XiaoAI").join(filename);
+            if p6.exists() {
+                return p6;
+            }
+        }
+    }
+
+    // 3. Check existing in current working directory
+    let local = std::path::Path::new(filename);
+    if local.exists() {
+        return local.to_path_buf();
+    }
+
+    // 4. Default destination fallback: on Windows prefer %APPDATA%, then HOME/USERPROFILE, then relative
+    #[cfg(windows)]
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let trimmed = appdata.trim();
+        if !trimmed.is_empty() {
+            return std::path::Path::new(trimmed).join(filename);
+        }
+    }
+
+    let fallback_candidates = [
+        std::env::var("HOME").ok(),
+        std::env::var("USERPROFILE").ok(),
+    ];
+    for home_opt in fallback_candidates.into_iter().flatten() {
+        let trimmed = home_opt.trim();
+        if !trimmed.is_empty() {
+            return std::path::Path::new(trimmed).join(filename);
+        }
+    }
+
+    local.to_path_buf()
+}
+
+pub fn get_providers_store_path() -> std::path::PathBuf {
+    resolve_legacy_file_path(".xiao_providers.json")
 }
 
 pub fn load_provider_store() -> ProviderStore {
@@ -756,10 +844,7 @@ pub(crate) async fn persist_model_routing(config: crate::ai::routing::ModelRouti
 }
 
 pub fn get_capability_registry_path() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return std::path::Path::new(&home).join(".xiao_model_capabilities.json");
-    }
-    std::path::Path::new(".xiao_model_capabilities.json").to_path_buf()
+    resolve_legacy_file_path(".xiao_model_capabilities.json")
 }
 
 pub fn load_capability_registry() -> CapabilityRegistry {
@@ -1223,7 +1308,7 @@ mod tests {
         );
     }
 
-    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::ai::storage::ENV_TEST_LOCK;
 
     struct EnvCleanupGuard {
         vars: Vec<(&'static str, Option<String>)>,
@@ -1590,5 +1675,62 @@ mod tests {
                 let _ = std::fs::remove_file(invalid_secrets_file);
             },
         );
+    }
+
+    #[test]
+    fn resolve_legacy_file_path_finds_existing_file_in_appdata_or_profile() {
+        let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
+        let orig_appdata = std::env::var("APPDATA").ok();
+        let orig_home = std::env::var("HOME").ok();
+        let orig_profile = std::env::var("USERPROFILE").ok();
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "xiaoai-legacy-test-{}-{:x}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join(".xiao_providers.json");
+        std::fs::write(&test_file, b"{}").expect("write dummy provider json succeeds");
+
+        std::env::set_var("USERPROFILE", &temp_dir);
+        std::env::remove_var("HOME");
+        std::env::remove_var("APPDATA");
+
+        let resolved = get_providers_store_path();
+        assert_eq!(resolved, test_file);
+
+        let cap_path = get_capability_registry_path();
+        assert_eq!(cap_path, temp_dir.join(".xiao_model_capabilities.json"));
+
+        let _ = std::fs::remove_file(test_file);
+
+        // Also verify finding inside .xiao subfolder
+        let dot_xiao_dir = temp_dir.join(".xiao");
+        let _ = std::fs::create_dir_all(&dot_xiao_dir);
+        let nested_file = dot_xiao_dir.join(".xiao_providers.json");
+        std::fs::write(&nested_file, b"{}").expect("write nested provider json succeeds");
+        let resolved_nested = get_providers_store_path();
+        assert_eq!(resolved_nested, nested_file);
+        let _ = std::fs::remove_file(nested_file);
+        let _ = std::fs::remove_dir_all(dot_xiao_dir);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+
+        if let Some(val) = orig_appdata {
+            std::env::set_var("APPDATA", val);
+        } else {
+            std::env::remove_var("APPDATA");
+        }
+        if let Some(val) = orig_home {
+            std::env::set_var("HOME", val);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(val) = orig_profile {
+            std::env::set_var("USERPROFILE", val);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
     }
 }

@@ -117,6 +117,31 @@ pub async fn poll_loop(
         .map_err(|e| warn!("Gagal mendaftarkan SIGTERM handler: {e}"))
         .ok();
 
+    #[cfg(unix)]
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .map_err(|e| warn!("Gagal mendaftarkan SIGHUP handler: {e}"))
+        .ok();
+
+    #[cfg(windows)]
+    let mut ctrl_close = tokio::signal::windows::ctrl_close()
+        .map_err(|e| warn!("Gagal mendaftarkan CTRL_CLOSE handler: {e}"))
+        .ok();
+
+    #[cfg(windows)]
+    let mut ctrl_shutdown = tokio::signal::windows::ctrl_shutdown()
+        .map_err(|e| warn!("Gagal mendaftarkan CTRL_SHUTDOWN handler: {e}"))
+        .ok();
+
+    #[cfg(windows)]
+    let mut ctrl_logoff = tokio::signal::windows::ctrl_logoff()
+        .map_err(|e| warn!("Gagal mendaftarkan CTRL_LOGOFF handler: {e}"))
+        .ok();
+
+    #[cfg(windows)]
+    let mut ctrl_break = tokio::signal::windows::ctrl_break()
+        .map_err(|e| warn!("Gagal mendaftarkan CTRL_BREAK handler: {e}"))
+        .ok();
+
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -125,13 +150,61 @@ pub async fn poll_loop(
             }
             _ = async {
                 #[cfg(unix)]
-                if let Some(ref mut sig) = sigterm {
-                    sig.recv().await;
-                    return;
+                {
+                    tokio::select! {
+                        _ = async {
+                            if let Some(ref mut sig) = sigterm {
+                                sig.recv().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {}
+                        _ = async {
+                            if let Some(ref mut sig) = sighup {
+                                sig.recv().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {}
+                    }
                 }
+                #[cfg(windows)]
+                {
+                    tokio::select! {
+                        _ = async {
+                            if let Some(ref mut sig) = ctrl_close {
+                                sig.recv().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {}
+                        _ = async {
+                            if let Some(ref mut sig) = ctrl_shutdown {
+                                sig.recv().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {}
+                        _ = async {
+                            if let Some(ref mut sig) = ctrl_logoff {
+                                sig.recv().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {}
+                        _ = async {
+                            if let Some(ref mut sig) = ctrl_break {
+                                sig.recv().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {}
+                    }
+                }
+                #[cfg(not(any(unix, windows)))]
                 std::future::pending::<()>().await;
             } => {
-                println!("\n🛑 Menerima sinyal terminasi (SIGTERM). Bot dimatikan secara aman.");
+                println!("\n🛑 Menerima sinyal terminasi. Bot dimatikan secara aman.");
                 break;
             }
             updates_res = bot.get_updates(

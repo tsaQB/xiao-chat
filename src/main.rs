@@ -29,19 +29,83 @@ fn get_config_path() -> std::path::PathBuf {
     if Path::new(".env").exists() {
         return Path::new(".env").to_path_buf();
     }
-    // 2. ~/.xiao.env or ~/.xiao/.env
-    if let Ok(home) = env::var("HOME") {
-        let home_env = Path::new(&home).join(".xiao.env");
+    // 2. XDG_CONFIG_HOME for Linux and Termux
+    if let Ok(xdg_config) = env::var("XDG_CONFIG_HOME") {
+        let trimmed = xdg_config.trim();
+        if !trimmed.is_empty() {
+            let config_path = Path::new(trimmed);
+            let app_env = config_path.join("xiao").join(".env");
+            if app_env.exists() {
+                return app_env;
+            }
+            let dot_app_env = config_path.join(".xiao").join(".env");
+            if dot_app_env.exists() {
+                return dot_app_env;
+            }
+            let legacy_app_env = config_path.join("xiaoai").join(".env");
+            if legacy_app_env.exists() {
+                return legacy_app_env;
+            }
+        }
+    }
+    // 3. ~/.xiao.env or ~/.xiao/.env across HOME and USERPROFILE
+    let home_candidates = [env::var("HOME").ok(), env::var("USERPROFILE").ok()];
+    for home_opt in home_candidates.into_iter().flatten() {
+        let trimmed = home_opt.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let home_path = Path::new(trimmed);
+        let home_env = home_path.join(".xiao.env");
         if home_env.exists() {
             return home_env;
         }
-        let app_dir_env = Path::new(&home).join("xiao").join(".env");
+        let dot_app_dir_env = home_path.join(".xiao").join(".env");
+        if dot_app_dir_env.exists() {
+            return dot_app_dir_env;
+        }
+        let dot_xiaoai_dir_env = home_path.join(".xiaoai").join(".env");
+        if dot_xiaoai_dir_env.exists() {
+            return dot_xiaoai_dir_env;
+        }
+        let xdg_config_fallback = home_path.join(".config").join("xiao").join(".env");
+        if xdg_config_fallback.exists() {
+            return xdg_config_fallback;
+        }
+        let app_dir_env = home_path.join("xiao").join(".env");
         if app_dir_env.exists() {
             return app_dir_env;
         }
-        let legacy_app_dir_env = Path::new(&home).join("XiaoAI").join(".env");
+        let app_dir_xiaoai_env = home_path.join("xiaoai").join(".env");
+        if app_dir_xiaoai_env.exists() {
+            return app_dir_xiaoai_env;
+        }
+        let legacy_app_dir_env = home_path.join("XiaoAI").join(".env");
         if legacy_app_dir_env.exists() {
             return legacy_app_dir_env;
+        }
+    }
+    // 4. %APPDATA%\xiao\.env or %APPDATA%\XiaoAI\.env
+    if let Ok(appdata) = env::var("APPDATA") {
+        let trimmed = appdata.trim();
+        if !trimmed.is_empty() {
+            let appdata_path = Path::new(trimmed);
+            let app_dir_env = appdata_path.join("xiao").join(".env");
+            if app_dir_env.exists() {
+                return app_dir_env;
+            }
+            let legacy_app_dir_env = appdata_path.join("XiaoAI").join(".env");
+            if legacy_app_dir_env.exists() {
+                return legacy_app_dir_env;
+            }
+            let modern_app_dir_env = appdata_path.join("xiaoai").join(".env");
+            if modern_app_dir_env.exists() {
+                return modern_app_dir_env;
+            }
+            let appdata_dot_env = appdata_path.join(".xiao.env");
+            if appdata_dot_env.exists() {
+                return appdata_dot_env;
+            }
         }
     }
     Path::new(".env").to_path_buf()
@@ -87,7 +151,7 @@ pub(crate) fn get_configured_token() -> Option<String> {
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().ok();
+    load_environment();
     let args: Vec<String> = env::args().collect();
     let subcommand = args.get(1).map(|s| s.as_str()).unwrap_or("start");
 
@@ -177,6 +241,80 @@ async fn main() {
         unknown => {
             println!("\x1b[31m✖ Error: Perintah '{unknown}' tidak dikenal. Jalankan 'xiao help' untuk bantuan.\x1b[0m");
             std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::storage::ENV_TEST_LOCK;
+
+    #[test]
+    fn get_config_path_discovers_profile_or_appdata_env_file() {
+        let _lock = ENV_TEST_LOCK.lock().expect("ENV_TEST_LOCK poisoned");
+        let orig_home = env::var("HOME").ok();
+        let orig_profile = env::var("USERPROFILE").ok();
+        let orig_appdata = env::var("APPDATA").ok();
+        let orig_xdg_config = env::var("XDG_CONFIG_HOME").ok();
+
+        let temp_dir = env::temp_dir().join(format!(
+            "xiaoai-cfg-test-{}-{:x}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let xiao_dir = temp_dir.join("xiao");
+        let _ = std::fs::create_dir_all(&xiao_dir);
+        let test_env = xiao_dir.join(".env");
+        std::fs::write(&test_env, b"TEST_KEY=123\n").expect("write test env succeeds");
+
+        env::set_var("USERPROFILE", &temp_dir);
+        env::remove_var("HOME");
+        env::remove_var("APPDATA");
+        env::remove_var("XDG_CONFIG_HOME");
+
+        // If local .env doesn't exist, it should find temp_dir/xiao/.env via USERPROFILE
+        if !Path::new(".env").exists() {
+            let found = get_config_path();
+            assert_eq!(found, test_env);
+        }
+
+        let _ = std::fs::remove_file(&test_env);
+        let _ = std::fs::remove_dir_all(&xiao_dir);
+
+        // Also verify discovery in ~/.xiao/.env (with leading dot)
+        let dot_xiao_dir = temp_dir.join(".xiao");
+        let _ = std::fs::create_dir_all(&dot_xiao_dir);
+        let dot_test_env = dot_xiao_dir.join(".env");
+        std::fs::write(&dot_test_env, b"TEST_KEY=456\n").expect("write dot test env succeeds");
+        if !Path::new(".env").exists() {
+            let found = get_config_path();
+            assert_eq!(found, dot_test_env);
+        }
+
+        let _ = std::fs::remove_file(dot_test_env);
+        let _ = std::fs::remove_dir_all(dot_xiao_dir);
+        let _ = std::fs::remove_dir_all(temp_dir);
+
+        if let Some(val) = orig_home {
+            env::set_var("HOME", val);
+        } else {
+            env::remove_var("HOME");
+        }
+        if let Some(val) = orig_profile {
+            env::set_var("USERPROFILE", val);
+        } else {
+            env::remove_var("USERPROFILE");
+        }
+        if let Some(val) = orig_appdata {
+            env::set_var("APPDATA", val);
+        } else {
+            env::remove_var("APPDATA");
+        }
+        if let Some(val) = orig_xdg_config {
+            env::set_var("XDG_CONFIG_HOME", val);
+        } else {
+            env::remove_var("XDG_CONFIG_HOME");
         }
     }
 }

@@ -51,9 +51,9 @@ pub(crate) fn write_secret_in_dir(
     secret_ref: &str,
     value: &str,
 ) -> io::Result<()> {
+    let final_path = secret_path_in_dir(dir, secret_ref)?;
     std::fs::create_dir_all(dir)?;
     harden_dir_mode(dir);
-    let final_path = secret_path_in_dir(dir, secret_ref)?;
     let tmp_path = dir.join(format!(
         ".tmp-{}-{:x}",
         std::process::id(),
@@ -67,17 +67,20 @@ pub(crate) fn write_secret_in_dir(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(&tmp_path)?;
-    if let Err(error) = (|| -> io::Result<()> {
+    let write_result = (|| -> io::Result<()> {
+        let mut file = options.open(&tmp_path)?;
         file.write_all(value.as_bytes())?;
         file.sync_all()?;
+        drop(file);
         std::fs::rename(&tmp_path, &final_path)?;
         harden_file_mode(&final_path);
+        #[cfg(unix)]
         if let Ok(dir_handle) = std::fs::File::open(dir) {
             let _ = dir_handle.sync_all();
         }
         Ok(())
-    })() {
+    })();
+    if let Err(error) = write_result {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(error);
     }
@@ -371,8 +374,6 @@ mod tests {
 
     #[test]
     fn local_secret_store_uses_private_directory_and_file_modes() {
-        use std::os::unix::fs::PermissionsExt;
-
         let dir = std::env::temp_dir().join(format!(
             "xiaoai-secret-modes-{}-{:x}",
             std::process::id(),
@@ -381,19 +382,41 @@ mod tests {
         let secret_ref = "secret://test/mode-check";
         write_secret_in_dir(&dir, secret_ref, "secret").expect("write secret succeeds");
         let path = secret_path_in_dir(&dir, secret_ref).expect("secret path succeeds");
+        assert!(path.exists());
+        assert_eq!(
+            read_secret_in_dir(&dir, secret_ref).expect("read secret succeeds"),
+            "secret"
+        );
 
-        let dir_mode = std::fs::metadata(&dir)
-            .expect("metadata succeeds")
-            .permissions()
-            .mode()
-            & 0o777;
-        let file_mode = std::fs::metadata(&path)
-            .expect("metadata succeeds")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(dir_mode, 0o700);
-        assert_eq!(file_mode, 0o600);
+        // Verify overwriting/updating existing secret works cleanly
+        write_secret_in_dir(&dir, secret_ref, "secret-updated").expect("update secret succeeds");
+        assert_eq!(
+            read_secret_in_dir(&dir, secret_ref).expect("read updated secret succeeds"),
+            "secret-updated"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_mode = std::fs::metadata(&dir)
+                .expect("metadata succeeds")
+                .permissions()
+                .mode()
+                & 0o777;
+            let file_mode = std::fs::metadata(&path)
+                .expect("metadata succeeds")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dir_mode, 0o700);
+            assert_eq!(file_mode, 0o600);
+        }
+
+        // Verify secret removal cleans up file cleanly
+        remove_secret_in_dir(&dir, secret_ref);
+        assert!(!path.exists());
+        assert!(read_secret_in_dir(&dir, secret_ref).is_err());
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -409,5 +432,29 @@ mod tests {
         let res = write_secret_in_dir(&invalid_dir, secret_ref, "test");
         assert!(res.is_err());
         let _ = std::fs::remove_file(invalid_dir);
+    }
+
+    #[test]
+    fn secret_write_and_update_leaves_no_orphaned_tmp_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "xiaoai-secret-clean-tmp-{}-{:x}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let secret_ref = "secret://test/clean-tmp";
+        write_secret_in_dir(&dir, secret_ref, "val1").expect("initial write succeeds");
+        write_secret_in_dir(&dir, secret_ref, "val2").expect("update write succeeds");
+
+        // Inspect directory entries to ensure zero .tmp-* files remain
+        let entries = std::fs::read_dir(&dir).expect("read_dir succeeds");
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                !name.starts_with(".tmp-"),
+                "found lingering temporary secret file: {name}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
