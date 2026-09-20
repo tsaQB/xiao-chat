@@ -126,35 +126,62 @@ async fn run_cli_gateway_telegram_submenu() {
         let token = get_configured_token().unwrap_or_default();
         let owner_id = get_configured_owner_id();
 
-        let summary = format!(
-            "== Gateway: Telegram ==\r\n\
-             • Token:    {}\r\n\
-             • Owner ID: {}",
-            if token.is_empty() {
-                "Not configured"
+        let bar_width = crate::cli::tui::get_terminal_bar_width();
+        let pkg_ver = env!("CARGO_PKG_VERSION");
+        let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › Gateway › Telegram Gateway Config\x1b[0m";
+        let title_left_vis = 2 + 7 + 2 + 40;
+        let ver_str = format!("v{pkg_ver}");
+        let ver_vis = crate::cli::tui::visible_width(&ver_str);
+        let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
+        let mini_header = format!(
+            "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m",
+            " ".repeat(pad),
+            "─".repeat(bar_width.saturating_sub(4))
+        );
+
+        let (bot_status, token_masked) =
+            if token.is_empty() || token == "YOUR_TELEGRAM_BOT_TOKEN_HERE" {
+                (
+                    "\x1b[38;5;244m○ Not configured\x1b[0m".to_string(),
+                    "(not set)".to_string(),
+                )
             } else {
-                "Saved"
-            },
+                let masked = crate::cli::mcp::mask_api_key(&token);
+                ("\x1b[1;32m● Configured\x1b[0m".to_string(), masked)
+            };
+
+        let owner_str = format!(
+            "\x1b[1;36m{}\x1b[0m \x1b[38;5;244m· Strict Whitelist Active\x1b[0m",
             owner_id
                 .map(|i| i.to_string())
                 .unwrap_or_else(|| "Not set".to_string())
         );
 
+        let hud_rows = [
+            ("BOT STATUS", bot_status.as_str()),
+            ("TOKEN MASKED", token_masked.as_str()),
+            ("AUTH OWNER ID", owner_str.as_str()),
+        ];
+        let hud = crate::cli::tui::render_hud_box("TELEGRAM BOT TELEMETRY", &hud_rows, bar_width);
+
+        let title =
+            format!("{mini_header}\r\n\r\n{hud}\r\n\r\n  \x1b[1;37mTelegram Actions:\x1b[0m");
+
         let actions = vec![
-            "Check Connection / Ping Telegram API".to_string(),
-            "Change Telegram Bot Token".to_string(),
-            "Change Telegram Owner User ID".to_string(),
-            "Back".to_string(),
+            "Ping Telegram API             (Check connection and latency)".to_string(),
+            "Change Telegram Bot Token     (Bind new bot token from @BotFather)".to_string(),
+            "Change Telegram Owner User ID  (Set authorized user Telegram ID)".to_string(),
+            "Back to Gateway Menu          (Return to Messaging Gateways)".to_string(),
         ];
 
-        let sel = terminal_interactive_select(&summary, &actions, 0, false, None);
+        let sel = terminal_interactive_select(&title, &actions, 0, false, None);
         let Some(choice) = sel else {
             break;
         };
 
         match choice {
             0 => {
-                run_cli_telegram_check().await;
+                let _ = check_telegram_connection().await;
                 print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
                 let _ = io::stdout().flush();
                 let mut tmp = String::new();
@@ -210,14 +237,14 @@ pub(crate) async fn run_cli_gateway_hub(action: Option<&str>, target: Option<&st
     }
 }
 
-pub(crate) async fn run_cli_telegram_check() {
+pub(crate) async fn check_telegram_connection() -> bool {
     load_environment();
     println!("\n\x1b[1;36mTelegram Gateway Status\x1b[0m");
 
     let token = get_configured_token().unwrap_or_default();
     if token.is_empty() || token == "YOUR_TELEGRAM_BOT_TOKEN_HERE" {
         println!("  \x1b[31m✖ BOT_TOKEN is not configured.\x1b[0m\n");
-        std::process::exit(1);
+        return false;
     }
 
     let bot = TelegramBotClient::new(&token);
@@ -234,18 +261,29 @@ pub(crate) async fn run_cli_telegram_check() {
                 } else {
                     println!("  \x1b[31m✖ OWNER_USER_ID is not configured.\x1b[0m");
                 }
+                println!();
+                return true;
             }
+            false
         }
         Ok(resp) => {
-            println!("  \x1b[31m✖ Invalid token ({:?})\x1b[0m", resp.description);
-            std::process::exit(1);
+            println!(
+                "  \x1b[31m✖ Invalid token ({:?})\x1b[0m\n",
+                resp.description
+            );
+            false
         }
         Err(e) => {
-            println!("  \x1b[31m✖ Failed to connect to Telegram API ({e})\x1b[0m");
-            std::process::exit(1);
+            println!("  \x1b[31m✖ Failed to connect to Telegram API ({e})\x1b[0m\n");
+            false
         }
     }
-    println!();
+}
+
+pub(crate) async fn run_cli_telegram_check() {
+    if !check_telegram_connection().await {
+        std::process::exit(1);
+    }
 }
 
 pub(crate) async fn run_cli_telegram_bind(manual_token: Option<&str>) {

@@ -6,7 +6,7 @@ use rand::Rng;
 use crate::ai::service::{
     load_provider_store, save_provider_store, ModelRole, ModelRoute, ProviderConfig, ProviderStore,
 };
-use crate::ai::storage::{CapabilityKind, ProbeEvent, ProbeOutcome};
+use crate::ai::storage::{CapabilityKind, CapabilityState, ProbeEvent, ProbeOutcome};
 use crate::ai::AIChatService;
 use crate::cli::status::addon_route_text;
 use crate::cli::tui::terminal_interactive_select;
@@ -70,24 +70,80 @@ pub(crate) async fn run_cli_provider_menu(ai_service: &AIChatService, action: Op
             return;
         }
 
+        let bar_width = crate::cli::tui::get_terminal_bar_width();
+        let pkg_ver = env!("CARGO_PKG_VERSION");
+        let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › AI Center › Provider Management\x1b[0m";
+        let title_left_vis = 2 + 7 + 2 + 38;
+        let ver_str = format!("v{pkg_ver}");
+        let ver_vis = crate::cli::tui::visible_width(&ver_str);
+        let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
+        let mini_header = format!(
+            "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m",
+            " ".repeat(pad),
+            "─".repeat(bar_width.saturating_sub(4))
+        );
+
+        let active_p = store
+            .providers
+            .iter()
+            .find(|p| store.active_id.as_deref() == Some(&p.id));
+        let active_str = active_p
+            .map(|p| {
+                format!(
+                    "\x1b[1;32m● {}\x1b[0m \x1b[38;5;244m(active: {})\x1b[0m",
+                    p.name, p.active_model
+                )
+            })
+            .unwrap_or_else(|| "\x1b[38;5;244m○ None\x1b[0m".to_string());
+        let standby_str = {
+            let names: Vec<&str> = store
+                .providers
+                .iter()
+                .filter(|p| store.active_id.as_deref() != Some(&p.id))
+                .map(|p| p.name.as_str())
+                .collect();
+            if names.is_empty() {
+                "\x1b[38;5;244m(none)\x1b[0m".to_string()
+            } else {
+                format!("\x1b[38;5;252m○ {}\x1b[0m", names.join(" · "))
+            }
+        };
+        let total_str = format!(
+            "\x1b[1;37m{} registered providers\x1b[0m",
+            store.providers.len()
+        );
+
+        let hud_rows = [
+            ("ACTIVE PROVIDER", active_str.as_str()),
+            ("STANDBY PROVIDERS", standby_str.as_str()),
+            ("TOTAL REGISTERED", total_str.as_str()),
+        ];
+        let hud = crate::cli::tui::render_hud_box("REGISTERED AI PROVIDERS", &hud_rows, bar_width);
+
+        let title =
+            format!("{mini_header}\r\n\r\n{hud}\r\n\r\n  \x1b[1;37mManage AI Providers:\x1b[0m");
+
         let mut menu_items: Vec<String> = store
             .providers
             .iter()
             .map(|p| {
                 let is_act = store.active_id.as_deref() == Some(p.id.as_str());
                 if is_act {
-                    format!("{} \x1b[1;32m[ACTIVE]\x1b[0m ({})", p.name, p.active_model)
+                    format!("{} [ACTIVE] ({})", p.name, p.active_model)
                 } else {
                     format!("{} ({})", p.name, p.active_model)
                 }
             })
             .collect();
 
-        menu_items.push("Add New Provider".to_string());
-        menu_items.push("Remove Provider".to_string());
-        menu_items.push("Done / Exit".to_string());
+        menu_items.push(
+            "Add New Provider                (Preset: OpenRouter, Groq, Ollama...)".to_string(),
+        );
+        menu_items
+            .push("Remove Provider                 (Delete provider configuration)".to_string());
+        menu_items.push("Back to AI Hub                  (Return to Xiao AI Hub)".to_string());
 
-        let sel = terminal_interactive_select("Manage AI Providers:", &menu_items, 0, false, None);
+        let sel = terminal_interactive_select(&title, &menu_items, 0, false, None);
 
         let Some(idx) = sel else {
             break;
@@ -97,22 +153,24 @@ pub(crate) async fn run_cli_provider_menu(ai_service: &AIChatService, action: Op
             let target_prov = &store.providers[idx];
             let is_act = store.active_id.as_deref() == Some(target_prov.id.as_str());
 
-            let title_summary = format!(
-                "== Provider: {} ==\r\n\
-                 • Endpoint:     {}\r\n\
-                 • Active Model: \x1b[1;36m{}\x1b[0m\r\n\
-                 • Total Models: {} models\r\n\
-                 • Status:       {}",
-                target_prov.name,
-                target_prov.endpoint,
-                target_prov.active_model,
-                target_prov.models.len(),
-                if is_act {
-                    "\x1b[1;32mACTIVE\x1b[0m"
-                } else {
-                    "INACTIVE"
-                }
+            let card_header = format!("PROVIDER PROFILE: {}", target_prov.name.to_uppercase());
+            let state_str = if is_act {
+                "\x1b[1;32m● ACTIVE PROVIDER\x1b[0m"
+            } else {
+                "\x1b[38;5;244m○ STANDBY\x1b[0m"
+            };
+            let total_models_str = format!(
+                "{} models available (auto-discovered)",
+                target_prov.models.len()
             );
+            let card_rows = [
+                ("BASE ENDPOINT", target_prov.endpoint.as_str()),
+                ("ACTIVE MODEL", target_prov.active_model.as_str()),
+                ("TOTAL MODELS", total_models_str.as_str()),
+                ("PROVIDER STATE", state_str),
+            ];
+            let card_hud = crate::cli::tui::render_hud_box(&card_header, &card_rows, bar_width);
+            let title_summary = format!("{card_hud}\r\n\r\n  \x1b[1;37mProvider Actions:\x1b[0m");
 
             let mut sub_actions = Vec::new();
             if !is_act {
@@ -499,11 +557,51 @@ pub(crate) async fn run_cli_model_picker(ai_service: &AIChatService, initial_fil
         .iter()
         .position(|(_, _, _, is_act)| *is_act)
         .unwrap_or(0);
-    let title = format!(
-        "Select Main Model (Total {} models from {} providers):",
+
+    let bar_width = crate::cli::tui::get_terminal_bar_width();
+    let pkg_ver = env!("CARGO_PKG_VERSION");
+    let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › AI Center › Model Quick-Picker\x1b[0m";
+    let title_left_vis = 2 + 7 + 2 + 37;
+    let ver_str = format!("v{pkg_ver}");
+    let ver_vis = crate::cli::tui::visible_width(&ver_str);
+    let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
+    let mini_header = format!(
+        "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m",
+        " ".repeat(pad),
+        "─".repeat(bar_width.saturating_sub(4))
+    );
+
+    let active_model_str = format!(
+        "\x1b[1;32m● {}\x1b[0m \x1b[38;5;244m({})\x1b[0m",
+        if current_model.is_empty() {
+            "None"
+        } else {
+            &current_model
+        },
+        store
+            .providers
+            .iter()
+            .find(|p| p.id == active_prov_id)
+            .map(|p| p.name.as_str())
+            .unwrap_or("Unknown")
+    );
+    let catalog_str = format!(
+        "\x1b[1;37m{} models registered\x1b[0m \x1b[38;5;244m· {} providers\x1b[0m",
         catalog.len(),
         store.providers.len()
     );
+    let filter_hint = "\x1b[38;5;244m(type keyword to filter / Enter to pick)\x1b[0m";
+
+    let hud_rows = [
+        ("ACTIVE MODEL", active_model_str.as_str()),
+        ("TOTAL CATALOG", catalog_str.as_str()),
+        ("SEARCH FILTER", filter_hint),
+    ];
+    let hud =
+        crate::cli::tui::render_hud_box("CURRENT SELECTION & CONTEXT LIMIT", &hud_rows, bar_width);
+
+    let title =
+        format!("{mini_header}\r\n\r\n{hud}\r\n\r\n  \x1b[1;37mSelect Model to Activate:\x1b[0m");
 
     let selected_idx = terminal_interactive_select(&title, &items, curr_idx, true, initial_filter);
 
@@ -534,16 +632,6 @@ pub(crate) async fn run_cli_model_picker(ai_service: &AIChatService, initial_fil
     }
 }
 
-fn addon_role_short_label(role: ModelRole) -> &'static str {
-    match role {
-        ModelRole::Vision => "Vision",
-        ModelRole::Video => "Video",
-        ModelRole::AudioStt => "Audio STT",
-        ModelRole::ImageGeneration => "Image Gen",
-        ModelRole::Curator => "Curator",
-        ModelRole::Main => "Main",
-    }
-}
 
 pub(crate) async fn run_cli_addon_menu(ai_service: &AIChatService) {
     load_environment();
@@ -551,27 +639,76 @@ pub(crate) async fn run_cli_addon_menu(ai_service: &AIChatService) {
         let providers = ai_service.get_user_providers(0).await;
         let routing = ai_service.model_routing_config().await;
 
-        let mut menu_items = Vec::new();
-        for role in ModelRole::addon_roles() {
-            let route = routing
-                .route(role)
-                .cloned()
-                .unwrap_or(ModelRoute::MainModel);
-            let target_str = addon_route_text(&route, &providers);
-            let label = addon_role_short_label(role);
-            menu_items.push(format!("{:<12} [{target_str}]", label));
-        }
-        menu_items.push("Test Capabilities of All Active Addon Models".to_string());
-        menu_items.push("Reset All Addons to Main Model".to_string());
-        menu_items.push("Done / Exit".to_string());
-
-        let sel = terminal_interactive_select(
-            "Manage Multimodal Addons (Select Role):",
-            &menu_items,
-            0,
-            false,
-            None,
+        let bar_width = crate::cli::tui::get_terminal_bar_width();
+        let pkg_ver = env!("CARGO_PKG_VERSION");
+        let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › AI Center › Specialist Addon Routing\x1b[0m";
+        let title_left_vis = 2 + 7 + 2 + 43;
+        let ver_str = format!("v{pkg_ver}");
+        let ver_vis = crate::cli::tui::visible_width(&ver_str);
+        let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
+        let mini_header = format!(
+            "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m",
+            " ".repeat(pad),
+            "─".repeat(bar_width.saturating_sub(4))
         );
+
+        let vision_route = routing
+            .route(ModelRole::Vision)
+            .cloned()
+            .unwrap_or(ModelRoute::MainModel);
+        let audio_route = routing
+            .route(ModelRole::AudioStt)
+            .cloned()
+            .unwrap_or(ModelRoute::MainModel);
+        let video_route = routing
+            .route(ModelRole::Video)
+            .cloned()
+            .unwrap_or(ModelRoute::MainModel);
+        let image_route = routing
+            .route(ModelRole::ImageGeneration)
+            .cloned()
+            .unwrap_or(ModelRoute::Disabled);
+
+        let vision_str = format!("→ {}", addon_route_text(&vision_route, &providers));
+        let audio_str = format!("→ {}", addon_route_text(&audio_route, &providers));
+        let video_str = format!("→ {}", addon_route_text(&video_route, &providers));
+        let image_str = format!("→ {}", addon_route_text(&image_route, &providers));
+
+        let hud_rows = [
+            ("VISION ROUTE", vision_str.as_str()),
+            ("AUDIO STT", audio_str.as_str()),
+            ("VIDEO FRAMES", video_str.as_str()),
+            ("IMAGE GEN", image_str.as_str()),
+        ];
+        let hud =
+            crate::cli::tui::render_hud_box("CURRENT ADDON ROUTING MATRIX", &hud_rows, bar_width);
+
+        let title = format!(
+            "{mini_header}\r\n\r\n{hud}\r\n\r\n  \x1b[1;37mSelect Addon Role to Configure:\x1b[0m"
+        );
+
+        let mut menu_items = Vec::new();
+        menu_items.push(format!(
+            "Vision (Image Understanding)   [{}]",
+            addon_route_text(&vision_route, &providers)
+        ));
+        menu_items.push(format!(
+            "Audio STT (Voice Notes)        [{}]",
+            addon_route_text(&audio_route, &providers)
+        ));
+        menu_items.push(format!(
+            "Video Frames (Video Analysis)  [{}]",
+            addon_route_text(&video_route, &providers)
+        ));
+        menu_items.push(format!(
+            "Image Generation               [{}]",
+            addon_route_text(&image_route, &providers)
+        ));
+        menu_items.push("Test Capabilities of All Active Addon Models".to_string());
+        menu_items.push("Reset All Addons to Main Model (Restore default)".to_string());
+        menu_items.push("Back to AI Hub                 (Return to Xiao AI Hub)".to_string());
+
+        let sel = terminal_interactive_select(&title, &menu_items, 0, false, None);
 
         let Some(idx) = sel else {
             break;
@@ -787,24 +924,70 @@ async fn run_cli_addon_test_all_routes(ai_service: &AIChatService) {
 pub(crate) async fn run_cli_probe_menu(ai_service: &AIChatService) {
     load_environment();
     loop {
+        let bar_width = crate::cli::tui::get_terminal_bar_width();
+        let pkg_ver = env!("CARGO_PKG_VERSION");
+        let title_left = "  \x1b[48;2;15;23;42m\x1b[38;2;16;185;129m 「 小 」 \x1b[0m  \x1b[1;37mxiao › AI Center › Live Diagnostic Probes\x1b[0m";
+        let title_left_vis = 2 + 7 + 2 + 41;
+        let ver_str = format!("v{pkg_ver}");
+        let ver_vis = crate::cli::tui::visible_width(&ver_str);
+        let pad = bar_width.saturating_sub(title_left_vis + ver_vis + 2);
+        let mini_header = format!(
+            "\r\n{title_left}{}\x1b[38;5;244m{ver_str}\x1b[0m\r\n  \x1b[38;5;238m{}\x1b[0m",
+            " ".repeat(pad),
+            "─".repeat(bar_width.saturating_sub(4))
+        );
+
+        let main_route = ai_service.resolve_model_route(ModelRole::Main).await;
+        let cap_record = match &main_route {
+            Ok(r) => {
+                ai_service
+                    .capability_record(&r.provider.endpoint, &r.model)
+                    .await
+            }
+            Err(_) => None,
+        };
+
+        let format_probe_status = |kind: CapabilityKind| -> String {
+            match cap_record.as_ref().map(|r| r.effective_state_for(kind)) {
+                Some(CapabilityState::Supported) => "\x1b[1;32m● Supported\x1b[0m".to_string(),
+                Some(CapabilityState::Unsupported) => "\x1b[31m✖ Unsupported\x1b[0m".to_string(),
+                _ => "\x1b[38;5;244m○ Unknown\x1b[0m".to_string(),
+            }
+        };
+
+        let text_status = format_probe_status(CapabilityKind::TextChat);
+        let vision_status = format_probe_status(CapabilityKind::ImageInput);
+        let video_status = format_probe_status(CapabilityKind::VideoInput);
+        let audio_status = format_probe_status(CapabilityKind::AudioInput);
+
+        let hud_rows = [
+            ("TEXT CHAT", text_status.as_str()),
+            ("VISION", vision_status.as_str()),
+            ("VIDEO FRAMES", video_status.as_str()),
+            ("AUDIO STT", audio_status.as_str()),
+        ];
+        let hud = crate::cli::tui::render_hud_box(
+            "EVIDENCE-BASED CAPABILITY MATRIX",
+            &hud_rows,
+            bar_width,
+        );
+
+        let title = format!(
+            "{mini_header}\r\n\r\n{hud}\r\n\r\n  \x1b[1;37mSelect Diagnostic Action:\x1b[0m"
+        );
+
         let menu_items = vec![
-            "Audit & Refresh All Active Models".to_string(),
-            "Test Vision Specialist (Live Test)".to_string(),
-            "Test Video Specialist (Live Test)".to_string(),
-            "Test Audio STT Specialist (Live Test)".to_string(),
-            "Test Image Gen Specialist (Live Image Test)".to_string(),
-            "Test Memory Curator Specialist (Live Test)".to_string(),
-            "View SQLite Capability Cache".to_string(),
-            "Done / Exit".to_string(),
+            "Audit & Refresh All Active Models (Run full diagnostic probe suite)".to_string(),
+            "Test Vision Specialist           (Send test image to active model)".to_string(),
+            "Test Video Specialist            (Verify video frame extraction)".to_string(),
+            "Test Audio STT Specialist        (Verify audio transcription)".to_string(),
+            "Test Image Gen Specialist        (Live image generation test)".to_string(),
+            "Test Memory Curator Specialist   (Test Tier-1 memory summarization)".to_string(),
+            "View SQLite Capability Cache     (Inspect raw evidence table)".to_string(),
+            "Back to AI Hub                   (Return to Xiao AI Hub)".to_string(),
         ];
 
-        let sel = terminal_interactive_select(
-            "Diagnostic Center & Capability Probes:",
-            &menu_items,
-            0,
-            false,
-            None,
-        );
+        let sel = terminal_interactive_select(&title, &menu_items, 0, false, None);
 
         let Some(idx) = sel else {
             break;
