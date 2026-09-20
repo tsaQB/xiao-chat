@@ -185,15 +185,27 @@ pub(crate) async fn run_cli_memory(
 
     let parsed = parse_memory_cli_action(action, target);
     if parsed == MemoryCliAction::Help {
-        println!("\n\x1b[1;36mxiao memory — Tier-1 Long-Term Memory Management\x1b[0m\n");
-        println!("\x1b[1;37mUsage:\x1b[0m");
-        println!("  xiao memory [action] [target]\n");
-        println!("\x1b[1;37mSubcommands for 'memory':\x1b[0m");
-        println!("     \x1b[36mxiao memory\x1b[0m                 List remembered long-term facts (default)");
+        let bar_width = crate::cli::tui::get_terminal_bar_width();
+        crate::cli::tui::print_mini_header("Long-Term Memory › Command Reference");
+
+        println!("\n  \x1b[1;37mUsage:\x1b[0m");
+        println!("    \x1b[1;38;5;45mxiao memory\x1b[0m \x1b[38;5;245m<action>\x1b[0m \x1b[38;5;245m[target...]\x1b[0m\n");
+
+        println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mACTIONS\x1b[0m");
+        println!("    \x1b[1;38;5;45mlist\x1b[0m, \x1b[38;5;244m(none)\x1b[0m              \x1b[38;5;250mList remembered long-term facts or open TUI\x1b[0m");
+        println!("    \x1b[1;38;5;45mrm\x1b[0m, \x1b[1;38;5;45mremove\x1b[0m \x1b[38;5;245m<key>\x1b[0m           \x1b[38;5;250mRemove a specific remembered fact\x1b[0m");
+        println!("    \x1b[1;38;5;45mclear\x1b[0m                     \x1b[38;5;250mWipe all remembered facts for the owner\x1b[0m");
+        println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
+
         println!(
-            "     \x1b[36mxiao memory rm <key>\x1b[0m        Remove a specific remembered fact"
+            "  \x1b[38;5;238m{}\x1b[0m\n",
+            "─".repeat(bar_width.saturating_sub(4))
         );
-        println!("     \x1b[36mxiao memory clear\x1b[0m           Wipe all remembered facts for the owner\n");
+
+        println!("  \x1b[1;37mQuick Examples:\x1b[0m");
+        println!("    \x1b[1;38;5;45mxiao memory\x1b[0m                       \x1b[38;5;242m# Interactive memory hub\x1b[0m");
+        println!("    \x1b[1;38;5;45mxiao memory rm user_language\x1b[0m      \x1b[38;5;242m# Remove specific fact\x1b[0m");
+        println!("    \x1b[1;38;5;45mxiao memory clear\x1b[0m                 \x1b[38;5;242m# Wipe all facts\x1b[0m\n");
         return;
     }
 

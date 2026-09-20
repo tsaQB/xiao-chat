@@ -84,15 +84,15 @@ pub(crate) async fn run_cli_launcher(ai_service: &Arc<AIChatService>) {
         let title = format!("{banner}\r\n\r\n{hud}");
 
         let menu_items = vec![
-            "◆  Terminal Chat           (Interactive REPL session)".to_string(),
-            "▶  Start Telegram Daemon   (Launch polling service)".to_string(),
-            "◈  AI Center Hub           (Providers, models, addons, probe)".to_string(),
-            "◉  Gateway Manager         (Bot token, owner ID, check)".to_string(),
-            "⬡  MCP & Web Search        (Brave, Tavily, Exa keys)".to_string(),
-            "▣  System Status & Context (Diagnostics & token gauge)".to_string(),
-            "✦  Long-Term Memory        (Tier-1 profile facts)".to_string(),
-            "⚙  Setup Wizard            (Quickstart onboarding)".to_string(),
-            "✕  Exit".to_string(),
+            "Terminal Chat               (Interactive REPL session)".to_string(),
+            "Start Telegram Daemon       (Launch polling service)".to_string(),
+            "AI Center Hub               (Providers, models, addons, probe)".to_string(),
+            "Gateway Manager             (Bot token, owner ID, check)".to_string(),
+            "MCP & Web Search            (Brave, Tavily, Exa keys)".to_string(),
+            "System Status & Context     (Diagnostics & token gauge)".to_string(),
+            "Long-Term Memory            (Tier-1 profile facts)".to_string(),
+            "Setup Wizard                (Quickstart onboarding)".to_string(),
+            "Exit                        (Quit Xiao Control Center)".to_string(),
         ];
 
         let sel = terminal_interactive_select(&title, &menu_items, 0, false, None);

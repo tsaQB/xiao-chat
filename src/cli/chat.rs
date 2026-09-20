@@ -80,7 +80,7 @@ pub(crate) async fn run_cli_chat(ai_service: &AIChatService, initial_prompt: Opt
     load_environment();
 
     if !ai_service.has_configured_provider(0).await {
-        println!("\n\x1b[33m⚠ No AI Provider configured yet.\x1b[0m");
+        println!("\n  \x1b[38;5;214m◈\x1b[0m \x1b[33mNo AI Provider configured yet.\x1b[0m");
         println!("\x1b[38;5;244mLaunching Setup Wizard for initial configuration...\x1b[0m\n");
         let _ = run_cli_quickstart_wizard(ai_service).await;
         if !ai_service.has_configured_provider(0).await {
@@ -520,7 +520,7 @@ pub(crate) async fn execute_cli_chat_turn(
             let elapsed = start.elapsed().as_secs_f64();
 
             if cancelled {
-                println!("\r\x1b[33m⚠ Request cancelled.\x1b[0m\n");
+                println!("\r\x1b[38;5;214m◈\x1b[0m \x1b[33mRequest cancelled.\x1b[0m\n");
                 return;
             }
 
@@ -557,7 +557,7 @@ pub(crate) async fn execute_cli_chat_turn(
                 let _ = handle.await;
             }
             let _ = cancel_tx.send(true);
-            println!("\r\x1b[33m⚠ Request cancelled by user (Ctrl+C).\x1b[0m\n");
+            println!("\r\x1b[38;5;214m◈\x1b[0m \x1b[33mRequest cancelled by user (Ctrl+C).\x1b[0m\n");
         }
     }
 }

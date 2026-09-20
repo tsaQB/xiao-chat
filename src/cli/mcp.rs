@@ -302,7 +302,7 @@ async fn run_interactive_mcp_menu() {
                     || result.contains("no results found")
                 {
                     println!(
-                        "\x1b[33m⚠ Search finished ({elapsed}ms) with message:\x1b[0m\n{}\n",
+                        "\x1b[38;5;214m◈\x1b[0m \x1b[33mSearch finished ({elapsed}ms) with message:\x1b[0m\n{}\n",
                         result.trim()
                     );
                 } else {
@@ -512,21 +512,33 @@ pub(crate) async fn run_cli_mcp_hub(
             println!("  xiao mcp reset             - Reset MCP endpoint to default (https://mcp.exa.ai/)\n");
         }
         McpCliAction::Help => {
-            println!("\n\x1b[1;36mxiao mcp — Model Context Protocol & Search Tool Hub\x1b[0m\n");
-            println!("\x1b[1;37mUsage:\x1b[0m");
-            println!("  xiao mcp [action] [target]\n");
-            println!("\x1b[1;37mSubcommands for 'mcp':\x1b[0m");
-            println!("     \x1b[36mxiao mcp\x1b[0m                     Display active search status and provider keys");
-            println!("     \x1b[36mxiao mcp url <URL>\x1b[0m           Set custom MCP endpoint URL (SSRF protected)");
-            println!("     \x1b[36mxiao mcp test [query]\x1b[0m        Probe Exa MCP server with a test query");
-            println!("     \x1b[36mxiao mcp search <query>\x1b[0m      Test end-to-end web search tool with active engine");
-            println!("     \x1b[36mxiao mcp tools\x1b[0m               List registered tools and schemas");
-            println!("     \x1b[36mxiao mcp brave [KEY|rm]\x1b[0m     Set or remove Brave Search API key");
-            println!("     \x1b[36mxiao mcp tavily [KEY|rm]\x1b[0m    Set or remove Tavily Search API key");
+            let bar_width = crate::cli::tui::get_terminal_bar_width();
+            crate::cli::tui::print_mini_header("MCP & Search › Command Reference");
+
+            println!("\n  \x1b[1;37mUsage:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao mcp\x1b[0m \x1b[38;5;245m<action>\x1b[0m \x1b[38;5;245m[target...]\x1b[0m\n");
+
+            println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mACTIONS\x1b[0m");
+            println!("    \x1b[1;38;5;45mstatus\x1b[0m, \x1b[38;5;244m(none)\x1b[0m             \x1b[38;5;250mDisplay active search engine status & provider keys\x1b[0m");
+            println!("    \x1b[1;38;5;45msearch\x1b[0m \x1b[38;5;245m<query>\x1b[0m             \x1b[38;5;250mExecute live web search query\x1b[0m");
+            println!("    \x1b[1;38;5;45mtest\x1b[0m, \x1b[1;38;5;45mprobe\x1b[0m \x1b[38;5;245m[query]\x1b[0m        \x1b[38;5;250mDirect JSON-RPC probe to Exa MCP endpoint\x1b[0m");
+            println!("    \x1b[1;38;5;45murl\x1b[0m \x1b[38;5;245m<URL>\x1b[0m                  \x1b[38;5;250mSet custom MCP endpoint URL (SSRF guarded)\x1b[0m");
+            println!("    \x1b[1;38;5;45mtools\x1b[0m                     \x1b[38;5;250mList registered tool schemas exposed to LLM\x1b[0m");
+            println!("    \x1b[1;38;5;45mbrave\x1b[0m \x1b[38;5;245m[KEY|rm]\x1b[0m            \x1b[38;5;250mConfigure or remove Brave Search API key\x1b[0m");
+            println!("    \x1b[1;38;5;45mtavily\x1b[0m \x1b[38;5;245m[KEY|rm]\x1b[0m           \x1b[38;5;250mConfigure or remove Tavily Search API key\x1b[0m");
+            println!("    \x1b[1;38;5;45mexa\x1b[0m \x1b[38;5;245m[KEY|rm]\x1b[0m              \x1b[38;5;250mConfigure or remove Exa REST API key\x1b[0m");
+            println!("    \x1b[1;38;5;45mreset\x1b[0m                     \x1b[38;5;250mReset MCP endpoint to default (https://mcp.exa.ai/)\x1b[0m");
+            println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
+
             println!(
-                "     \x1b[36mxiao mcp exa [KEY|rm]\x1b[0m       Set or remove Exa REST API key"
+                "  \x1b[38;5;238m{}\x1b[0m\n",
+                "─".repeat(bar_width.saturating_sub(4))
             );
-            println!("     \x1b[36mxiao mcp reset\x1b[0m               Reset MCP endpoint to https://mcp.exa.ai/\n");
+
+            println!("  \x1b[1;37mQuick Examples:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao mcp search \"Latest Rust 1.85 features\"\x1b[0m  \x1b[38;5;242m# Live search test\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao mcp brave BSA...                      \x1b[38;5;242m# Save Brave Search key\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao mcp test                              \x1b[38;5;242m# Probe Exa MCP health\x1b[0m\n");
         }
         McpCliAction::Tools => {
             print_tools_summary();
@@ -609,7 +621,7 @@ pub(crate) async fn run_cli_mcp_hub(
                 || result.contains("no results found")
             {
                 println!(
-                    "\x1b[33m⚠ Search finished ({elapsed}ms) with message:\x1b[0m\n{}\n",
+                    "\x1b[38;5;214m◈\x1b[0m \x1b[33mSearch finished ({elapsed}ms) with message:\x1b[0m\n{}\n",
                     result.trim()
                 );
             } else {

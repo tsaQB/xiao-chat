@@ -59,11 +59,24 @@ pub(crate) async fn run_cli_context(
 ) {
     match parse_context_cli_args(raw_chat, raw_thread) {
         ContextCliArgs::Help => {
-            println!("\n\x1b[1;36mxiao context — Context Window & Token Breakdown\x1b[0m\n");
-            println!("\x1b[1;37mUsage:\x1b[0m");
-            println!("  xiao context [chat_id] [thread_id]\n");
-            println!("Displays token consumption, sliding window turns, memory facts count, and visual gauge.");
-            println!("If omitted, defaults to the owner's private chat session.\n");
+            let bar_width = get_terminal_bar_width();
+            print_mini_header("Context Window › Command Reference");
+
+            println!("\n  \x1b[1;37mUsage:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao context\x1b[0m \x1b[38;5;245m[chat_id] [thread_id]\x1b[0m\n");
+
+            println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mDESCRIPTION\x1b[0m");
+            println!("    \x1b[38;5;250mDisplays token consumption, sliding window turns, memory facts count, and visual gauge.\x1b[0m");
+            println!("    \x1b[38;5;244mIf chat_id and thread_id are omitted, defaults to the owner's private chat session.\x1b[0m\n");
+
+            println!(
+                "  \x1b[38;5;238m{}\x1b[0m\n",
+                "─".repeat(bar_width.saturating_sub(4))
+            );
+
+            println!("  \x1b[1;37mQuick Examples:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao context\x1b[0m                      \x1b[38;5;242m# Inspect owner's context budget\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao context -1001234567890 42\x1b[0m    \x1b[38;5;242m# Inspect specific group/forum topic\x1b[0m\n");
         }
         ContextCliArgs::InvalidChatId(s) => {
             println!("\x1b[31m✖ Error: Chat ID '{s}' must be an integer.\x1b[0m");

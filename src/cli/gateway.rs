@@ -105,7 +105,7 @@ pub(crate) async fn run_cli_gateway_menu() {
             }
             1 => {
                 println!(
-                    "\n\x1b[33mℹ WhatsApp Gateway integration is currently in development.\x1b[0m"
+                    "\n  \x1b[38;2;6;182;212m●\x1b[0m \x1b[1;37mWhatsApp Gateway integration is currently in development.\x1b[0m"
                 );
                 println!("\x1b[38;5;244mComing in upcoming releases with Baileys / WhatsApp Web multi-device pairing.\x1b[0m\n");
                 print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
@@ -214,20 +214,28 @@ pub(crate) async fn run_cli_gateway_hub(action: Option<&str>, target: Option<&st
             run_cli_telegram_owner(tgt).await;
         }
         GatewayCliAction::Help => {
-            println!("\n\x1b[1;36mxiao gateway — Telegram Messaging Gateway Management\x1b[0m\n");
-            println!("\x1b[1;37mUsage:\x1b[0m");
-            println!("  xiao gateway [action] [target]\n");
-            println!("\x1b[1;37mSubcommands for 'gateway':\x1b[0m");
+            let bar_width = crate::cli::tui::get_terminal_bar_width();
+            crate::cli::tui::print_mini_header("Gateway › Command Reference");
+
+            println!("\n  \x1b[1;37mUsage:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao gateway\x1b[0m \x1b[38;5;245m<action>\x1b[0m \x1b[38;5;245m[target...]\x1b[0m\n");
+
+            println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mACTIONS\x1b[0m");
+            println!("    \x1b[1;38;5;45mmenu\x1b[0m, \x1b[38;5;244m(none)\x1b[0m              \x1b[38;5;250mOpen interactive Gateway Manager (TUI)\x1b[0m");
+            println!("    \x1b[1;38;5;45mcheck\x1b[0m                     \x1b[38;5;250mVerify bot token connectivity (getMe)\x1b[0m");
+            println!("    \x1b[1;38;5;45mtoken\x1b[0m \x1b[38;5;245m<TOKEN>\x1b[0m             \x1b[38;5;250mBind and verify Telegram Bot Token\x1b[0m");
+            println!("    \x1b[1;38;5;45mowner\x1b[0m, \x1b[1;38;5;45mid\x1b[0m \x1b[38;5;245m<ID>\x1b[0m            \x1b[38;5;250mSet Telegram Owner User ID\x1b[0m");
+            println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
+
             println!(
-                "     \x1b[36mxiao gateway\x1b[0m                Open Interactive Gateway Manager"
+                "  \x1b[38;5;238m{}\x1b[0m\n",
+                "─".repeat(bar_width.saturating_sub(4))
             );
-            println!("     \x1b[36mxiao gateway check\x1b[0m          Verify bot token connectivity (getMe)");
-            println!(
-                "     \x1b[36mxiao gateway token <TOKEN>\x1b[0m  Bind and verify Telegram Bot Token"
-            );
-            println!(
-                "     \x1b[36mxiao gateway owner <ID>\x1b[0m     Set Telegram Owner User ID\n"
-            );
+
+            println!("  \x1b[1;37mQuick Examples:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao gateway check\x1b[0m                \x1b[38;5;242m# Test Telegram connection\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao gateway token <TOKEN>\x1b[0m        \x1b[38;5;242m# Bind new bot token\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao gateway owner 12345678\x1b[0m       \x1b[38;5;242m# Authorize owner ID\x1b[0m\n");
         }
         GatewayCliAction::Unknown(unknown) => {
             println!("\x1b[31m✖ Error: Subcommand 'gateway {unknown}' is unknown.\x1b[0m");

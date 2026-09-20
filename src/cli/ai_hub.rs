@@ -1155,7 +1155,7 @@ async fn run_cli_probe_test_role(ai_service: &AIChatService, role: ModelRole) {
             | ProbeOutcome::NetworkError
             | ProbeOutcome::ProtocolMismatch
             | ProbeOutcome::ProviderError => {
-                println!("  ⚪ Completed but not verified: Result is inconclusive/stale.");
+                println!("  \x1b[38;5;244m○\x1b[0m Completed but not verified: Result is inconclusive/stale.");
             }
         },
         Err(e) => {
@@ -1687,18 +1687,31 @@ pub(crate) async fn run_cli_ai_hub(
             }
         },
         AiCliAction::Help => {
-            println!("\n\x1b[1;36mxiao ai — Unified AI Management Hub\x1b[0m\n");
-            println!("\x1b[1;37mUsage:\x1b[0m");
-            println!("  xiao ai [action]\n");
-            println!("\x1b[1;37mSubcommands for 'ai':\x1b[0m");
-            println!("     \x1b[36mxiao ai\x1b[0m             Open Interactive AI Center Hub");
-            println!("     \x1b[36mxiao ai use <model>\x1b[0m Switch Main Model directly");
+            let bar_width = crate::cli::tui::get_terminal_bar_width();
+            crate::cli::tui::print_mini_header("AI Hub › Command Reference");
+
+            println!("\n  \x1b[1;37mUsage:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao ai\x1b[0m \x1b[38;5;245m<action>\x1b[0m \x1b[38;5;245m[target...]\x1b[0m\n");
+
+            println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mACTIONS\x1b[0m");
+            println!("    \x1b[1;38;5;45mmenu\x1b[0m, \x1b[38;5;244m(none)\x1b[0m              \x1b[38;5;250mOpen interactive AI Center Hub (TUI)\x1b[0m");
+            println!("    \x1b[1;38;5;45muse\x1b[0m \x1b[38;5;245m<model>\x1b[0m               \x1b[38;5;250mSwitch Main Model directly\x1b[0m");
+            println!("    \x1b[1;38;5;45mlist\x1b[0m                      \x1b[38;5;250mPrint table of registered providers and models\x1b[0m");
+            println!("    \x1b[1;38;5;45madd\x1b[0m                       \x1b[38;5;250mAdd an OpenAI-compatible AI provider\x1b[0m");
+            println!("    \x1b[1;38;5;45mrm\x1b[0m, \x1b[1;38;5;45mremove\x1b[0m                \x1b[38;5;250mRemove an AI provider\x1b[0m");
+            println!("    \x1b[1;38;5;45maddon\x1b[0m                     \x1b[38;5;250mConfigure multimodal specialist routes\x1b[0m");
+            println!("    \x1b[1;38;5;45mtest\x1b[0m, \x1b[1;38;5;45mprobe\x1b[0m \x1b[38;5;245m[role]\x1b[0m        \x1b[38;5;250mDiagnostic probes (vision, video, stt, image, all)\x1b[0m");
+            println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
+
             println!(
-                "     \x1b[36mxiao ai list\x1b[0m        Print table of registered providers and models"
+                "  \x1b[38;5;238m{}\x1b[0m\n",
+                "─".repeat(bar_width.saturating_sub(4))
             );
-            println!("     \x1b[36mxiao ai [add|rm]\x1b[0m    Add or remove an OpenAI-compatible AI provider");
-            println!("     \x1b[36mxiao ai addon\x1b[0m       Configure multimodal specialist routes (Vision, STT, Video, Image, Curator)");
-            println!("     \x1b[36mxiao ai test [role]\x1b[0m Open live diagnostic probe center (or test: vision, stt, video, image, curator, all)\n");
+
+            println!("  \x1b[1;37mQuick Examples:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao ai use gpt-4o\x1b[0m               \x1b[38;5;242m# Switch active main model\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao ai test vision\x1b[0m              \x1b[38;5;242m# Test vision specialist capability\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao ai test all\x1b[0m                 \x1b[38;5;242m# Run full capability probe suite\x1b[0m\n");
         }
         AiCliAction::Unknown(unknown) => {
             println!("\x1b[31m✖ Error: Subcommand 'ai {unknown}' is unknown.\x1b[0m");
