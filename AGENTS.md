@@ -54,12 +54,16 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 ### CLI Subcommands (`xiao`)
 The binary supports direct execution for testing, administration, and daemon operation:
 ```bash
+# Default mode: Direct terminal chat REPL (interactive or one-shot query)
+cargo run
+cargo run -- "Hello, who are you?"
+cargo run -- chat
+
+# Open interactive Control Center launcher
+cargo run -- menu
+
 # Start Telegram daemon (default long-polling loop)
 cargo run -- start
-
-# Direct terminal chat mode (one-shot query or interactive REPL without Telegram)
-cargo run -- chat "Hello, who are you?"
-cargo run -- chat
 
 # Display system, database, and provider status dashboard
 cargo run -- status
@@ -69,30 +73,36 @@ cargo run -- context [chat_id] [thread_id]
 
 # Manage long-term user memories
 cargo run -- memory
-cargo run -- memory rm <key>
+cargo run -- memory rm [key]
 cargo run -- memory clear
 
 # AI Provider and Specialist Addon Management
 cargo run -- ai
 cargo run -- ai list
-cargo run -- ai use <model>
+cargo run -- ai use [model]
 cargo run -- ai addon
 cargo run -- ai test [role]
 
-# Model Context Protocol (MCP) & Search Management
+# Web Search Engine Hub & API Keys (Brave, Tavily, Exa)
+cargo run -- search
+cargo run -- search brave [KEY|rm]
+cargo run -- search tavily [KEY|rm]
+cargo run -- search exa [KEY|rm]
+cargo run -- search test [query]
+
+# Model Context Protocol (MCP) Server Registry & Tools
 cargo run -- mcp
-cargo run -- mcp url <URL>
-cargo run -- mcp test [query]
-cargo run -- mcp search <query>
+cargo run -- mcp list
+cargo run -- mcp add <NAME> <URL>
+cargo run -- mcp rm <NAME>
 cargo run -- mcp tools
-cargo run -- mcp brave [KEY|rm]
-cargo run -- mcp tavily [KEY|rm]
-cargo run -- mcp exa [KEY|rm]
+cargo run -- mcp test [NAME]
+cargo run -- mcp url [URL]
 cargo run -- mcp reset
 
 # Telegram Gateway & Owner Configuration
 cargo run -- gateway
-cargo run -- gateway check
+cargo run -- gateway test
 cargo run -- gateway token <BOT_TOKEN>
 cargo run -- gateway owner <OWNER_USER_ID>
 
@@ -144,14 +154,16 @@ cargo run -- setup
 ### Module Responsibilities
 - `src/cli/`: Modular command-line subcommands and interactive interfaces:
   - `tui.rs`: Terminal UI engine, RAII raw-mode lifecycle guard (`CleanRawMode`), and ANSI layout formatters.
+  - `launcher.rs`: Control Center interactive hub (`xiao menu`).
   - `status.rs`: Dashboard and diagnostic system status rendering.
   - `gateway.rs`: Telegram gateway and bot token/owner management.
   - `wizard.rs`: Interactive setup and onboarding quickstart.
-  - `chat.rs`: Terminal chat REPL and multi-session manager (`/sessions`, `/switch`, `/rm`, `/new`).
-  - `memory.rs`: Tier-1 persistent memory management.
-  - `context.rs`: Token usage and sliding-window breakdown inspector.
-  - `mcp.rs`: Model Context Protocol and search engine hub.
-  - `ai_hub.rs`: Provider, model catalog, and multimodal specialist routing.
+  - `chat.rs`: Terminal chat REPL, smart one-shot queries, and multi-session manager (`/sessions`, `/switch`, `/rm`, `/new`).
+  - `memory.rs`: Tier-1 persistent memory management (`xiao memory`).
+  - `context.rs`: Token usage and sliding-window breakdown inspector (`xiao context`).
+  - `search.rs`: Web search engine hub and retrieval keys (`xiao search`).
+  - `mcp.rs`: Model Context Protocol server registry and dynamic tool introspection (`xiao mcp`).
+  - `ai_hub.rs`: Provider, model catalog, and multimodal specialist routing (`xiao ai`).
   - `help.rs`: Global CLI help screen.
 - `src/bot/`:
   - `daemon.rs`: Bot initialization, Telegram connection handshake, command clearing (`pure zero-slash`), and long-polling loop with graceful shutdown.
