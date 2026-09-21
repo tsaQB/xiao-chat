@@ -383,7 +383,10 @@ fn test_parse_mcp_cli_action() {
         parse_mcp_cli_action(Some("list"), None, None),
         McpCliAction::List
     );
-    assert_eq!(parse_mcp_cli_action(Some("help"), None, None), McpCliAction::Help);
+    assert_eq!(
+        parse_mcp_cli_action(Some("help"), None, None),
+        McpCliAction::Help
+    );
     assert_eq!(
         parse_mcp_cli_action(Some("tools"), None, None),
         McpCliAction::Tools
