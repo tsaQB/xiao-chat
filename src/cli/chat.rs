@@ -507,6 +507,8 @@ pub(crate) async fn execute_cli_chat_turn(
         video_bytes: None,
         video_mime: None,
         video_duration: None,
+        bot: None,
+        reply_to_message_id: None,
     };
 
     let start = std::time::Instant::now();

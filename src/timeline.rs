@@ -27,6 +27,7 @@ pub enum ProgressActivity {
     Drawing,
     Watching,
     Summarizing,
+    Quiz,
 }
 
 impl ProgressActivity {
@@ -42,6 +43,7 @@ impl ProgressActivity {
             Self::Drawing => "Generating Image",
             Self::Watching => "Watching",
             Self::Summarizing => "Summarizing",
+            Self::Quiz => "Quiz",
         }
     }
 
@@ -57,6 +59,7 @@ impl ProgressActivity {
             Self::Drawing => "🫟",
             Self::Watching => "🎥",
             Self::Summarizing => "✨",
+            Self::Quiz => "📊",
         }
     }
 }

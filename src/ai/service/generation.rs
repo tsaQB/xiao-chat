@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{debug, error, warn};
 
-use crate::attachments::{encode_user_content, persist_attachment};
+use crate::attachments::{encode_user_content, persist_attachment, AttachmentRef};
 use crate::timeline::{GenerationProgressSink, ProgressActivity};
 use crate::util::truncate_chars;
 
@@ -131,6 +131,8 @@ pub struct GenerationInput<'a> {
     pub video_bytes: Option<Vec<u8>>,
     pub video_mime: Option<&'a str>,
     pub video_duration: Option<i32>,
+    pub bot: Option<crate::bot::client::TelegramBotClient>,
+    pub reply_to_message_id: Option<i64>,
 }
 
 impl AIChatService {
@@ -158,6 +160,37 @@ impl AIChatService {
         snapshot: &GenerationModelSnapshot,
         cancel_rx: &mut watch::Receiver<bool>,
     ) -> (Option<String>, String, bool) {
+        if thread_id > 0
+            && crate::bot::client::TelegramBotClient::current_delivery_context()
+                .message_thread_id
+                .is_none()
+        {
+            let mut ctx = crate::bot::client::TelegramBotClient::current_delivery_context();
+            ctx.message_thread_id = Some(thread_id);
+            crate::bot::client::TelegramBotClient::with_delivery_context(
+                ctx,
+                self.generate_response_with_snapshot_inner(
+                    chat_id, thread_id, user_id, input, snapshot, cancel_rx,
+                ),
+            )
+            .await
+        } else {
+            self.generate_response_with_snapshot_inner(
+                chat_id, thread_id, user_id, input, snapshot, cancel_rx,
+            )
+            .await
+        }
+    }
+
+    async fn generate_response_with_snapshot_inner(
+        &self,
+        chat_id: i64,
+        thread_id: i64,
+        user_id: i64,
+        input: GenerationInput<'_>,
+        snapshot: &GenerationModelSnapshot,
+        cancel_rx: &mut watch::Receiver<bool>,
+    ) -> (Option<String>, String, bool) {
         let GenerationInput {
             prompt,
             canonical_prompt: _,
@@ -173,6 +206,8 @@ impl AIChatService {
             video_bytes,
             video_mime,
             video_duration,
+            bot,
+            reply_to_message_id,
         } = input;
 
         if *cancel_rx.borrow() {
@@ -221,6 +256,8 @@ impl AIChatService {
                         video_bytes,
                         video_mime,
                         video_duration,
+                        bot,
+                        reply_to_message_id,
                     },
                     cancel_rx,
                 )
@@ -276,6 +313,8 @@ impl AIChatService {
                             video_bytes,
                             video_mime,
                             video_duration,
+                            bot,
+                            reply_to_message_id,
                         },
                         cancel_rx,
                     )
@@ -332,6 +371,8 @@ impl AIChatService {
                         video_bytes,
                         video_mime,
                         video_duration,
+                        bot,
+                        reply_to_message_id,
                     },
                     cancel_rx,
                 )
@@ -361,6 +402,8 @@ impl AIChatService {
                         video_bytes,
                         video_mime,
                         video_duration,
+                        bot,
+                        reply_to_message_id,
                     },
                     cancel_rx,
                 )
@@ -419,12 +462,89 @@ impl AIChatService {
                 video_bytes,
                 video_mime,
                 video_duration,
+                bot,
+                reply_to_message_id,
             },
             cancel_rx,
         )
         .await
     }
+}
 
+// Multimodal attachments are stored outside SQLite and referenced from
+// the user message. If the append fails, only newly created references
+// are cleaned up; pre-existing media stays intact.
+#[allow(clippy::too_many_arguments)]
+async fn persist_runtime_attachments(
+    chat_id: i64,
+    thread_id: i64,
+    document_images: Option<&[Vec<u8>]>,
+    image_bytes: Option<&[u8]>,
+    mime_type: Option<&str>,
+    audio_bytes: Option<&[u8]>,
+    audio_mime: Option<&str>,
+    doc_name: Option<&str>,
+    video_bytes: Option<&[u8]>,
+    video_mime: Option<&str>,
+) -> Vec<AttachmentRef> {
+    let mut attachment_refs = Vec::new();
+    if let Some(pages) = document_images {
+        for (index, page) in pages.iter().enumerate() {
+            let page_name = format!(
+                "{} page {}",
+                doc_name.unwrap_or("PDF scan"),
+                index.saturating_add(1)
+            );
+            match persist_attachment(
+                chat_id,
+                thread_id,
+                "document_page",
+                "image/png",
+                Some(&page_name),
+                page,
+            )
+            .await
+            {
+                Ok(reference) => attachment_refs.push(reference),
+                Err(err) => warn!("Failed to persist rendered PDF page: {err}"),
+            }
+        }
+    } else if let Some(bytes) = image_bytes {
+        match resolved_runtime_media_mime(mime_type, "image/", "persisted image") {
+            Ok(resolved_mime) => {
+                match persist_attachment(chat_id, thread_id, "image", &resolved_mime, None, bytes)
+                    .await
+                {
+                    Ok(reference) => attachment_refs.push(reference),
+                    Err(err) => warn!("Failed to persist image attachment: {err}"),
+                }
+            }
+            Err(err) => warn!("Refusing to persist image with false media identity: {err}"),
+        }
+    } else if let Some(bytes) = audio_bytes {
+        let resolved_mime = resolved_audio_persistence_mime(audio_mime, doc_name);
+        match persist_attachment(chat_id, thread_id, "audio", &resolved_mime, doc_name, bytes).await
+        {
+            Ok(reference) => attachment_refs.push(reference),
+            Err(err) => warn!("Failed to persist audio attachment: {err}"),
+        }
+    } else if let Some(bytes) = video_bytes {
+        match resolved_runtime_media_mime(video_mime, "video/", "persisted video") {
+            Ok(resolved_mime) => {
+                match persist_attachment(chat_id, thread_id, "video", &resolved_mime, None, bytes)
+                    .await
+                {
+                    Ok(reference) => attachment_refs.push(reference),
+                    Err(err) => warn!("Failed to persist video attachment: {err}"),
+                }
+            }
+            Err(err) => warn!("Refusing to persist video with false media identity: {err}"),
+        }
+    }
+    attachment_refs
+}
+
+impl AIChatService {
     #[allow(clippy::too_many_arguments)]
     async fn generate_response_on_main(
         &self,
@@ -451,6 +571,8 @@ impl AIChatService {
             video_bytes,
             video_mime,
             video_duration,
+            bot,
+            reply_to_message_id,
         } = input;
 
         let provider = &main_route.provider;
@@ -567,6 +689,7 @@ impl AIChatService {
                     - Video Streaming Web (YouTube, Vimeo, Twitch): gunakan tautan teks standar [Judul Video](https://youtube.com/...) agar Telegram otomatis memunculkan rich link preview interaktif.\n\
                     - Peta/Lokasi: [map: latitude, longitude]\n\
                     - Dokumen: [document: Nama Dokumen](https://url-dokumen)\n\
+                    Jika pengguna meminta untuk membuat kuis, latihan soal, tebak-tebakan, atau trivia interaktif, selalu panggil tool `create_quiz`. Jika ada teks soal panjang, konteks bacaan, studi kasus, atau potongan kode, sertakan pada parameter `preamble` terformat Markdown, dan letakkan pertanyaan kuis spesifik pada `question`.\n\
                     Jangan pernah menampilkan tag internal seperti <think>, <thought>, <tool_call>, atau blok JSON raw ke pengguna.\n\
                     Jika pengguna mengirim '/start' atau salam pembuka di awal sesi baru, sambut mereka dengan hangat, ramah, dan ringkas sebagai asisten AI Xiao tanpa menyebut-nyebut perintah slash. \
                     Jika pengguna mengirim '/start' ketika percakapan sudah berjalan, berikan rangkuman ringkas mengenai hal-hal yang telah dibahas sebelumnya dan tanyakan kelanjutannya secara natural.".to_string();
@@ -1021,6 +1144,8 @@ impl AIChatService {
 
             if turn == 0 && !accumulated_tool_calls.is_empty() && !cancelled {
                 let mut tool_results = Vec::new();
+                let mut quiz_sent = false;
+                let mut quiz_history_summary: Option<String> = None;
                 for tc in accumulated_tool_calls.iter() {
                     let name = tc.name.trim();
                     let tool_id = if tc.id.is_empty() {
@@ -1072,6 +1197,178 @@ impl AIChatService {
                                 res.unwrap_or_else(|e| format!("Gagal membaca URL: {e}"))
                             }
                         }
+                    } else if name == "create_quiz" {
+                        if let Some(s) = sink {
+                            s.on_action("Quiz", Some(ProgressActivity::Quiz));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::CreateQuizArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(correct_id) => {
+                                        if let Some(bot_client) = &bot {
+                                            let (preamble_msg_id, preamble_err) = if let Some(
+                                                preamble,
+                                            ) =
+                                                &args.preamble
+                                            {
+                                                let rich_preamble =
+                                                    crate::parser::build_full_rich_message(
+                                                        preamble, None,
+                                                    );
+                                                match bot_client
+                                                    .send_rich_message(
+                                                        chat_id,
+                                                        &rich_preamble,
+                                                        None,
+                                                        None,
+                                                        reply_to_message_id,
+                                                    )
+                                                    .await
+                                                {
+                                                    Ok(res) => {
+                                                        let pid = res
+                                                            .get("message_id")
+                                                            .and_then(Value::as_i64)
+                                                            .or_else(|| {
+                                                                res.get("result")
+                                                                    .and_then(|r| r.get("message_id"))
+                                                                    .and_then(Value::as_i64)
+                                                            });
+                                                        if let Some(pid) = pid {
+                                                            (Some(pid), None)
+                                                        } else {
+                                                            (None, Some(format!("Gagal mendapatkan ID pesan pengantar kuis dari Telegram: {res}")))
+                                                        }
+                                                    }
+                                                    Err(err) => {
+                                                        (None, Some(format!("Gagal mengirim pesan pengantar kuis ke Telegram: {err}")))
+                                                    }
+                                                }
+                                            } else {
+                                                (None, None)
+                                            };
+
+                                            if let Some(err) = preamble_err {
+                                                err
+                                            } else {
+                                                let poll_reply_to =
+                                                    preamble_msg_id.or(reply_to_message_id);
+                                                let input_options: Vec<
+                                                    crate::bot::models::InputPollOption,
+                                                > = args
+                                                    .options
+                                                    .iter()
+                                                    .map(|opt| {
+                                                        crate::bot::models::InputPollOption::new(
+                                                            opt.as_str(),
+                                                        )
+                                                    })
+                                                    .collect();
+
+                                                let is_anon = args.is_anonymous.unwrap_or(false);
+                                                match bot_client
+                                                    .send_poll(
+                                                        chat_id,
+                                                        &args.question,
+                                                        &input_options,
+                                                        Some(is_anon),
+                                                        Some("quiz"),
+                                                        Some(correct_id),
+                                                        args.explanation.as_deref(),
+                                                        None,
+                                                        poll_reply_to,
+                                                    )
+                                                    .await
+                                                {
+                                                    Ok(_poll_res) => {
+                                                        quiz_sent = true;
+                                                        let mut summary = String::new();
+                                                        if let Some(pre) = &args.preamble {
+                                                            summary.push_str(pre);
+                                                            summary.push_str("\n\n");
+                                                        }
+                                                        summary.push_str(&format!(
+                                                            "📊 **Kuis**: {}\n",
+                                                            args.question
+                                                        ));
+                                                        for (i, opt) in
+                                                            args.options.iter().enumerate()
+                                                        {
+                                                            let mark = if i as i32 == correct_id {
+                                                                " (Benar)"
+                                                            } else {
+                                                                ""
+                                                            };
+                                                            summary.push_str(&format!(
+                                                                "{}. {opt}{mark}\n",
+                                                                i + 1
+                                                            ));
+                                                        }
+                                                        if let Some(exp) = &args.explanation {
+                                                            summary.push_str(&format!(
+                                                                "\n💡 Penjelasan: {exp}\n"
+                                                            ));
+                                                        }
+                                                        if let Some(existing) =
+                                                            &mut quiz_history_summary
+                                                        {
+                                                            existing.push_str("\n\n---\n\n");
+                                                            existing.push_str(&summary);
+                                                        } else {
+                                                            quiz_history_summary = Some(summary);
+                                                        }
+                                                        "Kuis native Telegram berhasil dikirim ke obrolan.".to_string()
+                                                    }
+                                                    Err(err) => {
+                                                        if let Some(pid) = preamble_msg_id {
+                                                            let _ = bot_client
+                                                                .delete_message(chat_id, pid)
+                                                                .await;
+                                                        }
+                                                        format!("Gagal mengirim kuis native ke Telegram: {err}")
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            let mut output = String::new();
+                                            if let Some(pre) = &args.preamble {
+                                                output.push_str(pre);
+                                                output.push_str("\n\n");
+                                            }
+                                            output.push_str(&format!(
+                                                "📊 **Kuis**: {}\n\n",
+                                                args.question
+                                            ));
+                                            for (i, opt) in args.options.iter().enumerate() {
+                                                let marker = if i as i32 == correct_id {
+                                                    "✅"
+                                                } else {
+                                                    "⚪"
+                                                };
+                                                output.push_str(&format!(
+                                                    "{marker} {}. {opt}\n",
+                                                    i + 1
+                                                ));
+                                            }
+                                            if let Some(exp) = &args.explanation {
+                                                output
+                                                    .push_str(&format!("\n💡 Penjelasan: {exp}\n"));
+                                            }
+                                            output
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi kuis gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen kuis tidak valid: {parse_err}")
+                            }
+                        }
                     } else {
                         format!("Tool '{name}' tidak didukung.")
                     };
@@ -1083,6 +1380,80 @@ impl AIChatService {
 
                 if cancelled {
                     break;
+                }
+
+                if quiz_sent {
+                    let attachment_refs = persist_runtime_attachments(
+                        chat_id,
+                        thread_id,
+                        document_images.as_deref(),
+                        image_bytes.as_deref(),
+                        mime_type,
+                        audio_bytes.as_deref(),
+                        audio_mime,
+                        doc_name,
+                        video_bytes.as_deref(),
+                        video_mime,
+                    )
+                    .await;
+
+                    let user_message_content = encode_user_content(
+                        canonical_persisted_prompt(
+                            canonical_history_prompt.as_deref(),
+                            &clean_prompt,
+                        ),
+                        attachment_refs,
+                    );
+                    let user_content_str =
+                        serde_json::to_string(&user_message_content).unwrap_or_default();
+
+                    save_scoped_message_async(
+                        chat_id,
+                        thread_id,
+                        user_id,
+                        "user".to_string(),
+                        user_content_str,
+                    )
+                    .await;
+
+                    let assistant_content =
+                        quiz_history_summary.unwrap_or_else(|| "[Kuis Interaktif]".to_string());
+                    save_scoped_message_async(
+                        chat_id,
+                        thread_id,
+                        user_id,
+                        "assistant".to_string(),
+                        assistant_content.clone(),
+                    )
+                    .await;
+
+                    let service_clone = self.clone();
+                    let prompt_for_bg = clean_prompt.clone();
+                    tokio::spawn(async move {
+                        service_clone
+                            .process_background_memory_turn(
+                                user_id,
+                                chat_id,
+                                thread_id,
+                                &prompt_for_bg,
+                                &assistant_content,
+                            )
+                            .await;
+                    });
+
+                    if let Some(s) = sink {
+                        s.on_complete();
+                    }
+
+                    return (
+                        if !accumulated_reasoning.is_empty() {
+                            Some(accumulated_reasoning.trim().to_string())
+                        } else {
+                            None
+                        },
+                        "[QUIZ_SENT]".to_string(),
+                        false,
+                    );
                 }
 
                 let tool_calls_json = tool_results
@@ -1113,9 +1484,17 @@ impl AIChatService {
                     }));
                 }
 
+                let has_quiz = tool_results
+                    .iter()
+                    .any(|(_, name, _, _)| name == "create_quiz");
+                let follow_up_prompt = if has_quiz {
+                    "Berdasarkan hasil eksekusi tool di atas, tanggapi permintaan kuis pengguna secara lengkap dan jelas."
+                } else {
+                    "Berdasarkan data dan ringkasan hasil pencarian web di atas, jawab pertanyaan awal pengguna secara lengkap dan jelas."
+                };
                 messages.push(json!({
                     "role": "user",
-                    "content": "Berdasarkan data dan ringkasan hasil pencarian web di atas, jawab pertanyaan awal pengguna secara lengkap dan jelas."
+                    "content": follow_up_prompt
                 }));
 
                 payload["messages"] = json!(messages);
@@ -1198,78 +1577,20 @@ impl AIChatService {
             return (thinking_text, answer_text, cancelled);
         }
 
-        // Multimodal attachments are stored outside SQLite and referenced from
-        // the user message. If the append fails, only newly created references
-        // are cleaned up; pre-existing media stays intact.
-        let mut attachment_refs = Vec::new();
-        if let Some(pages) = document_images.as_ref() {
-            for (index, page) in pages.iter().enumerate() {
-                let page_name = format!(
-                    "{} page {}",
-                    doc_name.unwrap_or("PDF scan"),
-                    index.saturating_add(1)
-                );
-                match persist_attachment(
-                    chat_id,
-                    thread_id,
-                    "document_page",
-                    "image/png",
-                    Some(&page_name),
-                    page,
-                )
-                .await
-                {
-                    Ok(reference) => attachment_refs.push(reference),
-                    Err(err) => warn!("Failed to persist rendered PDF page: {err}"),
-                }
-            }
-        } else if let Some(bytes) = image_bytes.as_ref() {
-            match resolved_runtime_media_mime(mime_type, "image/", "persisted image") {
-                Ok(resolved_mime) => {
-                    match persist_attachment(
-                        chat_id,
-                        thread_id,
-                        "image",
-                        &resolved_mime,
-                        None,
-                        bytes,
-                    )
-                    .await
-                    {
-                        Ok(reference) => attachment_refs.push(reference),
-                        Err(err) => warn!("Failed to persist image attachment: {err}"),
-                    }
-                }
-                Err(err) => warn!("Refusing to persist image with false media identity: {err}"),
-            }
-        } else if let Some(bytes) = audio_bytes.as_ref() {
-            let resolved_mime = resolved_audio_persistence_mime(audio_mime, doc_name);
-            match persist_attachment(chat_id, thread_id, "audio", &resolved_mime, doc_name, bytes)
-                .await
-            {
-                Ok(reference) => attachment_refs.push(reference),
-                Err(err) => warn!("Failed to persist audio attachment: {err}"),
-            }
-        } else if let Some(bytes) = video_bytes.as_ref() {
-            match resolved_runtime_media_mime(video_mime, "video/", "persisted video") {
-                Ok(resolved_mime) => {
-                    match persist_attachment(
-                        chat_id,
-                        thread_id,
-                        "video",
-                        &resolved_mime,
-                        None,
-                        bytes,
-                    )
-                    .await
-                    {
-                        Ok(reference) => attachment_refs.push(reference),
-                        Err(err) => warn!("Failed to persist video attachment: {err}"),
-                    }
-                }
-                Err(err) => warn!("Refusing to persist video with false media identity: {err}"),
-            }
-        }
+        // Persist runtime attachments to storage
+        let attachment_refs = persist_runtime_attachments(
+            chat_id,
+            thread_id,
+            document_images.as_deref(),
+            image_bytes.as_deref(),
+            mime_type,
+            audio_bytes.as_deref(),
+            audio_mime,
+            doc_name,
+            video_bytes.as_deref(),
+            video_mime,
+        )
+        .await;
 
         let user_message_content = encode_user_content(
             canonical_persisted_prompt(canonical_history_prompt.as_deref(), &clean_prompt),

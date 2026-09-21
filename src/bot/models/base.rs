@@ -1521,6 +1521,8 @@ pub struct Update {
     pub message: Option<Message>,
     pub callback_query: Option<CallbackQuery>,
     pub stopped_message_generation: Option<MessageGenerationStopped>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll: Option<Poll>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1555,6 +1557,8 @@ pub struct Message {
     pub video_note: Option<VideoNote>,
     pub reply_to_message: Option<Box<Message>>,
     pub community_chat_joined: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll: Option<Poll>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1732,6 +1736,207 @@ pub struct FileInfo {
     #[serde(default, deserialize_with = "deserialize_flexible_opt_i64")]
     pub file_size: Option<i64>,
     pub file_path: Option<String>,
+}
+
+// ==========================================
+// Poll & Quiz Models
+// ==========================================
+
+pub const QUIZ_MAX_QUESTION_CHARS: usize = 300;
+pub const QUIZ_MIN_OPTIONS: usize = 2;
+pub const QUIZ_MAX_OPTIONS: usize = 10;
+pub const QUIZ_MAX_OPTION_CHARS: usize = 100;
+pub const QUIZ_MAX_EXPLANATION_CHARS: usize = 200;
+pub const QUIZ_MAX_EXPLANATION_LINE_BREAKS: usize = 2;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct InputPollOption {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_parse_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_entities: Option<Vec<Value>>,
+}
+
+impl<'de> serde::Deserialize<'de> for InputPollOption {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawOption {
+            text: String,
+            #[serde(default)]
+            text_parse_mode: Option<String>,
+            #[serde(default)]
+            text_entities: Option<Vec<Value>>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Helper {
+            Str(String),
+            Obj(RawOption),
+        }
+
+        match Helper::deserialize(deserializer)? {
+            Helper::Str(s) => Ok(InputPollOption::new(s)),
+            Helper::Obj(obj) => Ok(InputPollOption {
+                text: obj.text,
+                text_parse_mode: obj.text_parse_mode,
+                text_entities: obj.text_entities,
+            }),
+        }
+    }
+}
+
+impl InputPollOption {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            text_parse_mode: None,
+            text_entities: None,
+        }
+    }
+
+    pub fn with_parse_mode(text: impl Into<String>, parse_mode: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            text_parse_mode: Some(parse_mode.into()),
+            text_entities: None,
+        }
+    }
+}
+
+impl From<String> for InputPollOption {
+    fn from(text: String) -> Self {
+        Self::new(text)
+    }
+}
+
+impl From<&str> for InputPollOption {
+    fn from(text: &str) -> Self {
+        Self::new(text)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PollOption {
+    pub text: String,
+    #[serde(default, deserialize_with = "deserialize_flexible_i32")]
+    pub voter_count: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_entities: Option<Vec<Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Poll {
+    pub id: String,
+    pub question: String,
+    pub options: Vec<PollOption>,
+    #[serde(default, deserialize_with = "deserialize_flexible_i32")]
+    pub total_voter_count: i32,
+    #[serde(default)]
+    pub is_closed: bool,
+    #[serde(default)]
+    pub is_anonymous: bool,
+    #[serde(rename = "type")]
+    pub poll_type: String,
+    #[serde(default)]
+    pub allows_multiple_answers: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flexible_opt_i32"
+    )]
+    pub correct_option_id: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation_entities: Option<Vec<Value>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flexible_opt_i32"
+    )]
+    pub open_period: Option<i32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flexible_opt_i64"
+    )]
+    pub close_date: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_entities: Option<Vec<Value>>,
+}
+
+pub fn validate_quiz(
+    question: &str,
+    options: &[InputPollOption],
+    correct_option_id: i32,
+    explanation: Option<&str>,
+) -> Result<(), String> {
+    let q_trimmed = question.trim();
+    if q_trimmed.is_empty() {
+        return Err("Quiz question cannot be empty".to_string());
+    }
+    let q_len = q_trimmed.chars().count();
+    if q_len > QUIZ_MAX_QUESTION_CHARS {
+        return Err(format!(
+            "Quiz question exceeds maximum length of {QUIZ_MAX_QUESTION_CHARS} characters (found {q_len})"
+        ));
+    }
+    if options.len() < QUIZ_MIN_OPTIONS || options.len() > QUIZ_MAX_OPTIONS {
+        return Err(format!(
+            "Quiz must have between {QUIZ_MIN_OPTIONS} and {QUIZ_MAX_OPTIONS} options (found {})",
+            options.len()
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (idx, opt) in options.iter().enumerate() {
+        let opt_trimmed = opt.text.trim();
+        if opt_trimmed.is_empty() {
+            return Err(format!("Quiz option {} cannot be empty", idx + 1));
+        }
+        let opt_len = opt_trimmed.chars().count();
+        if opt_len > QUIZ_MAX_OPTION_CHARS {
+            return Err(format!(
+                "Quiz option {} exceeds maximum length of {QUIZ_MAX_OPTION_CHARS} characters (found {opt_len})",
+                idx + 1
+            ));
+        }
+        if !seen.insert(opt_trimmed) {
+            return Err(format!(
+                "Quiz options must be unique (found duplicate: '{opt_trimmed}')"
+            ));
+        }
+    }
+    if correct_option_id < 0 || correct_option_id as usize >= options.len() {
+        return Err(format!(
+            "Quiz correct_option_id must be between 0 and {} (found {correct_option_id})",
+            options.len().saturating_sub(1)
+        ));
+    }
+    if let Some(exp) = explanation {
+        let exp_trimmed = exp.trim();
+        let exp_len = exp_trimmed.chars().count();
+        if exp_len > QUIZ_MAX_EXPLANATION_CHARS {
+            return Err(format!(
+                "Quiz explanation exceeds maximum length of {QUIZ_MAX_EXPLANATION_CHARS} characters (found {exp_len})"
+            ));
+        }
+        let normalized_exp = exp_trimmed.replace("\r\n", "\n");
+        let line_breaks = normalized_exp
+            .chars()
+            .filter(|&c| c == '\n' || c == '\r')
+            .count();
+        if line_breaks > QUIZ_MAX_EXPLANATION_LINE_BREAKS {
+            return Err(format!(
+                "Quiz explanation cannot exceed {QUIZ_MAX_EXPLANATION_LINE_BREAKS} line breaks (found {line_breaks})"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use tracing::warn;
 use super::client_raw as raw;
 use super::models::{
     ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo, InputMedia,
-    InputRichMessage, ReplyParameters, Update, User,
+    InputPollOption, InputRichMessage, ReplyParameters, Update, User,
 };
 use super::transport_policy::{
     fallback_allowed_error, fallback_allowed_response, retry_delay_for_http_status,
@@ -50,6 +50,22 @@ impl TelegramBotClient {
         let token = token.into().trim().to_string();
         let inner = raw::TelegramBotClient::new(token.clone());
         let base_url = format!("https://api.telegram.org/bot{token}");
+        let client = Client::builder()
+            .timeout(Duration::from_secs(45))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+        Self {
+            inner,
+            token,
+            base_url,
+            client,
+        }
+    }
+
+    pub fn with_base_url(token: impl Into<String>, base_url: impl Into<String>) -> Self {
+        let token = token.into().trim().to_string();
+        let base_url = base_url.into().trim().trim_end_matches('/').to_string();
+        let inner = raw::TelegramBotClient::with_base_url(token.clone(), base_url.clone());
         let client = Client::builder()
             .timeout(Duration::from_secs(45))
             .build()
@@ -482,6 +498,45 @@ impl TelegramBotClient {
             last = self.post_json("sendMessage", payload).await?;
         }
         Ok(last)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_poll(
+        &self,
+        chat_id: i64,
+        question: &str,
+        options: &[InputPollOption],
+        is_anonymous: Option<bool>,
+        poll_type: Option<&str>,
+        correct_option_id: Option<i32>,
+        explanation: Option<&str>,
+        explanation_parse_mode: Option<&str>,
+        reply_to_message_id: Option<i64>,
+    ) -> Result<Value, String> {
+        let mut payload = json!({
+            "chat_id": chat_id,
+            "question": question,
+            "options": options,
+            "type": poll_type.unwrap_or("quiz"),
+        });
+        if let Some(anon) = is_anonymous {
+            payload["is_anonymous"] = json!(anon);
+        }
+        if let Some(correct_id) = correct_option_id {
+            payload["correct_option_id"] = json!(correct_id);
+        }
+        if let Some(exp) = explanation.map(str::trim).filter(|s| !s.is_empty()) {
+            payload["explanation"] = json!(exp);
+            if let Some(pm) = explanation_parse_mode {
+                payload["explanation_parse_mode"] = json!(pm);
+            }
+        }
+        if let Some(rep) = reply_to_message_id {
+            payload["reply_parameters"] =
+                serde_json::to_value(ReplyParameters::new(rep)).unwrap_or(json!({}));
+        }
+        Self::apply_delivery_context(&mut payload, true);
+        self.post_json("sendPoll", payload).await
     }
 
     pub async fn send_photo_bytes(

@@ -5,6 +5,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use regex::Regex;
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, REFERER, USER_AGENT};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
@@ -94,6 +95,42 @@ pub fn get_tools_definition() -> Value {
                         }
                     },
                     "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_quiz",
+                "description": "Buat kuis interaktif native Telegram (mode kuis) dengan 2-10 pilihan ganda. Gunakan parameter preamble jika ingin menyajikan pengantar, konteks bacaan/studi kasus, atau potongan kode panjang sebelum kuis.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "Pertanyaan kuis (maksimal 300 karakter)"
+                        },
+                        "options": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Daftar pilihan jawaban (2 sampai 10 opsi, masing-masing 1-100 karakter)"
+                        },
+                        "correct_option_id": {
+                            "type": "integer",
+                            "description": "Indeks jawaban yang benar (0-based, dimulai dari 0)"
+                        },
+                        "explanation": {
+                            "type": "string",
+                            "description": "Penjelasan saat jawaban dibuka (opsional, maksimal 200 karakter, maksimal 2 line breaks)"
+                        },
+                        "preamble": {
+                            "type": "string",
+                            "description": "Pesan pengantar atau materi/studi kasus/kode panjang sebelum kuis (opsional, terformat Markdown)"
+                        }
+                    },
+                    "required": ["question", "options", "correct_option_id"]
                 }
             }
         }
@@ -822,6 +859,202 @@ pub fn is_suppressed_tool_preamble_stream(text: &str) -> bool {
         .any(|prefix| prefix.starts_with(&lower))
 }
 
+fn deserialize_quiz_options<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum OptionItem {
+        Str(String),
+        Obj { text: String },
+    }
+
+    let items = Vec::<OptionItem>::deserialize(deserializer)?;
+    Ok(items
+        .into_iter()
+        .map(|item| match item {
+            OptionItem::Str(s) => s,
+            OptionItem::Obj { text } => text,
+        })
+        .collect())
+}
+
+fn deserialize_flexible_opt_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum BoolHelper {
+        Bool(bool),
+        Str(String),
+        Num(i64),
+    }
+
+    match Option::<BoolHelper>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(BoolHelper::Bool(b)) => Ok(Some(b)),
+        Some(BoolHelper::Str(s)) => {
+            let s_clean = s.trim().to_ascii_lowercase();
+            if s_clean == "true" || s_clean == "1" || s_clean == "yes" {
+                Ok(Some(true))
+            } else if s_clean == "false" || s_clean == "0" || s_clean == "no" {
+                Ok(Some(false))
+            } else {
+                Err(serde::de::Error::custom(format!(
+                    "invalid boolean value: {s}"
+                )))
+            }
+        }
+        Some(BoolHelper::Num(n)) => Ok(Some(n != 0)),
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct CreateQuizArgs {
+    pub question: String,
+    #[serde(deserialize_with = "deserialize_quiz_options")]
+    pub options: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::bot::models::deserialize_flexible_opt_i32"
+    )]
+    pub correct_option_id: Option<i32>,
+    #[serde(default)]
+    pub explanation: Option<String>,
+    #[serde(default)]
+    pub preamble: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_flexible_opt_bool")]
+    pub is_anonymous: Option<bool>,
+}
+
+impl CreateQuizArgs {
+    pub fn sanitize(&mut self) {
+        self.question = self.question.trim().to_string();
+        if self.question.chars().count() > crate::bot::models::QUIZ_MAX_QUESTION_CHARS {
+            self.question = crate::util::truncate_chars(
+                &self.question,
+                crate::bot::models::QUIZ_MAX_QUESTION_CHARS,
+            )
+            .to_string();
+        }
+
+        if self.options.len() > crate::bot::models::QUIZ_MAX_OPTIONS {
+            self.options.truncate(crate::bot::models::QUIZ_MAX_OPTIONS);
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut dup_counter = 1;
+        for opt in &mut self.options {
+            let mut trimmed = opt.trim().to_string();
+            if trimmed.chars().count() > crate::bot::models::QUIZ_MAX_OPTION_CHARS {
+                trimmed = crate::util::truncate_chars(
+                    &trimmed,
+                    crate::bot::models::QUIZ_MAX_OPTION_CHARS,
+                )
+                .to_string();
+            }
+            if seen.contains(&trimmed) {
+                let candidate = loop {
+                    dup_counter += 1;
+                    let suffix = format!(" ({dup_counter})");
+                    let max_base_len = crate::bot::models::QUIZ_MAX_OPTION_CHARS
+                        .saturating_sub(suffix.chars().count());
+                    let base = crate::util::truncate_chars(&trimmed, max_base_len);
+                    let cand = format!("{base}{suffix}");
+                    if !seen.contains(&cand) {
+                        break cand;
+                    }
+                };
+                seen.insert(candidate.clone());
+                *opt = candidate;
+            } else {
+                seen.insert(trimmed.clone());
+                *opt = trimmed;
+            }
+        }
+
+        if let Some(correct_id) = self.correct_option_id {
+            if !self.options.is_empty() {
+                if correct_id < 0 {
+                    self.correct_option_id = Some(0);
+                } else if correct_id as usize >= self.options.len() {
+                    self.correct_option_id = Some(self.options.len().saturating_sub(1) as i32);
+                }
+            }
+        }
+
+        if let Some(exp) = &mut self.explanation {
+            let normalized = exp.replace("\r\n", "\n").replace('\r', "\n");
+            let trimmed = normalized.trim().to_string();
+            let mut line_break_count = 0;
+            let mut sanitized_exp = String::with_capacity(trimmed.len());
+            for ch in trimmed.chars() {
+                if ch == '\n' {
+                    line_break_count += 1;
+                    if line_break_count <= crate::bot::models::QUIZ_MAX_EXPLANATION_LINE_BREAKS {
+                        sanitized_exp.push(ch);
+                    } else {
+                        sanitized_exp.push(' ');
+                    }
+                } else {
+                    sanitized_exp.push(ch);
+                }
+            }
+            let sanitized_trimmed = sanitized_exp.trim();
+            if sanitized_trimmed.is_empty() {
+                self.explanation = None;
+            } else {
+                let mut final_exp = sanitized_trimmed.to_string();
+                if final_exp.chars().count() > crate::bot::models::QUIZ_MAX_EXPLANATION_CHARS {
+                    final_exp = crate::util::truncate_chars(
+                        &final_exp,
+                        crate::bot::models::QUIZ_MAX_EXPLANATION_CHARS,
+                    )
+                    .to_string();
+                }
+                let final_trimmed = final_exp.trim().to_string();
+                if final_trimmed.is_empty() {
+                    self.explanation = None;
+                } else {
+                    *exp = final_trimmed;
+                }
+            }
+        }
+
+        if let Some(pre) = &mut self.preamble {
+            *pre = pre.trim().to_string();
+            if pre.is_empty() {
+                self.preamble = None;
+            } else if pre.chars().count() > crate::bot::models::RICH_MESSAGE_MAX_TEXT_CHARS {
+                *pre = crate::util::truncate_chars(
+                    pre,
+                    crate::bot::models::RICH_MESSAGE_MAX_TEXT_CHARS,
+                )
+                .to_string();
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<i32, String> {
+        let correct_id = self
+            .correct_option_id
+            .ok_or_else(|| "Quiz requires correct_option_id".to_string())?;
+        let input_options: Vec<crate::bot::models::InputPollOption> = self
+            .options
+            .iter()
+            .map(|opt| crate::bot::models::InputPollOption::new(opt.as_str()))
+            .collect();
+        crate::bot::models::validate_quiz(
+            &self.question,
+            &input_options,
+            correct_id,
+            self.explanation.as_deref(),
+        )?;
+        Ok(correct_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -830,7 +1063,7 @@ mod tests {
     fn test_tools_definition_contains_expected_tools() {
         let tools = get_tools_definition();
         let array = tools.as_array().expect("tools should be an array");
-        assert_eq!(array.len(), 2);
+        assert_eq!(array.len(), 3);
 
         let names: Vec<_> = array
             .iter()
@@ -838,6 +1071,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"web_search"));
         assert!(names.contains(&"fetch_url"));
+        assert!(names.contains(&"create_quiz"));
     }
 
     #[test]
@@ -913,5 +1147,73 @@ mod tests {
         assert!(!status.is_empty());
         assert!(!mcp_url.is_empty());
         assert!(mcp_url.starts_with("http"));
+    }
+
+    #[test]
+    fn test_create_quiz_cascading_duplicate_disambiguation() {
+        let mut args = CreateQuizArgs {
+            question: "Question with duplicates?".to_string(),
+            options: vec!["A".into(), "A (2)".into(), "A".into()],
+            correct_option_id: Some(0),
+            explanation: None,
+            preamble: None,
+            is_anonymous: None,
+        };
+        args.sanitize();
+        assert_eq!(args.options, vec!["A", "A (2)", "A (3)"]);
+        assert!(args.validate().is_ok());
+
+        // Extreme duplicate case: 4 identical options
+        let mut all_same = CreateQuizArgs {
+            question: "Same options?".to_string(),
+            options: vec!["X".into(), "X".into(), "X".into(), "X".into()],
+            correct_option_id: Some(2),
+            explanation: None,
+            preamble: None,
+            is_anonymous: None,
+        };
+        all_same.sanitize();
+        assert_eq!(all_same.options, vec!["X", "X (2)", "X (3)", "X (4)"]);
+        assert!(all_same.validate().is_ok());
+    }
+
+    #[test]
+    fn test_create_quiz_flexible_deserialization() {
+        // Deserializing options from both objects and strings, plus string boolean and string correct_option_id
+        let json_data = r#"{
+            "question": "Flexible quiz test?",
+            "options": [{"text": "Obj Option 1"}, "Plain Option 2"],
+            "correct_option_id": "1",
+            "is_anonymous": "false",
+            "explanation": "Valid explanation"
+        }"#;
+
+        let args: CreateQuizArgs =
+            serde_json::from_str(json_data).expect("must deserialize flexible quiz args");
+        assert_eq!(args.question, "Flexible quiz test?");
+        assert_eq!(args.options, vec!["Obj Option 1", "Plain Option 2"]);
+        assert_eq!(args.correct_option_id, Some(1));
+        assert_eq!(args.is_anonymous, Some(false));
+        assert_eq!(args.explanation.as_deref(), Some("Valid explanation"));
+        assert!(args.validate().is_ok());
+    }
+
+    #[test]
+    fn test_create_quiz_oversized_preamble_truncated() {
+        let huge_preamble = "a".repeat(crate::bot::models::RICH_MESSAGE_MAX_TEXT_CHARS + 100);
+        let mut args = CreateQuizArgs {
+            question: "Quiz with huge preamble?".to_string(),
+            options: vec!["A".into(), "B".into()],
+            correct_option_id: Some(0),
+            explanation: None,
+            preamble: Some(huge_preamble),
+            is_anonymous: None,
+        };
+        args.sanitize();
+        let pre = args.preamble.expect("preamble must exist");
+        assert_eq!(
+            pre.chars().count(),
+            crate::bot::models::RICH_MESSAGE_MAX_TEXT_CHARS
+        );
     }
 }

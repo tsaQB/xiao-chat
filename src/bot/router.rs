@@ -485,6 +485,8 @@ pub async fn handle_ai_chat(
         video_bytes,
         video_mime,
         video_duration,
+        bot: Some(bot.clone()),
+        reply_to_message_id,
     };
     let generation_start = std::time::Instant::now();
     let (_thinking, mut answer_text, cancelled) = if let Some(snapshot) = model_snapshot {
@@ -513,6 +515,10 @@ pub async fn handle_ai_chat(
     ai_service.end_generation(chat_id, draft_id).await;
     timeline.stop_ticker();
     if cancelled {
+        return;
+    }
+    if answer_text == "[QUIZ_SENT]" {
+        timeline.delete_placeholder().await;
         return;
     }
     let elapsed_secs = generation_start.elapsed().as_secs_f64();
