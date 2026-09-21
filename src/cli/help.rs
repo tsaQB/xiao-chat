@@ -15,9 +15,10 @@ pub(crate) fn print_cli_help() {
 
     println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mAI & INTELLIGENCE\x1b[0m");
     println!("    \x1b[1;38;5;45mai\x1b[0m \x1b[38;5;245m[use|list|add|test]\x1b[0m    \x1b[38;5;250mManage models, providers, & multimodal routes\x1b[0m");
+    println!("    \x1b[1;38;5;45msearch\x1b[0m \x1b[38;5;245m[test|brave|exa]\x1b[0m   \x1b[38;5;250mWeb search engine hub & provider API keys\x1b[0m");
+    println!("    \x1b[1;38;5;45mmcp\x1b[0m \x1b[38;5;245m[list|add|tools]\x1b[0m      \x1b[38;5;250mModel Context Protocol (MCP) server & tool hub\x1b[0m");
     println!("    \x1b[1;38;5;45mcontext\x1b[0m \x1b[38;5;245m[chat] [thread]\x1b[0m   \x1b[38;5;250mInspect token consumption & sliding window budget\x1b[0m");
-    println!("    \x1b[1;38;5;45mmemory\x1b[0m \x1b[38;5;245m[list|rm|clear]\x1b[0m    \x1b[38;5;250mManage Tier-1 long-term remembered facts\x1b[0m");
-    println!("    \x1b[1;38;5;45mmcp\x1b[0m \x1b[38;5;245m[search|url|test]\x1b[0m     \x1b[38;5;250mModel Context Protocol & web search engine hub\x1b[0m\n");
+    println!("    \x1b[1;38;5;45mmemory\x1b[0m \x1b[38;5;245m[list|rm|clear]\x1b[0m    \x1b[38;5;250mManage Tier-1 long-term remembered facts\x1b[0m\n");
 
     println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mGATEWAY & SYSTEM\x1b[0m");
     println!("    \x1b[1;38;5;45mgateway\x1b[0m \x1b[38;5;245m[check|token|id]\x1b[0m  \x1b[38;5;250mManage Telegram bot token & owner authorization\x1b[0m");
@@ -34,8 +35,10 @@ pub(crate) fn print_cli_help() {
     println!("    \x1b[1;38;5;45mxiao\x1b[0m                             \x1b[38;5;242m# Start chatting immediately\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao \"Explain Rust async\"\x1b[0m        \x1b[38;5;242m# Direct one-shot terminal query\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao menu\x1b[0m                        \x1b[38;5;242m# Open Control Center TUI\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao search test \"Rust 2024\"\x1b[0m     \x1b[38;5;242m# Test active search engine\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao search brave\x1b[0m                \x1b[38;5;242m# Interactively set Brave Search key\x1b[0m");
+    println!("    \x1b[1;38;5;45mxiao mcp list\x1b[0m                    \x1b[38;5;242m# List connected MCP servers\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao ai use\x1b[0m                      \x1b[38;5;242m# Interactive model picker\x1b[0m");
-    println!("    \x1b[1;38;5;45mxiao memory rm\x1b[0m                   \x1b[38;5;242m# Interactively select fact to delete\x1b[0m");
     println!("    \x1b[1;38;5;45mxiao gateway token\x1b[0m               \x1b[38;5;242m# Interactively bind Telegram bot token\x1b[0m\n");
 
     println!("  \x1b[1;37mTips:\x1b[0m");

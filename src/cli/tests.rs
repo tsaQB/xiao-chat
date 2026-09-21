@@ -5,8 +5,9 @@ use crate::cli::chat::{parse_chat_cli_command, ChatCliCommand};
 use crate::cli::context::{format_context_gauge, parse_context_cli_args, ContextCliArgs};
 use crate::cli::gateway::{parse_gateway_cli_action, GatewayCliAction};
 use crate::cli::launcher::build_telemetry_hud;
-use crate::cli::mcp::{mask_api_key, parse_mcp_cli_action, McpCliAction};
+use crate::cli::mcp::{parse_mcp_cli_action, McpCliAction};
 use crate::cli::memory::{parse_memory_cli_action, MemoryCliAction};
+use crate::cli::search::{mask_api_key, parse_search_cli_action, SearchCliAction};
 use crate::cli::status::addon_route_text;
 use crate::cli::tui::{
     cycle_next, cycle_prev, format_tui_title, get_terminal_bar_width, truncate_visible,
@@ -373,47 +374,96 @@ fn test_mask_api_key() {
 
 #[test]
 fn test_parse_mcp_cli_action() {
-    assert_eq!(parse_mcp_cli_action(None, None), McpCliAction::Status);
+    assert_eq!(parse_mcp_cli_action(None, None, None), McpCliAction::Status);
     assert_eq!(
-        parse_mcp_cli_action(Some("status"), None),
+        parse_mcp_cli_action(Some("status"), None, None),
         McpCliAction::Status
     );
-    assert_eq!(parse_mcp_cli_action(Some("help"), None), McpCliAction::Help);
     assert_eq!(
-        parse_mcp_cli_action(Some("tools"), None),
+        parse_mcp_cli_action(Some("list"), None, None),
+        McpCliAction::List
+    );
+    assert_eq!(parse_mcp_cli_action(Some("help"), None, None), McpCliAction::Help);
+    assert_eq!(
+        parse_mcp_cli_action(Some("tools"), None, None),
         McpCliAction::Tools
     );
     assert_eq!(
-        parse_mcp_cli_action(Some("url"), Some("https://mcp.local")),
+        parse_mcp_cli_action(Some("url"), Some("https://mcp.local"), None),
         McpCliAction::Url(Some("https://mcp.local"))
     );
     assert_eq!(
-        parse_mcp_cli_action(Some("test"), Some("query")),
+        parse_mcp_cli_action(Some("add"), Some("custom"), Some("https://mcp.local")),
+        McpCliAction::Add(Some("custom"), Some("https://mcp.local"))
+    );
+    assert_eq!(
+        parse_mcp_cli_action(Some("rm"), Some("custom"), None),
+        McpCliAction::Remove(Some("custom"))
+    );
+    assert_eq!(
+        parse_mcp_cli_action(Some("test"), Some("query"), None),
         McpCliAction::Test(Some("query"))
     );
     assert_eq!(
-        parse_mcp_cli_action(Some("search"), Some("query")),
+        parse_mcp_cli_action(Some("search"), Some("query"), None),
         McpCliAction::Search(Some("query"))
     );
     assert_eq!(
-        parse_mcp_cli_action(Some("brave"), Some("key")),
+        parse_mcp_cli_action(Some("brave"), Some("key"), None),
         McpCliAction::Brave(Some("key"))
     );
     assert_eq!(
-        parse_mcp_cli_action(Some("tavily"), Some("key")),
+        parse_mcp_cli_action(Some("tavily"), Some("key"), None),
         McpCliAction::Tavily(Some("key"))
     );
     assert_eq!(
-        parse_mcp_cli_action(Some("exa"), Some("key")),
+        parse_mcp_cli_action(Some("exa"), Some("key"), None),
         McpCliAction::Exa(Some("key"))
     );
     assert_eq!(
-        parse_mcp_cli_action(Some("reset"), None),
+        parse_mcp_cli_action(Some("reset"), None, None),
         McpCliAction::Reset
     );
     assert_eq!(
-        parse_mcp_cli_action(Some("bogus"), None),
+        parse_mcp_cli_action(Some("bogus"), None, None),
         McpCliAction::Unknown("bogus")
+    );
+}
+
+#[test]
+fn test_parse_search_cli_action() {
+    assert_eq!(parse_search_cli_action(None, None), SearchCliAction::Status);
+    assert_eq!(
+        parse_search_cli_action(Some("status"), None),
+        SearchCliAction::Status
+    );
+    assert_eq!(
+        parse_search_cli_action(Some("help"), None),
+        SearchCliAction::Help
+    );
+    assert_eq!(
+        parse_search_cli_action(Some("test"), Some("query")),
+        SearchCliAction::Test(Some("query"))
+    );
+    assert_eq!(
+        parse_search_cli_action(Some("brave"), Some("key")),
+        SearchCliAction::Brave(Some("key"))
+    );
+    assert_eq!(
+        parse_search_cli_action(Some("tavily"), Some("key")),
+        SearchCliAction::Tavily(Some("key"))
+    );
+    assert_eq!(
+        parse_search_cli_action(Some("exa"), Some("key")),
+        SearchCliAction::Exa(Some("key"))
+    );
+    assert_eq!(
+        parse_search_cli_action(Some("engine"), Some("brave")),
+        SearchCliAction::Engine(Some("brave"))
+    );
+    assert_eq!(
+        parse_search_cli_action(Some("bogus"), None),
+        SearchCliAction::Unknown("bogus")
     );
 }
 

@@ -146,7 +146,7 @@ async fn run_cli_gateway_telegram_submenu() {
                     "(not set)".to_string(),
                 )
             } else {
-                let masked = crate::cli::mcp::mask_api_key(&token);
+                let masked = crate::cli::search::mask_api_key(&token);
                 ("\x1b[1;32m● Configured\x1b[0m".to_string(), masked)
             };
 

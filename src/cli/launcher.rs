@@ -88,7 +88,8 @@ pub(crate) async fn run_cli_launcher(ai_service: &Arc<AIChatService>) {
             "Start Telegram Daemon       (Launch polling service)".to_string(),
             "AI Center Hub               (Providers, models, addons, probe)".to_string(),
             "Gateway Manager             (Bot token, owner ID, check)".to_string(),
-            "MCP & Web Search            (Brave, Tavily, Exa keys)".to_string(),
+            "Web Search Engine           (Brave, Tavily, Exa API keys)".to_string(),
+            "Model Context Protocol      (MCP servers, dynamic tools)".to_string(),
             "System Status & Context     (Diagnostics & token gauge)".to_string(),
             "Long-Term Memory            (Tier-1 profile facts)".to_string(),
             "Setup Wizard                (Quickstart onboarding)".to_string(),
@@ -116,9 +117,12 @@ pub(crate) async fn run_cli_launcher(ai_service: &Arc<AIChatService>) {
                 run_cli_gateway_hub(None, None).await;
             }
             Some(4) => {
-                run_cli_mcp_hub(ai_service, None, None).await;
+                crate::cli::search::run_cli_search_hub(ai_service, None, None).await;
             }
             Some(5) => {
+                run_cli_mcp_hub(ai_service, None, None, None).await;
+            }
+            Some(6) => {
                 let diag_items = vec![
                     "System Health & Telemetry Status (Gateways, providers, routing, models)"
                         .to_string(),
@@ -157,13 +161,13 @@ pub(crate) async fn run_cli_launcher(ai_service: &Arc<AIChatService>) {
                     _ => {}
                 }
             }
-            Some(6) => {
+            Some(7) => {
                 run_cli_memory(ai_service, None, None).await;
             }
-            Some(7) => {
+            Some(8) => {
                 let _ = run_cli_quickstart_wizard(ai_service).await;
             }
-            Some(8) | None => {
+            Some(9) | None => {
                 println!("\n\x1b[38;5;244mGoodbye!\x1b[0m\n");
                 break;
             }

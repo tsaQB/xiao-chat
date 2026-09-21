@@ -211,10 +211,17 @@ async fn main() {
             run_cli_gateway_hub(action_arg, target_arg).await;
             return;
         }
+        Some("search") => {
+            let action_arg = args.get(2).map(|s| s.as_str());
+            let target_arg = args.get(3).map(|s| s.as_str());
+            run_cli_search_hub(&ai_service, action_arg, target_arg).await;
+            return;
+        }
         Some("mcp") => {
             let action_arg = args.get(2).map(|s| s.as_str());
             let target_arg = args.get(3).map(|s| s.as_str());
-            run_cli_mcp_hub(&ai_service, action_arg, target_arg).await;
+            let extra_arg = args.get(4).map(|s| s.as_str());
+            run_cli_mcp_hub(&ai_service, action_arg, target_arg, extra_arg).await;
             return;
         }
         Some("chat") => {

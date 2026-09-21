@@ -321,7 +321,8 @@ xiao <subcommand> [arguments]
 | `ai use [model]` | Switch the active Main model (interactive picker if model is omitted). |
 | `ai addon` | Configure multimodal specialist roles (`Vision`, `Video`, `Audio STT`, etc.). |
 | `ai test [role]` | Run live diagnostic capability probes against configured endpoints. |
-| `mcp [action]` | Manage Model Context Protocol search endpoints and tool integrations. |
+| `search [action]` | Web search engine hub and provider API keys (Brave, Tavily, Exa). |
+| `mcp [action]` | Model Context Protocol (MCP) server registry and dynamic tool hub. |
 | `gateway` | Inspect Telegram Bot Token connectivity, verify owner, and test polling. |
 | `version` | Display version and target build metadata. |
 | `help` | Display command-line help screen. |
