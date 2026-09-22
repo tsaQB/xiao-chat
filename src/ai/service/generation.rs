@@ -762,7 +762,7 @@ impl AIChatService {
                     Lakukan penalaran secara internal dan berikan hanya jawaban yang berguna bagi pengguna; jangan menampilkan chain-of-thought tersembunyi. \
                     Gunakan gaya bahasa yang alami dan format teks yang elegan. \
                     Jika membuat tabel atau data berkolom, gunakan Markdown Table standar agar Xiao dapat merendernya secara rapi. \
-                    Jika pengguna meminta atau membutuhkan konten visual, foto, album kolase, tayangan slide, berkas audio/musik, rekaman suara, lokasi peta, dokumen berkas, atau kuis interaktif, SELALU panggil tool resmi yang sesuai (`send_photo`, `send_collage`, `send_slideshow`, `send_audio`, `send_voice`, `send_location`, `send_document`, `create_quiz`). \
+                    Jika pengguna meminta atau membutuhkan konten visual, foto, gambar, logo, lambang/ikon, album kolase, tayangan slide, berkas audio/musik, rekaman suara, lokasi peta, dokumen berkas, atau kuis interaktif, SELALU panggil tool resmi yang sesuai (`send_photo`, `send_collage`, `send_slideshow`, `send_audio`, `send_voice`, `send_location`, `send_document`, `create_quiz`). Jika Anda membutuhkan URL gambar untuk memanggil tool foto/kolase, gunakan tool `web_search` terlebih dahulu untuk memperoleh URL gambar raster terverifikasi (.jpg, .png, .webp). \
                     JANGAN PERNAH menyematkan pseudo-tag atau format teks fiktif untuk media di dalam teks jawaban. Teks jawaban harus murni teks berformat Markdown standar. \
                     Untuk tautan video streaming eksternal (seperti YouTube, Vimeo, Twitch), sertakan tautan teks Markdown standar [Judul Video](https://...) agar Telegram otomatis memunculkan rich link preview interaktif. \
                     Jika pengguna meminta kuis interaktif, latihan soal, atau tebak-tebakan, selalu panggil tool `create_quiz` (gunakan parameter `preamble` terformat Markdown jika ada materi pengantar, studi kasus, atau potongan kode sebelum kuis).\n\
@@ -1827,7 +1827,7 @@ impl AIChatService {
                 } else if turn >= 1 {
                     "Berdasarkan seluruh hasil pencarian dan informasi di atas, berikan penjelasan naratif yang lengkap, informatif, dan jelas untuk menjawab pertanyaan pengguna. Jika ada tautan foto/gambar atau sumber terverifikasi, sertakan tautan tersebut."
                 } else {
-                    "Berdasarkan hasil pencarian dan informasi di atas, jika pengguna meminta foto/gambar dan Anda menemukan URL gambar langsung yang valid (akhiran .jpg, .png, .webp) atau tautan media dari Wikimedia/Unsplash, Anda dapat memanggil tool multimedia resmi (seperti send_collage atau send_photo). Jika tidak, berikan penjelasan naratif yang lengkap dan jelas beserta tautan sumber yang relevan."
+                    "Berdasarkan hasil pencarian dan informasi di atas, jika pengguna meminta foto/gambar/logo dan Anda menemukan URL gambar raster terverifikasi (.jpg, .png, .webp) di bagian [URL Foto/Gambar Raster Terverifikasi], Anda WAJIB memanggil tool multimedia resmi (seperti send_photo untuk satu gambar, atau send_collage / send_slideshow untuk beberapa gambar) menggunakan URL tersebut agar media tampil langsung di gelembung pesan Telegram. Jika tidak ada URL gambar raster yang valid, berikan penjelasan naratif yang lengkap dan jelas beserta tautan sumber yang relevan."
                 };
                 messages.push(json!({
                     "role": "user",

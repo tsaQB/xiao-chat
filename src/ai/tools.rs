@@ -81,13 +81,19 @@ static RE_HTML_A_HREF_IMG: LazyLock<Regex> = LazyLock::new(|| {
 });
 static RE_VISUAL_KEYWORDS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)\b(?:foto|foto-foto|gambar|gambar-gambar|potret|pemandangan|citra|lukisan|ilustrasi|wallpaper|bagan|diagram|grafis|photo|photos|picture|pictures|pic|pics|image|images|visual|visuals|illustration|wallpaper)\b",
+        r"(?i)\b(?:foto|foto-foto|gambar|gambar-gambar|potret|pemandangan|citra|lukisan|ilustrasi|wallpaper|bagan|diagram|grafis|logo|logos|logonya|ikon|icon|icons|lambang|simbol|symbol|symbols|emblem|emblems|badge|badges|vektor|vector|vectors|bendera|flag|flags|photo|photos|picture|pictures|pic|pics|image|images|visual|visuals|illustration|wallpaper|png|jpg|jpeg|webp)\b",
+    )
+    .expect("valid static regex")
+});
+static RE_LOGO_KEYWORDS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:logo|logos|logonya|ikon|icon|icons|lambang|simbol|symbol|symbols|emblem|emblems|badge|badges|crest|coat of arms)\b",
     )
     .expect("valid static regex")
 });
 static RE_CONVERSATIONAL_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)^(?:(?:tolong|coba|mohon|bisakah|bisa|silakan|please|can you|could you|i want|i need|aku mau|saya mau)\s+)?(?:(?:berikan|carikan|tampilkan|tunjukkan|perlihatkan|lihatkan|kirimkan|cari|lihat|minta|give|show|find|search|send|get)\b(?:\s+(?:saya|aku|kami|me|us)\b)?)?(?:\s*(?:\d+|satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|beberapa|one|two|three|four|five|six|seven|eight|nine|ten|some|a|an)\b)?(?:\s*(?:buah|lembar|keping|ekor|item|items)\b)?(?:\s*(?:foto-foto|foto|gambar-gambar|gambar|potret|citra|photos?|pictures?|images?|pics?)\b)?(?:\s*(?:dari|tentang|mengenai|of|about)\b)?\s*",
+        r"(?i)^(?:(?:tolong|coba|mohon|bisakah|bisa|silakan|please|can you|could you|i want|i need|aku mau|saya mau)\s+)?(?:(?:berikan|carikan|tampilkan|tunjukkan|perlihatkan|lihatkan|kirimkan|cari|lihat|minta|give|show|find|search|send|get)\b(?:\s+(?:saya|aku|kami|me|us)\b)?)?(?:\s*(?:\d+|satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|beberapa|one|two|three|four|five|six|seven|eight|nine|ten|some|a|an)\b)?(?:\s*(?:buah|lembar|keping|ekor|item|items)\b)?(?:\s*(?:foto-foto|foto|gambar-gambar|gambar|potret|citra|logo|logos|logonya|ikon|icon|icons|photos?|pictures?|images?|pics?)\b)?(?:\s*(?:dari|tentang|mengenai|of|about)\b)?\s*",
     )
     .expect("valid static regex")
 });
@@ -108,6 +114,15 @@ pub fn is_visual_search_query(query: &str) -> bool {
         return false;
     }
     RE_VISUAL_KEYWORDS.is_match(trimmed)
+}
+
+#[allow(dead_code)]
+pub fn is_logo_query(query: &str) -> bool {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    RE_LOGO_KEYWORDS.is_match(trimmed)
 }
 
 #[allow(dead_code)]
@@ -1404,9 +1419,10 @@ async fn fetch_wikipedia_article_images(
     client: &reqwest::Client,
     lang: &str,
     article_title: &str,
+    is_logo_search: bool,
 ) -> Result<Vec<String>, String> {
     let url = format!(
-        "https://{lang}.wikipedia.org/w/api.php?action=query&titles={}&generator=images&gimlimit=12&prop=imageinfo&iiprop=url&format=json",
+        "https://{lang}.wikipedia.org/w/api.php?action=query&titles={}&generator=images&gimlimit=12&prop=imageinfo&iiprop=url&iiurlwidth=1000&format=json",
         urlencoding::encode(article_title)
     );
 
@@ -1443,19 +1459,29 @@ async fn fetch_wikipedia_article_images(
             let title = page.get("title").and_then(Value::as_str).unwrap_or("");
             let title_lower = title.to_ascii_lowercase();
 
-            if title_lower.contains("logo")
-                || title_lower.contains("flag")
-                || title_lower.contains("icon")
-                || title_lower.contains("symbol")
-                || title_lower.contains("disambig")
+            if !is_logo_search {
+                if title_lower.contains("logo")
+                    || title_lower.contains("flag")
+                    || title_lower.contains("icon")
+                    || title_lower.contains("symbol")
+                    || title_lower.contains("disambig")
+                    || title_lower.contains("ui")
+                    || title_lower.contains("locator")
+                    || title_lower.contains("map")
+                    || title_lower.contains("peta")
+                    || title_lower.contains("diagram")
+                    || title_lower.contains("insignia")
+                    || title_lower.contains("coat_of_arms")
+                    || title_lower.contains("lambang")
+                    || title_lower.contains("stub")
+                {
+                    continue;
+                }
+            } else if title_lower.contains("disambig")
                 || title_lower.contains("ui")
                 || title_lower.contains("locator")
                 || title_lower.contains("map")
                 || title_lower.contains("peta")
-                || title_lower.contains("diagram")
-                || title_lower.contains("insignia")
-                || title_lower.contains("coat_of_arms")
-                || title_lower.contains("lambang")
                 || title_lower.contains("stub")
             {
                 continue;
@@ -1463,11 +1489,98 @@ async fn fetch_wikipedia_article_images(
 
             if let Some(info_arr) = page.get("imageinfo").and_then(Value::as_array) {
                 if let Some(first_info) = info_arr.first() {
-                    if let Some(raw_url) = first_info.get("url").and_then(Value::as_str) {
-                        if let Some(valid_url) = sanitize_and_validate_raster_url(raw_url) {
-                            if !images.contains(&valid_url) {
-                                images.push(valid_url);
-                            }
+                    let candidate_url = first_info
+                        .get("thumburl")
+                        .and_then(Value::as_str)
+                        .and_then(sanitize_and_validate_raster_url)
+                        .or_else(|| {
+                            first_info
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .and_then(sanitize_and_validate_raster_url)
+                        });
+                    if let Some(valid_url) = candidate_url {
+                        if !images.contains(&valid_url) {
+                            images.push(valid_url);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(images)
+}
+
+async fn search_wikimedia_commons_files(
+    client: &reqwest::Client,
+    query: &str,
+) -> Result<Vec<String>, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = format!(
+        "https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch={}&gsrnamespace=6&gsrlimit=6&prop=imageinfo&iiprop=url&iiurlwidth=1000&format=json",
+        urlencoding::encode(q)
+    );
+
+    let resp = client
+        .get(&url)
+        .header(
+            USER_AGENT,
+            concat!(
+                "xiao/",
+                env!("CARGO_PKG_VERSION"),
+                " (Telegram Bot Assistant)"
+            ),
+        )
+        .send()
+        .await
+        .map_err(|e| format!("Wikimedia Commons request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Wikimedia Commons status HTTP {}", resp.status()));
+    }
+
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Wikimedia Commons JSON: {e}"))?;
+
+    let mut images = Vec::new();
+    if let Some(pages_obj) = body
+        .get("query")
+        .and_then(|qu| qu.get("pages"))
+        .and_then(Value::as_object)
+    {
+        for page in pages_obj.values() {
+            let title = page.get("title").and_then(Value::as_str).unwrap_or("");
+            let title_lower = title.to_ascii_lowercase();
+            if title_lower.contains("disambig")
+                || title_lower.contains("locator")
+                || title_lower.contains("map")
+                || title_lower.contains("peta")
+                || title_lower.contains("stub")
+            {
+                continue;
+            }
+
+            if let Some(info_arr) = page.get("imageinfo").and_then(Value::as_array) {
+                if let Some(first_info) = info_arr.first() {
+                    let candidate_url = first_info
+                        .get("thumburl")
+                        .and_then(Value::as_str)
+                        .and_then(sanitize_and_validate_raster_url)
+                        .or_else(|| {
+                            first_info
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .and_then(sanitize_and_validate_raster_url)
+                        });
+                    if let Some(valid_url) = candidate_url {
+                        if !images.contains(&valid_url) {
+                            images.push(valid_url);
                         }
                     }
                 }
@@ -1492,6 +1605,7 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
 
     let core_terms = extract_core_search_terms(q);
     let is_visual = is_visual_search_query(q);
+    let is_logo = is_logo_query(q);
 
     let search_attempts =
         if is_visual && !core_terms.is_empty() && core_terms.to_lowercase() != q.to_lowercase() {
@@ -1573,30 +1687,31 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
 
                 out.push_str(&format_search_item(i + 1, title, &page_url, clean_extract));
 
-                // Prefer original source first, thumbnail second to avoid duplicate resolutions
+                // Prefer thumbnail (raster render, e.g. 1000px PNG) first if original is SVG or non-raster
                 let candidate_url = page
-                    .get("original")
-                    .and_then(|o| o.get("source"))
+                    .get("thumbnail")
+                    .and_then(|t| t.get("source"))
                     .and_then(Value::as_str)
+                    .and_then(sanitize_and_validate_raster_url)
                     .or_else(|| {
-                        page.get("thumbnail")
-                            .and_then(|t| t.get("source"))
+                        page.get("original")
+                            .and_then(|o| o.get("source"))
                             .and_then(Value::as_str)
+                            .and_then(sanitize_and_validate_raster_url)
                     });
-                if let Some(src) = candidate_url {
-                    if let Some(valid_url) = sanitize_and_validate_raster_url(src) {
-                        if !verified_images.contains(&valid_url) {
-                            verified_images.push(valid_url);
-                        }
+                if let Some(valid_url) = candidate_url {
+                    if !verified_images.contains(&valid_url) {
+                        verified_images.push(valid_url);
                     }
                 }
             }
 
             if is_visual {
+                let is_logo_search = is_logo || is_logo_query(attempt);
                 for page in page_list.iter().take(3) {
                     if let Some(title) = page.get("title").and_then(Value::as_str) {
                         if let Ok(gallery_images) =
-                            fetch_wikipedia_article_images(client, lang, title).await
+                            fetch_wikipedia_article_images(client, lang, title, is_logo_search).await
                         {
                             for img in gallery_images {
                                 if !verified_images.contains(&img) {
@@ -1610,6 +1725,19 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
                     }
                     if verified_images.len() >= 8 {
                         break;
+                    }
+                }
+
+                if verified_images.len() < 3 || is_logo_search {
+                    if let Ok(commons_images) = search_wikimedia_commons_files(client, attempt).await {
+                        for img in commons_images {
+                            if !verified_images.contains(&img) {
+                                verified_images.push(img);
+                            }
+                            if verified_images.len() >= 8 {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1631,6 +1759,16 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
                 } else if is_visual {
                     res.push_str(&format_no_images_guidance(q));
                 }
+                return Ok(res);
+            }
+        }
+    }
+
+    if is_visual {
+        if let Ok(commons_images) = search_wikimedia_commons_files(client, q).await {
+            if !commons_images.is_empty() {
+                let mut res = format!("[Hasil Informasi Berkas Media untuk \"{q}\"]\n\nDitemukan berkas media resmi terverifikasi untuk topik tersebut.\n");
+                res.push_str(&format_verified_images_section(&commons_images));
                 return Ok(res);
             }
         }
@@ -2954,11 +3092,32 @@ mod tests {
             "give me high resolution images of aurora"
         ));
         assert!(is_visual_search_query("download wallpaper of galaxy"));
+        assert!(is_visual_search_query("python logo png official"));
+        assert!(is_visual_search_query("berikan gambar logonya disini"));
+        assert!(is_visual_search_query("tampilkan lambang garuda pancasila"));
+        assert!(is_visual_search_query("icon rust programming language"));
+        assert!(is_visual_search_query("simbol atom fisika"));
 
         assert!(!is_visual_search_query("harga solana hari ini"));
         assert!(!is_visual_search_query("apa itu rust borrow checker"));
         assert!(!is_visual_search_query("sejarah kemerdekaan indonesia"));
         assert!(!is_visual_search_query(""));
+    }
+
+    #[test]
+    fn test_is_logo_query_detection() {
+        assert!(is_logo_query("python logo png official"));
+        assert!(is_logo_query("berikan gambar logonya disini"));
+        assert!(is_logo_query("lambang indonesia"));
+        assert!(is_logo_query("simbol atom"));
+        assert!(is_logo_query("icon telegram"));
+        assert!(is_logo_query("emblem club barcelona"));
+        assert!(is_logo_query("badge army"));
+
+        assert!(!is_logo_query("pemandangan gunung bromo"));
+        assert!(!is_logo_query("foto kucing lucu"));
+        assert!(!is_logo_query("harga bitcoin"));
+        assert!(!is_logo_query(""));
     }
 
     #[test]
