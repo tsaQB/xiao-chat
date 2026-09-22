@@ -535,7 +535,7 @@ pub async fn handle_ai_chat(
     let elapsed = format!("`{emoji} {:.1}s`", elapsed_secs);
 
     if answer_text.trim().is_empty() {
-        answer_text = "Maaf, respon AI kosong untuk permintaan ini.".to_string();
+        answer_text = "Maaf, Xiao tidak dapat menemukan informasi yang diminta saat ini. Silakan coba ulangi pertanyaan dengan lebih spesifik.".to_string();
     }
 
     let full_rich_msg = build_full_rich_message(&answer_text, Some(&elapsed));

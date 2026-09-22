@@ -5,6 +5,9 @@ use crate::bot::models::{InputRichMessage, RichBlock};
 #[path = "parser/markdown.rs"]
 pub(crate) mod markdown;
 
+#[allow(unused_imports)]
+pub use markdown::{parse_rich_html, resolve_media_references, ParserError};
+
 #[path = "parser/latex.rs"]
 pub(crate) mod latex;
 

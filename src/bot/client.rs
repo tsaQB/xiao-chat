@@ -906,6 +906,16 @@ impl TelegramBotClient {
         reply_markup: Option<Value>,
         reply_to_message_id: Option<i64>,
     ) -> Result<Value, String> {
+        if !latitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
+            return Err(format!(
+                "Invalid latitude: must be finite number between -90.0 and 90.0, found {latitude}"
+            ));
+        }
+        if !longitude.is_finite() || !(-180.0..=180.0).contains(&longitude) {
+            return Err(format!(
+                "Invalid longitude: must be finite number between -180.0 and 180.0, found {longitude}"
+            ));
+        }
         let mut payload = json!({
             "chat_id": chat_id,
             "latitude": latitude,
@@ -1154,24 +1164,127 @@ impl TelegramBotClient {
         reply_markup: Option<Value>,
         receiver_user_id: Option<i64>,
     ) -> Result<Value, String> {
-        if attached_files.is_empty() {
+        self.send_rich_message_with_media_params(
+            chat_id,
+            rich_message,
+            attached_files,
+            reply_markup,
+            receiver_user_id,
+            None,
+        )
+        .await
+    }
+
+    pub async fn send_rich_message_with_media_params(
+        &self,
+        chat_id: i64,
+        rich_message: &InputRichMessage,
+        attached_files: Vec<(String, Vec<u8>, String)>,
+        reply_markup: Option<Value>,
+        receiver_user_id: Option<i64>,
+        reply_to_message_id: Option<i64>,
+    ) -> Result<Value, String> {
+        if attached_files.is_empty()
+            && !rich_message.has_media()
+            && rich_message.media.as_ref().is_none_or(|m| m.is_empty())
+        {
             return self
-                .send_rich_message(chat_id, rich_message, reply_markup, receiver_user_id, None)
+                .send_rich_message(
+                    chat_id,
+                    rich_message,
+                    reply_markup,
+                    receiver_user_id,
+                    reply_to_message_id,
+                )
                 .await;
         }
         rich_message.validate()?;
-        let rich_json = serde_json::to_string(rich_message).map_err(|error| error.to_string())?;
+
+        let mut resolved_msg = rich_message.clone();
+        let mut all_attachments: Vec<(String, Vec<u8>, String, String)> = attached_files
+            .into_iter()
+            .map(|(name, bytes, mime)| {
+                let fname = name.clone();
+                (name, bytes, mime, fname)
+            })
+            .collect();
+
+        if let Some(ref mut media_items) = resolved_msg.media {
+            for item in media_items.iter_mut() {
+                let target_url = item.media.media_url().to_string();
+                if target_url.starts_with("http://") || target_url.starts_with("https://") {
+                    if let Some((bytes, mime, fname)) = self
+                        .download_media_bytes(&target_url, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                        .await
+                    {
+                        let attach_key = format!("file_{}", all_attachments.len());
+                        item.media.set_media_url(format!("attach://{attach_key}"));
+                        all_attachments.push((attach_key, bytes, mime, fname));
+                    }
+                }
+            }
+        }
+
+        if resolved_msg.has_media() {
+            let media_urls = resolved_msg.collect_media_urls();
+            let mut block_replacements = std::collections::HashMap::new();
+            for url in media_urls {
+                if (url.starts_with("http://") || url.starts_with("https://"))
+                    && !block_replacements.contains_key(&url)
+                {
+                    if let Some((bytes, mime, fname)) = self
+                        .download_media_bytes(&url, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                        .await
+                    {
+                        let attach_key = format!("file_{}", all_attachments.len());
+                        all_attachments.push((attach_key.clone(), bytes, mime, fname));
+                        block_replacements.insert(url, format!("attach://{attach_key}"));
+                    }
+                }
+            }
+            if !block_replacements.is_empty() {
+                resolved_msg.replace_media_urls(&|u| block_replacements.get(u).cloned());
+            }
+        }
+
+        if all_attachments.is_empty() {
+            return self
+                .send_rich_message(
+                    chat_id,
+                    rich_message,
+                    reply_markup,
+                    receiver_user_id,
+                    reply_to_message_id,
+                )
+                .await;
+        }
+
+        let rich_json = serde_json::to_string(&resolved_msg).map_err(|error| error.to_string())?;
+        let media_json = resolved_msg
+            .media
+            .as_ref()
+            .map(|m| serde_json::to_string(m).map_err(|error| error.to_string()))
+            .transpose()?;
+
         self.post_multipart("sendRichMessage", || {
             let mut form = Form::new()
                 .text("chat_id", chat_id.to_string())
                 .text("rich_message", rich_json.clone());
+            if let Some(ref m_str) = media_json {
+                form = form.text("media", m_str.clone());
+            }
             if let Some(ref reply_markup) = reply_markup {
                 form = form.text("reply_markup", reply_markup.to_string());
             }
-            form = self.apply_form_delivery_context(form, true, receiver_user_id, None)?;
-            for (attach_name, bytes, mime) in &attached_files {
+            form = self.apply_form_delivery_context(
+                form,
+                true,
+                receiver_user_id,
+                reply_to_message_id,
+            )?;
+            for (attach_name, bytes, mime, fname) in &all_attachments {
                 let part = Part::bytes(bytes.clone())
-                    .file_name(attach_name.clone())
+                    .file_name(fname.clone())
                     .mime_str(mime)
                     .map_err(|error| error.to_string())?;
                 form = form.part(attach_name.clone(), part);
@@ -1325,6 +1438,9 @@ impl TelegramBotClient {
                 "chat_id": chat_id,
                 "rich_message": rich_json,
             });
+            if let Some(ref media) = rich_message.media {
+                payload["media"] = serde_json::to_value(media).map_err(|e| e.to_string())?;
+            }
             if let Some(ref rm) = reply_markup {
                 payload["reply_markup"] = rm.clone();
             }
@@ -1356,7 +1472,7 @@ impl TelegramBotClient {
                         .and_then(Value::as_str)
                         .unwrap_or("unknown");
                     tracing::info!(
-                        "Telegram rejected Rich Message ({desc}); checking zero-download link conversion."
+                        "Telegram rejected Rich Message ({desc}); checking multipart resolution."
                     );
                 }
                 Err(error) if !fallback_allowed_error(&error) => {
@@ -1364,8 +1480,114 @@ impl TelegramBotClient {
                 }
                 Err(error) => {
                     tracing::info!(
-                        "Rich Message request failed ({error}); checking zero-download link conversion."
+                        "Rich Message request failed ({error}); checking multipart resolution."
                     );
+                }
+            }
+
+            // Multipart resolution for media requiring upload
+            let mut multipart_msg = rich_message.clone();
+            let mut attachments = Vec::new();
+
+            if let Some(ref mut media_items) = multipart_msg.media {
+                for item in media_items.iter_mut() {
+                    let target_url = item.media.media_url().to_string();
+                    if target_url.starts_with("http://") || target_url.starts_with("https://") {
+                        if let Some((bytes, mime, fname)) = self
+                            .download_media_bytes(&target_url, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                            .await
+                        {
+                            let attach_key = format!("file_{}", attachments.len());
+                            item.media.set_media_url(format!("attach://{attach_key}"));
+                            attachments.push((attach_key, bytes, mime, fname));
+                        }
+                    }
+                }
+            }
+
+            if multipart_msg.has_media() {
+                let media_urls = multipart_msg.collect_media_urls();
+                let mut block_replacements = std::collections::HashMap::new();
+                for url in media_urls {
+                    if (url.starts_with("http://") || url.starts_with("https://"))
+                        && !block_replacements.contains_key(&url)
+                    {
+                        if let Some((bytes, mime, fname)) = self
+                            .download_media_bytes(&url, MAX_TELEGRAM_DOWNLOAD_BYTES)
+                            .await
+                        {
+                            let attach_key = format!("file_{}", attachments.len());
+                            attachments.push((attach_key.clone(), bytes, mime, fname));
+                            block_replacements.insert(url, format!("attach://{attach_key}"));
+                        }
+                    }
+                }
+                if !block_replacements.is_empty() {
+                    multipart_msg.replace_media_urls(&|u| block_replacements.get(u).cloned());
+                }
+            }
+
+            if !attachments.is_empty() {
+                let rich_json_str =
+                    serde_json::to_string(&multipart_msg).map_err(|e| e.to_string())?;
+                let media_json_str = multipart_msg
+                    .media
+                    .as_ref()
+                    .map(|m| serde_json::to_string(m).map_err(|e| e.to_string()))
+                    .transpose()?;
+
+                match self
+                    .post_multipart("sendRichMessage", || {
+                        let mut form = Form::new()
+                            .text("chat_id", chat_id.to_string())
+                            .text("rich_message", rich_json_str.clone());
+                        if let Some(ref m_str) = media_json_str {
+                            form = form.text("media", m_str.clone());
+                        }
+                        if let Some(ref rm) = reply_markup {
+                            form = form.text("reply_markup", rm.to_string());
+                        }
+                        form = self.apply_form_delivery_context(
+                            form,
+                            true,
+                            receiver_user_id,
+                            reply_to_message_id,
+                        )?;
+                        for (attach_key, bytes, mime, fname) in &attachments {
+                            let part = Part::bytes(bytes.clone())
+                                .file_name(fname.clone())
+                                .mime_str(mime)
+                                .map_err(|e| e.to_string())?;
+                            form = form.part(attach_key.clone(), part);
+                        }
+                        Ok(form)
+                    })
+                    .await
+                {
+                    Ok(res) if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) => {
+                        tracing::info!("Multipart sendRichMessage succeeded seamlessly.");
+                        return Ok(res);
+                    }
+                    Ok(res) if !fallback_allowed_response(&res) => {
+                        return Err(Self::telegram_api_error("sendRichMessage", &res));
+                    }
+                    Ok(res) => {
+                        let desc = res
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown");
+                        tracing::warn!(
+                            "Multipart sendRichMessage rejected ({desc}); falling back to zero-download link conversion."
+                        );
+                    }
+                    Err(err) if !fallback_allowed_error(&err) => {
+                        return Err(err);
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            "Multipart sendRichMessage request failed ({err}); falling back to zero-download link conversion."
+                        );
+                    }
                 }
             }
 
@@ -1376,6 +1598,11 @@ impl TelegramBotClient {
                         "chat_id": chat_id,
                         "rich_message": rich_json,
                     });
+                    if let Some(ref m) = converted_msg.media {
+                        if let Ok(m_val) = serde_json::to_value(m) {
+                            retry_payload["media"] = m_val;
+                        }
+                    }
                     if let Some(ref rm) = reply_markup {
                         retry_payload["reply_markup"] = rm.clone();
                     }

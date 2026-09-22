@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -8,6 +9,7 @@ use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, REFERER, USER_AGENT};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{info, warn};
+use url::Url;
 
 static RE_DDG_TITLE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a class="result__url"[^>]*href="(?P<url>[^"]+)"[^>]*>"#)
@@ -62,13 +64,349 @@ pub fn clean_html_to_text(html: &str) -> String {
     normalized.trim().to_string()
 }
 
+static RE_HTML_IMG_SRC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)<img\b[^>]*?\b(?:src|data-src|data-original|data-lazy-src|data-high-res-src|data-full-url|data-url)=["'](?P<src>[^"']+)["']"#,
+    )
+    .expect("valid static regex")
+});
+static RE_HTML_SRCSET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\bsrcset=["'](?P<srcset>[^"']+)["']"#).expect("valid static regex")
+});
+static RE_HTML_A_HREF_IMG: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)<a\b[^>]*?\bhref=["'](?P<href>[^"']+\.(?:jpg|jpeg|png|webp)(?:\?[^"']*)?)["']"#,
+    )
+    .expect("valid static regex")
+});
+static RE_VISUAL_KEYWORDS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:foto|foto-foto|gambar|gambar-gambar|potret|pemandangan|citra|lukisan|ilustrasi|wallpaper|bagan|diagram|grafis|photo|photos|picture|pictures|pic|pics|image|images|visual|visuals|illustration|wallpaper)\b",
+    )
+    .expect("valid static regex")
+});
+static RE_CONVERSATIONAL_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)^(?:(?:tolong|coba|mohon|bisakah|bisa|silakan|please|can you|could you|i want|i need|aku mau|saya mau)\s+)?(?:(?:berikan|carikan|tampilkan|tunjukkan|perlihatkan|lihatkan|kirimkan|cari|lihat|minta|give|show|find|search|send|get)\b(?:\s+(?:saya|aku|kami|me|us)\b)?)?(?:\s*(?:\d+|satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|beberapa|one|two|three|four|five|six|seven|eight|nine|ten|some|a|an)\b)?(?:\s*(?:buah|lembar|keping|ekor|item|items)\b)?(?:\s*(?:foto-foto|foto|gambar-gambar|gambar|potret|citra|photos?|pictures?|images?|pics?)\b)?(?:\s*(?:dari|tentang|mengenai|of|about)\b)?\s*",
+    )
+    .expect("valid static regex")
+});
+static RE_CONVERSATIONAL_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\s*[,.]?\s*(?:please|ya|dong|tolong|kan)\s*$").expect("valid static regex")
+});
+static RE_ID_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:yang|dan|di|ke|dari|ini|itu|untuk|pada|adalah|dengan|foto|gambar|gunung|pemandangan|pantai|kota|indonesia|wisata|kuliner|pulau|sejarah|presiden|taman|danau|masjid|candi)\b",
+    )
+    .expect("valid static regex")
+});
+
+#[allow(dead_code)]
+pub fn is_visual_search_query(query: &str) -> bool {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    RE_VISUAL_KEYWORDS.is_match(trimmed)
+}
+
+#[allow(dead_code)]
+pub fn extract_core_search_terms(query: &str) -> String {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let cleaned = RE_CONVERSATIONAL_PREFIX.replace(trimmed, "");
+    let no_suffix = RE_CONVERSATIONAL_SUFFIX.replace(&cleaned, "");
+    let mut res = no_suffix.trim();
+    if let Some(stripped) = res
+        .strip_prefix(':')
+        .or_else(|| res.strip_prefix(','))
+        .or_else(|| res.strip_prefix('-'))
+    {
+        res = stripped.trim();
+    }
+    if res.is_empty() {
+        trimmed.to_string()
+    } else {
+        res.to_string()
+    }
+}
+
+#[allow(dead_code)]
+pub fn is_likely_indonesian(text: &str) -> bool {
+    RE_ID_MARKERS.is_match(text)
+}
+
+#[allow(dead_code)]
+pub fn is_valid_raster_image_url(url_str: &str) -> bool {
+    sanitize_and_validate_raster_url(url_str).is_some()
+}
+
+#[allow(dead_code)]
+pub fn sanitize_and_validate_raster_url(url_str: &str) -> Option<String> {
+    let trimmed = url_str.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("data:")
+        || lower.starts_with("javascript:")
+        || lower.starts_with("blob:")
+        || lower.starts_with("file:")
+    {
+        return None;
+    }
+
+    let full_url_str = if trimmed.starts_with("//") {
+        format!("https:{trimmed}")
+    } else {
+        trimmed.to_string()
+    };
+
+    let Ok(mut parsed) = Url::parse(&full_url_str) else {
+        return None;
+    };
+
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return None;
+    }
+
+    let host = parsed.host_str()?;
+    let host_lower = host.to_ascii_lowercase();
+
+    if host_lower == "localhost"
+        || host_lower == "127.0.0.1"
+        || host_lower == "::1"
+        || host_lower.ends_with(".local")
+        || host_lower.ends_with(".internal")
+        || host_lower.ends_with(".test")
+        || host_lower.ends_with(".example")
+        || host_lower.ends_with(".invalid")
+    {
+        return None;
+    }
+
+    if !host_lower.contains('.') && host_lower.parse::<std::net::IpAddr>().is_err() {
+        return None;
+    }
+
+    const TRACKING_DOMAINS: &[&str] = &[
+        "google-analytics.com",
+        "googletagmanager.com",
+        "doubleclick.net",
+        "adnxs.com",
+        "scorecardresearch.com",
+        "quantserve.com",
+        "clarity.ms",
+        "pixel.wp.com",
+        "stats.wp.com",
+        "analytics.twitter.com",
+        "bat.bing.com",
+    ];
+    for &td in TRACKING_DOMAINS {
+        if host_lower == td || host_lower.ends_with(&format!(".{td}")) {
+            return None;
+        }
+    }
+
+    let path = parsed.path().to_ascii_lowercase();
+
+    // DuckDuckGo proxy unwrapping: if URL is /iu/?u=<encoded_url>, unwrap and validate target
+    if (host_lower == "duckduckgo.com" || host_lower.ends_with(".duckduckgo.com"))
+        && path.starts_with("/iu/")
+    {
+        if let Some(target_u) = parsed
+            .query_pairs()
+            .find(|(k, _)| k == "u")
+            .map(|(_, v)| v.to_string())
+        {
+            if let Ok(decoded) = urlencoding::decode(&target_u) {
+                if let Some(valid_target) = sanitize_and_validate_raster_url(&decoded) {
+                    return Some(valid_target);
+                }
+            }
+        }
+        return None;
+    }
+
+    if (host_lower == "duckduckgo.com" || host_lower.ends_with(".duckduckgo.com"))
+        && path.starts_with("/t/")
+    {
+        return None;
+    }
+
+    if path.contains("anomaly-modal") || path.contains("challenge-form") {
+        return None;
+    }
+
+    const BAD_PATH_KEYWORDS: &[&str] = &[
+        "placeholder",
+        "dummyimage",
+        "placekitten",
+        "placehold.it",
+        "pixel.gif",
+        "1x1.gif",
+        "1x1.png",
+        "spacer.gif",
+        "blank.gif",
+        "/beacon",
+        "/telemetry",
+        "transparent.png",
+        "empty.png",
+    ];
+    for &kw in BAD_PATH_KEYWORDS {
+        if path.contains(kw) || host_lower.contains(kw) {
+            return None;
+        }
+    }
+
+    if path.ends_with(".svg") || path.ends_with(".gif") || path.ends_with(".ico") {
+        return None;
+    }
+
+    let query_pairs: Vec<(String, String)> = parsed
+        .query_pairs()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    let mut retained_query: Vec<(String, String)> = Vec::new();
+    let mut format_hint = None;
+
+    for (k, v) in query_pairs {
+        let k_lower = k.to_ascii_lowercase();
+        let v_lower = v.to_ascii_lowercase();
+        if k_lower.starts_with("utm_")
+            || k_lower == "fbclid"
+            || k_lower == "gclid"
+            || k_lower == "msclkid"
+            || k_lower == "ref"
+            || k_lower == "ref_src"
+            || k_lower == "_ga"
+            || k_lower == "_gl"
+            || k_lower == "mc_cid"
+            || k_lower == "mc_eid"
+        {
+            continue;
+        }
+        if (k_lower == "format" || k_lower == "fm" || k_lower == "ext")
+            && matches!(v_lower.as_str(), "jpg" | "jpeg" | "png" | "webp")
+        {
+            format_hint = Some(v_lower);
+        }
+        retained_query.push((k, v));
+    }
+
+    let has_raster_extension = path.ends_with(".jpg")
+        || path.ends_with(".jpeg")
+        || path.ends_with(".png")
+        || path.ends_with(".webp");
+
+    let is_unsplash = host_lower == "images.unsplash.com" || host_lower.ends_with(".unsplash.com");
+    let is_wikimedia = (host_lower.contains("wikimedia.org") || host_lower.contains("wikipedia.org"))
+        && (path.contains(".jpg") || path.contains(".jpeg") || path.contains(".png") || path.contains(".webp"));
+
+    if !has_raster_extension && format_hint.is_none() && !is_unsplash && !is_wikimedia {
+        return None;
+    }
+
+    if retained_query.is_empty() {
+        parsed.set_query(None);
+    } else {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        for (k, v) in &retained_query {
+            serializer.append_pair(k, v);
+        }
+        parsed.set_query(Some(&serializer.finish()));
+    }
+
+    Some(parsed.to_string())
+}
+
+#[allow(dead_code)]
+pub fn extract_raster_images_from_html(html: &str, base_url: Option<&str>) -> Vec<String> {
+    let mut images = Vec::new();
+    let mut seen = HashSet::new();
+
+    let base_parsed = base_url.and_then(|b| Url::parse(b).ok());
+
+    let mut resolve_and_add = |candidate: &str| {
+        let full = if candidate.starts_with("http://")
+            || candidate.starts_with("https://")
+            || candidate.starts_with("//")
+        {
+            candidate.to_string()
+        } else if let Some(ref base) = base_parsed {
+            match base.join(candidate) {
+                Ok(u) => u.to_string(),
+                Err(_) => return,
+            }
+        } else {
+            return;
+        };
+
+        if let Some(valid) = sanitize_and_validate_raster_url(&full) {
+            if seen.insert(valid.clone()) {
+                images.push(valid);
+            }
+        }
+    };
+
+    for cap in RE_HTML_IMG_SRC.captures_iter(html) {
+        if let Some(src) = cap.name("src") {
+            resolve_and_add(src.as_str());
+        }
+    }
+
+    for cap in RE_HTML_SRCSET.captures_iter(html) {
+        if let Some(srcset) = cap.name("srcset") {
+            for entry in srcset.as_str().split(',') {
+                let candidate = entry.split_whitespace().next().unwrap_or("");
+                if !candidate.is_empty() {
+                    resolve_and_add(candidate);
+                }
+            }
+        }
+    }
+
+    for cap in RE_HTML_A_HREF_IMG.captures_iter(html) {
+        if let Some(href) = cap.name("href") {
+            resolve_and_add(href.as_str());
+        }
+    }
+
+    images
+}
+
+#[allow(dead_code)]
+pub fn format_verified_images_section(image_urls: &[String]) -> String {
+    if image_urls.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n\n🖼️ **URL Foto/Gambar Raster Terverifikasi (Dapat Digunakan untuk Tool Multimedia)**:\n",
+    );
+    for url in image_urls {
+        out.push_str(&format!("- {url}\n"));
+    }
+    out
+}
+
+#[allow(dead_code)]
+pub fn format_no_images_guidance(query: &str) -> String {
+    format!(
+        "\n\nℹ️ **Catatan Media**: Tidak ditemukan berkas gambar raster langsung (.jpg, .png, .webp) yang valid dari hasil pencarian untuk \"{query}\". Berikan penjelasan deskriptif yang kaya dan informatif mengenai topik ini kepada pengguna dalam teks Markdown, dan hindari memanggil tool multimedia dengan URL fiktif/rekaan."
+    )
+}
+
 pub fn get_tools_definition() -> Value {
     json!([
         {
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Cari informasi terkini atau referensi dari internet menggunakan mesin pencari.",
+                "description": "Cari informasi terkini, fakta ensiklopedia, atau gambar/foto dari internet menggunakan mesin pencari. Jika pengguna meminta foto/gambar, mesin pencari akan menyertakan URL raster terverifikasi (.jpg, .jpeg, .png, .webp) yang siap digunakan untuk tool multimedia (send_photo, send_collage, send_slideshow).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -368,7 +706,7 @@ pub fn get_configured_mcp_url() -> String {
 pub async fn execute_web_search(query: &str) -> String {
     let q = query.trim();
     if q.is_empty() {
-        return "Query pencarian tidak boleh kosong.".to_string();
+        return "Query pencarian tidak boleh kosong. Silakan berikan kata kunci atau topik pencarian yang lebih spesifik.".to_string();
     }
 
     let client = reqwest::Client::builder()
@@ -376,11 +714,25 @@ pub async fn execute_web_search(query: &str) -> String {
         .build()
         .unwrap_or_default();
 
+    let is_visual = is_visual_search_query(q);
+
     // 1. Check Brave Search API
     if let Some(brave_key) = get_brave_key() {
         info!("Using Brave Search API for query: {q}");
         match search_brave(&client, &brave_key, q).await {
-            Ok(res) => return res,
+            Ok(mut res) => {
+                if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                    if let Ok(wiki_res) = search_wikipedia(&client, q).await {
+                        if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                            let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                            res = clean_res;
+                            res.push_str("\n\n---\n\n");
+                            res.push_str(&wiki_res);
+                        }
+                    }
+                }
+                return res;
+            }
             Err(e) => warn!("Brave search failed ({e}), falling back to other providers"),
         }
     }
@@ -389,7 +741,19 @@ pub async fn execute_web_search(query: &str) -> String {
     if let Some(tavily_key) = get_tavily_key() {
         info!("Using Tavily API for query: {q}");
         match search_tavily(&client, &tavily_key, q).await {
-            Ok(res) => return res,
+            Ok(mut res) => {
+                if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                    if let Ok(wiki_res) = search_wikipedia(&client, q).await {
+                        if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                            let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                            res = clean_res;
+                            res.push_str("\n\n---\n\n");
+                            res.push_str(&wiki_res);
+                        }
+                    }
+                }
+                return res;
+            }
             Err(e) => warn!("Tavily search failed ({e}), falling back to other providers"),
         }
     }
@@ -398,7 +762,23 @@ pub async fn execute_web_search(query: &str) -> String {
     if let Some(exa_key) = get_exa_key() {
         info!("Using Exa API for query: {q}");
         match search_exa_api(&client, &exa_key, q).await {
-            Ok(res) => return res,
+            Ok(mut res) => {
+                if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                    if let Ok(wiki_res) = search_wikipedia(&client, q).await {
+                        if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                            let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                            res = clean_res;
+                            res.push_str("\n\n---\n\n");
+                            res.push_str(&wiki_res);
+                        } else if !res.contains("ℹ️ **Catatan Media**") {
+                            res.push_str(&format_no_images_guidance(q));
+                        }
+                    } else if !res.contains("ℹ️ **Catatan Media**") {
+                        res.push_str(&format_no_images_guidance(q));
+                    }
+                }
+                return res;
+            }
             Err(e) => warn!("Exa API search failed ({e}), falling back to other providers"),
         }
     }
@@ -407,7 +787,23 @@ pub async fn execute_web_search(query: &str) -> String {
     let mcp_url = get_configured_mcp_url();
     info!("Trying Exa Keyless MCP for query: {q}");
     match search_exa_mcp(&client, &mcp_url, q).await {
-        Ok(res) => return res,
+        Ok(mut res) => {
+            if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                if let Ok(wiki_res) = search_wikipedia(&client, q).await {
+                    if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                        let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                        res = clean_res;
+                        res.push_str("\n\n---\n\n");
+                        res.push_str(&wiki_res);
+                    } else if !res.contains("ℹ️ **Catatan Media**") {
+                        res.push_str(&format_no_images_guidance(q));
+                    }
+                } else if !res.contains("ℹ️ **Catatan Media**") {
+                    res.push_str(&format_no_images_guidance(q));
+                }
+            }
+            return res;
+        }
         Err(e) => {
             warn!("Gagal menghubungi Exa MCP ({e}), beralih ke DuckDuckGo...");
         }
@@ -416,7 +812,19 @@ pub async fn execute_web_search(query: &str) -> String {
     // 5. DuckDuckGo Search Fallback
     info!("Using DuckDuckGo for query: {q}");
     match search_duckduckgo(&client, q).await {
-        Ok(res) => return res,
+        Ok(mut res) => {
+            if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                if let Ok(wiki_res) = search_wikipedia(&client, q).await {
+                    if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
+                        let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                        res = clean_res;
+                        res.push_str("\n\n---\n\n");
+                        res.push_str(&wiki_res);
+                    }
+                }
+            }
+            return res;
+        }
         Err(e) => {
             warn!("DuckDuckGo did not return results or was blocked; trying Wikipedia knowledge base: {q}");
             warn!("Koneksi ke DuckDuckGo gagal ({e}). Catatan: Domain DuckDuckGo diblokir oleh beberapa ISP/Kominfo di Indonesia. Disarankan menggunakan TAVILY_API_KEY, EXA_API_KEY, atau BRAVE_API_KEY untuk hasil yang cepat.");
@@ -425,8 +833,21 @@ pub async fn execute_web_search(query: &str) -> String {
 
     // 6. Wikipedia Knowledge Base Fallback
     match search_wikipedia(&client, q).await {
-        Ok(res) => res,
-        Err(e) => format!("Tidak ditemukan hasil pencarian untuk \"{q}\": {e}"),
+        Ok(res) => {
+            if res.trim().is_empty() {
+                format!(
+                    "[Informasi Pencarian Web]\nPencarian daring untuk topik \"{q}\" telah selesai namun tidak menghasilkan data teks.\n\nℹ️ **Panduan Asisten**: Berikan tanggapan deskriptif dan faktual mengenai topik \"{q}\" berdasarkan pengetahuan internal Anda secara lengkap dalam teks Markdown standar."
+                )
+            } else {
+                res
+            }
+        }
+        Err(e) => {
+            warn!("Wikipedia search failed ({e})");
+            format!(
+                "[Informasi Pencarian Web]\nPencarian web daring untuk topik \"{q}\" saat ini tidak dapat diselesaikan karena kendala koneksi atau penyedia pencarian sedang tidak tersedia ({e}).\n\nℹ️ **Panduan Asisten**: Berikan tanggapan deskriptif dan faktual mengenai topik \"{q}\" berdasarkan pengetahuan internal Anda secara lengkap. Jika pengguna meminta gambar atau foto, jelaskan informasi visualnya secara naratif dalam teks Markdown dan hindari memanggil tool multimedia fiktif."
+            )
+        }
     }
 }
 
@@ -440,6 +861,48 @@ async fn search_brave(
     api_key: &str,
     query: &str,
 ) -> Result<String, String> {
+    let is_visual = is_visual_search_query(query);
+    let mut verified_images = Vec::new();
+
+    if is_visual {
+        let img_search_url = format!(
+            "https://api.search.brave.com/res/v1/images/search?q={}&count=5",
+            urlencoding::encode(query)
+        );
+        if let Ok(resp) = client
+            .get(&img_search_url)
+            .header("X-Subscription-Token", api_key)
+            .header(ACCEPT, "application/json")
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(img_body) = resp.json::<Value>().await {
+                    if let Some(results) = img_body.get("results").and_then(Value::as_array) {
+                        for item in results.iter().take(5) {
+                            let raw_url = item
+                                .get("properties")
+                                .and_then(|p| p.get("url"))
+                                .and_then(Value::as_str)
+                                .or_else(|| {
+                                    item.get("thumbnail")
+                                        .and_then(|t| t.get("src"))
+                                        .and_then(Value::as_str)
+                                });
+                            if let Some(u) = raw_url {
+                                if let Some(valid) = sanitize_and_validate_raster_url(u) {
+                                    if !verified_images.contains(&valid) {
+                                        verified_images.push(valid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let url = format!(
         "https://api.search.brave.com/res/v1/web/search?q={}&count=5",
         urlencoding::encode(query)
@@ -480,6 +943,38 @@ async fn search_brave(
                 .and_then(Value::as_str)
                 .unwrap_or("");
             out.push_str(&format_search_item(i + 1, title, url, desc));
+
+            if let Some(thumb) = item
+                .get("thumbnail")
+                .and_then(|t| t.get("src").or_else(|| t.get("original")))
+                .and_then(Value::as_str)
+            {
+                if let Some(valid) = sanitize_and_validate_raster_url(thumb) {
+                    if !verified_images.contains(&valid) {
+                        verified_images.push(valid);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(pics) = body
+        .get("pictures")
+        .and_then(|p| p.get("results"))
+        .and_then(Value::as_array)
+    {
+        for item in pics.iter().take(5) {
+            let raw_url = item
+                .get("thumbnail")
+                .and_then(|t| t.get("src"))
+                .and_then(Value::as_str);
+            if let Some(u) = raw_url {
+                if let Some(valid) = sanitize_and_validate_raster_url(u) {
+                    if !verified_images.contains(&valid) {
+                        verified_images.push(valid);
+                    }
+                }
+            }
         }
     }
 
@@ -488,11 +983,15 @@ async fn search_brave(
             "Tidak ada hasil ditemukan di Brave untuk query \"{query}\"."
         ))
     } else {
-        Ok(
-            format!("[Hasil Pencarian Brave untuk \"{query}\"]\n\n{out}")
-                .trim()
-                .to_string(),
-        )
+        let mut res = format!("[Hasil Pencarian Brave untuk \"{query}\"]\n\n{out}")
+            .trim()
+            .to_string();
+        if !verified_images.is_empty() {
+            res.push_str(&format_verified_images_section(&verified_images));
+        } else if is_visual {
+            res.push_str(&format_no_images_guidance(query));
+        }
+        Ok(res)
     }
 }
 
@@ -501,12 +1000,14 @@ async fn search_tavily(
     api_key: &str,
     query: &str,
 ) -> Result<String, String> {
+    let is_visual = is_visual_search_query(query);
     let resp = client
         .post("https://api.tavily.com/search")
         .json(&json!({
             "api_key": api_key,
             "query": query,
             "include_answer": true,
+            "include_images": true,
             "max_results": 5,
             "search_depth": "basic"
         }))
@@ -533,6 +1034,25 @@ async fn search_tavily(
         out.push_str(&format!("💡 **Jawaban Ringkas**: {}\n\n", answer));
     }
 
+    let mut verified_images = Vec::new();
+
+    if let Some(images) = body.get("images").and_then(Value::as_array) {
+        for img in images {
+            let raw_url = if let Some(s) = img.as_str() {
+                Some(s)
+            } else {
+                img.get("url").and_then(Value::as_str)
+            };
+            if let Some(u) = raw_url {
+                if let Some(valid_url) = sanitize_and_validate_raster_url(u) {
+                    if !verified_images.contains(&valid_url) {
+                        verified_images.push(valid_url);
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(results) = body.get("results").and_then(Value::as_array) {
         for (i, item) in results.iter().take(5).enumerate() {
             let title = item
@@ -542,6 +1062,14 @@ async fn search_tavily(
             let url = item.get("url").and_then(Value::as_str).unwrap_or("");
             let content = item.get("content").and_then(Value::as_str).unwrap_or("");
             out.push_str(&format_search_item(i + 1, title, url, content));
+
+            if let Some(img_u) = item.get("image").and_then(Value::as_str) {
+                if let Some(valid) = sanitize_and_validate_raster_url(img_u) {
+                    if !verified_images.contains(&valid) {
+                        verified_images.push(valid);
+                    }
+                }
+            }
         }
     }
 
@@ -550,11 +1078,15 @@ async fn search_tavily(
             "Tidak ada hasil ditemukan di Tavily untuk query \"{query}\"."
         ))
     } else {
-        Ok(
-            format!("[Hasil Pencarian Tavily untuk \"{query}\"]\n\n{out}")
-                .trim()
-                .to_string(),
-        )
+        let mut res = format!("[Hasil Pencarian Tavily untuk \"{query}\"]\n\n{out}")
+            .trim()
+            .to_string();
+        if !verified_images.is_empty() {
+            res.push_str(&format_verified_images_section(&verified_images));
+        } else if is_visual {
+            res.push_str(&format_no_images_guidance(query));
+        }
+        Ok(res)
     }
 }
 
@@ -660,7 +1192,6 @@ pub(crate) async fn search_exa_mcp(
         .await
         .map_err(|e| format!("Gagal membaca stream Exa MCP: {e}"))?;
 
-    // Exa MCP may return JSON or SSE with event/data
     let parsed_text = if let Ok(val) = serde_json::from_str::<Value>(&text) {
         if let Some(content) = val
             .get("result")
@@ -676,7 +1207,6 @@ pub(crate) async fn search_exa_mcp(
             String::new()
         }
     } else {
-        // Parse SSE data: {...}
         let mut extracted: Vec<String> = Vec::new();
         for line in text.lines() {
             if let Some(rest) = line.strip_prefix("data:") {
@@ -710,7 +1240,25 @@ pub(crate) async fn search_exa_mcp(
     }
 }
 
+fn unwrap_ddg_url(raw_url: &str) -> String {
+    if let Ok(parsed) = Url::parse(raw_url) {
+        if let Some(uddg) = parsed.query_pairs().find(|(k, _)| k == "uddg").map(|(_, v)| v.to_string()) {
+            if let Ok(decoded) = urlencoding::decode(&uddg) {
+                return decoded.to_string();
+            }
+        }
+    } else if let Ok(parsed) = Url::parse(&format!("https://duckduckgo.com{raw_url}")) {
+        if let Some(uddg) = parsed.query_pairs().find(|(k, _)| k == "uddg").map(|(_, v)| v.to_string()) {
+            if let Ok(decoded) = urlencoding::decode(&uddg) {
+                return decoded.to_string();
+            }
+        }
+    }
+    raw_url.to_string()
+}
+
 async fn search_duckduckgo(client: &reqwest::Client, query: &str) -> Result<String, String> {
+    let is_visual = is_visual_search_query(query);
     let url = format!(
         "https://html.duckduckgo.com/html/?q={}",
         urlencoding::encode(query)
@@ -746,7 +1294,7 @@ async fn search_duckduckgo(client: &reqwest::Client, query: &str) -> Result<Stri
     let urls: Vec<String> = RE_DDG_TITLE
         .captures_iter(&html)
         .take(5)
-        .filter_map(|c| c.name("url").map(|m| m.as_str().trim().to_string()))
+        .filter_map(|c| c.name("url").map(|m| unwrap_ddg_url(m.as_str().trim())))
         .collect();
     let snippets: Vec<String> = RE_DDG_SNIPPET
         .captures_iter(&html)
@@ -768,19 +1316,70 @@ async fn search_duckduckgo(client: &reqwest::Client, query: &str) -> Result<Stri
         ));
     }
 
+    let mut extracted_images = extract_raster_images_from_html(&html, Some("https://duckduckgo.com"));
+
+    // If visual query and no images were directly in DDG HTML, scrape top result URLs
+    if is_visual && extracted_images.is_empty() {
+        for target_url in urls.iter().take(2) {
+            if target_url.starts_with("http://") || target_url.starts_with("https://") {
+                if let Ok(page_resp) = client
+                    .get(target_url)
+                    .timeout(Duration::from_secs(4))
+                    .header(
+                        USER_AGENT,
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    )
+                    .header(
+                        ACCEPT,
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    )
+                    .send()
+                    .await
+                {
+                    if page_resp.status().is_success() {
+                        if let Ok(page_html) = page_resp.text().await {
+                            let scraped = extract_raster_images_from_html(&page_html, Some(target_url));
+                            for img in scraped {
+                                if !extracted_images.contains(&img) {
+                                    extracted_images.push(img);
+                                }
+                                if extracted_images.len() >= 6 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !extracted_images.is_empty() {
+                break;
+            }
+        }
+    }
+
     if out.trim().is_empty() {
         Err("Tidak ditemukan hasil pencarian".to_string())
     } else {
-        Ok(format!("[Hasil Pencarian Web untuk \"{query}\"]\n\n{out}")
+        let mut res = format!("[Hasil Pencarian Web untuk \"{query}\"]\n\n{out}")
             .trim()
-            .to_string())
+            .to_string();
+        if !extracted_images.is_empty() {
+            res.push_str(&format_verified_images_section(&extracted_images));
+        } else if is_visual {
+            res.push_str(&format_no_images_guidance(query));
+        }
+        Ok(res)
     }
 }
 
-async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<String, String> {
+async fn fetch_wikipedia_article_images(
+    client: &reqwest::Client,
+    lang: &str,
+    article_title: &str,
+) -> Result<Vec<String>, String> {
     let url = format!(
-        "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={}&utf8=1&format=json",
-        urlencoding::encode(query)
+        "https://{lang}.wikipedia.org/w/api.php?action=query&titles={}&generator=images&gimlimit=12&prop=imageinfo&iiprop=url&format=json",
+        urlencoding::encode(article_title)
     );
 
     let resp = client
@@ -795,55 +1394,222 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
         )
         .send()
         .await
-        .map_err(|e| format!("Gagal menghubungi Wikipedia: {e}"))?;
+        .map_err(|e| format!("Wikipedia gallery request failed: {e}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
-        return Err(format!("Wikipedia API returned HTTP {status}"));
+        return Err(format!("Wikipedia gallery status HTTP {}", resp.status()));
     }
 
     let body: Value = resp
         .json()
         .await
-        .map_err(|e| format!("Gagal membaca JSON Wikipedia: {e}"))?;
+        .map_err(|e| format!("Failed to parse Wikipedia gallery JSON: {e}"))?;
 
-    let mut out = String::new();
-    if let Some(results) = body
+    let mut images = Vec::new();
+    if let Some(pages_obj) = body
         .get("query")
-        .and_then(|q| q.get("search"))
-        .and_then(Value::as_array)
+        .and_then(|q| q.get("pages"))
+        .and_then(Value::as_object)
     {
-        for (i, item) in results.iter().take(5).enumerate() {
-            let title = item.get("title").and_then(Value::as_str).unwrap_or("");
-            let snippet = item.get("snippet").and_then(Value::as_str).unwrap_or("");
-            let clean_snippet = snippet
-                .replace("<span class=\"searchmatch\">", "")
-                .replace("</span>", "");
-            let decoded_snippet = html_escape::decode_html_entities(&clean_snippet);
-            let page_url = format!(
-                "https://en.wikipedia.org/wiki/{}",
-                urlencoding::encode(title)
-            );
-            out.push_str(&format_search_item(
-                i + 1,
-                title,
-                &page_url,
-                &decoded_snippet,
-            ));
+        for page in pages_obj.values() {
+            let title = page.get("title").and_then(Value::as_str).unwrap_or("");
+            let title_lower = title.to_ascii_lowercase();
+
+            if title_lower.contains("logo")
+                || title_lower.contains("flag")
+                || title_lower.contains("icon")
+                || title_lower.contains("symbol")
+                || title_lower.contains("disambig")
+                || title_lower.contains("ui")
+                || title_lower.contains("locator")
+                || title_lower.contains("map")
+                || title_lower.contains("peta")
+                || title_lower.contains("diagram")
+                || title_lower.contains("insignia")
+                || title_lower.contains("coat_of_arms")
+                || title_lower.contains("lambang")
+                || title_lower.contains("stub")
+            {
+                continue;
+            }
+
+            if let Some(info_arr) = page.get("imageinfo").and_then(Value::as_array) {
+                if let Some(first_info) = info_arr.first() {
+                    if let Some(raw_url) = first_info.get("url").and_then(Value::as_str) {
+                        if let Some(valid_url) = sanitize_and_validate_raster_url(raw_url) {
+                            if !images.contains(&valid_url) {
+                                images.push(valid_url);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    if out.trim().is_empty() {
-        Err(format!(
-            "Tidak ada hasil ditemukan di ensiklopedia untuk query: \"{query}\""
-        ))
-    } else {
-        Ok(
-            format!("[Hasil Informasi Ensiklopedia Web untuk \"{query}\"]\n\n{out}")
-                .trim()
-                .to_string(),
-        )
+    Ok(images)
+}
+
+async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<String, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err("Query pencarian tidak boleh kosong".to_string());
     }
+
+    let langs = if is_likely_indonesian(q) {
+        vec!["id", "en"]
+    } else {
+        vec!["en", "id"]
+    };
+
+    let core_terms = extract_core_search_terms(q);
+    let is_visual = is_visual_search_query(q);
+
+    let search_attempts = if is_visual
+        && !core_terms.is_empty()
+        && core_terms.to_lowercase() != q.to_lowercase()
+    {
+        vec![core_terms.as_str(), q]
+    } else if !core_terms.is_empty() && core_terms.to_lowercase() != q.to_lowercase() {
+        vec![q, core_terms.as_str()]
+    } else {
+        vec![q]
+    };
+
+    for lang in &langs {
+        for attempt in &search_attempts {
+            let url = format!(
+                "https://{lang}.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch={}&gsrlimit=5&prop=pageimages|extracts&piprop=original|thumbnail&pithumbsize=1000&exintro=1&explaintext=1&exchars=350&format=json",
+                urlencoding::encode(attempt)
+            );
+
+            let resp = match client
+                .get(&url)
+                .header(
+                    USER_AGENT,
+                    concat!(
+                        "xiao/",
+                        env!("CARGO_PKG_VERSION"),
+                        " (Telegram Bot Assistant)"
+                    ),
+                )
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Wikipedia API connection failed for {lang} ({e})");
+                    continue;
+                }
+            };
+
+            if !resp.status().is_success() {
+                continue;
+            }
+
+            let body: Value = match resp.json().await {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!("Failed to parse Wikipedia JSON for {lang}: {e}");
+                    continue;
+                }
+            };
+
+            let Some(pages_obj) = body
+                .get("query")
+                .and_then(|qu| qu.get("pages"))
+                .and_then(Value::as_object)
+            else {
+                continue;
+            };
+
+            if pages_obj.is_empty() {
+                continue;
+            }
+
+            let mut page_list: Vec<&Value> = pages_obj.values().collect();
+            page_list.sort_by_key(|p| p.get("index").and_then(Value::as_i64).unwrap_or(999));
+
+            let mut out = String::new();
+            let mut verified_images = Vec::new();
+
+            for (i, page) in page_list.iter().enumerate().take(5) {
+                let title = page.get("title").and_then(Value::as_str).unwrap_or("Tanpa Judul");
+                let extract = page.get("extract").and_then(Value::as_str).unwrap_or("");
+                let clean_extract = extract.trim();
+                let page_url = format!(
+                    "https://{lang}.wikipedia.org/wiki/{}",
+                    urlencoding::encode(title)
+                );
+
+                out.push_str(&format_search_item(i + 1, title, &page_url, clean_extract));
+
+                // Prefer original source first, thumbnail second to avoid duplicate resolutions
+                let candidate_url = page
+                    .get("original")
+                    .and_then(|o| o.get("source"))
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        page.get("thumbnail")
+                            .and_then(|t| t.get("source"))
+                            .and_then(Value::as_str)
+                    });
+                if let Some(src) = candidate_url {
+                    if let Some(valid_url) = sanitize_and_validate_raster_url(src) {
+                        if !verified_images.contains(&valid_url) {
+                            verified_images.push(valid_url);
+                        }
+                    }
+                }
+            }
+
+            if is_visual {
+                for page in page_list.iter().take(3) {
+                    if let Some(title) = page.get("title").and_then(Value::as_str) {
+                        if let Ok(gallery_images) =
+                            fetch_wikipedia_article_images(client, lang, title).await
+                        {
+                            for img in gallery_images {
+                                if !verified_images.contains(&img) {
+                                    verified_images.push(img);
+                                }
+                                if verified_images.len() >= 8 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if verified_images.len() >= 8 {
+                        break;
+                    }
+                }
+            }
+
+            if !out.trim().is_empty() {
+                // If this is a visual search and we haven't found images yet, try the next search attempt if available
+                if is_visual
+                    && verified_images.is_empty()
+                    && *attempt != search_attempts.last().copied().unwrap_or("")
+                {
+                    continue;
+                }
+
+                let mut res = format!("[Hasil Informasi Ensiklopedia Web untuk \"{q}\"]\n\n{out}")
+                    .trim()
+                    .to_string();
+                if !verified_images.is_empty() {
+                    res.push_str(&format_verified_images_section(&verified_images));
+                } else if is_visual {
+                    res.push_str(&format_no_images_guidance(q));
+                }
+                return Ok(res);
+            }
+        }
+    }
+
+    Err(format!(
+        "Tidak ada hasil ditemukan di ensiklopedia untuk query: \"{q}\""
+    ))
 }
 
 const MAX_FETCH_HTML_BYTES: usize = 2 * 1024 * 1024;
@@ -932,10 +1698,16 @@ pub async fn fetch_web_content(url: &str) -> Result<String, String> {
     }
 
     let html = String::from_utf8_lossy(&bytes);
-    let cleaned = clean_html_to_text(&html);
+    let mut cleaned = clean_html_to_text(&html);
 
     if cleaned.is_empty() {
         return Err("Halaman web tidak menghasilkan konten teks yang dapat dibaca.".to_string());
+    }
+
+    let extracted_images = extract_raster_images_from_html(&html, Some(&current_url_str));
+    if !extracted_images.is_empty() {
+        let max_imgs = extracted_images.into_iter().take(6).collect::<Vec<_>>();
+        cleaned.push_str(&format_verified_images_section(&max_imgs));
     }
 
     let max_len = 8000;
@@ -2023,5 +2795,237 @@ mod tests {
         assert_eq!(valid.file_name.as_deref(), Some("doc.pdf"));
         assert_eq!(valid.caption.as_deref(), Some("Annual Report"));
         assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_raster_image_url_accepts_valid_raster_extensions() {
+        assert!(is_valid_raster_image_url("https://example.com/photos/mountain.jpg"));
+        assert!(is_valid_raster_image_url("https://example.com/photos/mountain.jpeg"));
+        assert!(is_valid_raster_image_url("https://example.com/photos/mountain.png"));
+        assert!(is_valid_raster_image_url("https://example.com/photos/mountain.webp"));
+        assert!(is_valid_raster_image_url("http://example.com/photos/mountain.JPG"));
+
+        assert!(is_valid_raster_image_url(
+            "https://upload.wikimedia.org/wikipedia/commons/4/4c/KAGAGAHAN_RIJANI.jpg"
+        ));
+        assert!(is_valid_raster_image_url(
+            "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/4c/KAGAGAHAN_RIJANI.jpg/1280px-KAGAGAHAN_RIJANI.jpg?utm_source=id.wikipedia.org"
+        ));
+
+        assert!(is_valid_raster_image_url(
+            "https://images.unsplash.com/photo-1546527868-ccb7ee7dfa6a"
+        ));
+        assert!(is_valid_raster_image_url(
+            "https://images.unsplash.com/photo-1546527868-ccb7ee7dfa6a?fm=jpg&w=1080"
+        ));
+
+        assert!(is_valid_raster_image_url("//cdn.example.com/images/cat.png"));
+        assert!(is_valid_raster_image_url("https://example.com/fetch-image?id=123&format=webp"));
+    }
+
+    #[test]
+    fn test_is_valid_raster_image_url_rejects_svg_gif_and_data_urls() {
+        assert!(!is_valid_raster_image_url("https://example.com/logo.svg"));
+        assert!(!is_valid_raster_image_url("https://upload.wikimedia.org/wikipedia/en/4/4a/Commons-logo.svg"));
+
+        assert!(!is_valid_raster_image_url("https://example.com/spinner.gif"));
+        assert!(!is_valid_raster_image_url("https://example.com/icon.ico"));
+
+        assert!(!is_valid_raster_image_url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="));
+
+        assert!(!is_valid_raster_image_url("javascript:alert(1)"));
+        assert!(!is_valid_raster_image_url("file:///etc/passwd"));
+        assert!(!is_valid_raster_image_url("blob:https://example.com/1234-5678"));
+
+        assert!(!is_valid_raster_image_url(""));
+        assert!(!is_valid_raster_image_url("   "));
+    }
+
+    #[test]
+    fn test_is_valid_raster_image_url_rejects_tracking_and_placeholders() {
+        assert!(!is_valid_raster_image_url("https://duckduckgo.com/t/tqadb?5540565&s=lite"));
+        assert!(!is_valid_raster_image_url("//duckduckgo.com/t/tqadb?5540565&s=lite"));
+
+        assert!(!is_valid_raster_image_url("https://example.com/tracking/pixel.gif"));
+        assert!(!is_valid_raster_image_url("https://example.com/1x1.gif"));
+        assert!(!is_valid_raster_image_url("https://example.com/spacer.gif"));
+        assert!(!is_valid_raster_image_url("https://google-analytics.com/collect.jpg"));
+
+        assert!(!is_valid_raster_image_url("https://via.placeholder.com/300.jpg"));
+        assert!(!is_valid_raster_image_url("https://dummyimage.com/600x400.png"));
+        assert!(!is_valid_raster_image_url("https://placekitten.com/200/300.jpg"));
+
+        assert!(!is_valid_raster_image_url("http://localhost:8080/image.jpg"));
+        assert!(!is_valid_raster_image_url("http://127.0.0.1/test.png"));
+
+        assert!(!is_valid_raster_image_url("../assets/anomaly/images/challenge/123.jpg"));
+    }
+
+    #[test]
+    fn test_sanitize_and_validate_raster_url_strips_tracking_params() {
+        let dirty = "https://upload.wikimedia.org/wikipedia/commons/4/4c/KAGAGAHAN_RIJANI.jpg?utm_source=id.wikipedia.org&utm_campaign=api&utm_content=original&fbclid=IwAR123";
+        let cleaned = sanitize_and_validate_raster_url(dirty).expect("should be valid");
+        assert_eq!(
+            cleaned,
+            "https://upload.wikimedia.org/wikipedia/commons/4/4c/KAGAGAHAN_RIJANI.jpg"
+        );
+    }
+
+    #[test]
+    fn test_is_visual_search_query_detection() {
+        assert!(is_visual_search_query("Berikan 2 foto pemandangan gunung rinjani"));
+        assert!(is_visual_search_query("cari gambar kucing persia lucu"));
+        assert!(is_visual_search_query("tampilkan potret presiden soekarno"));
+        assert!(is_visual_search_query("pemandangan danau toba"));
+        assert!(is_visual_search_query("wallpaper sunset pantai kuta"));
+
+        assert!(is_visual_search_query("show me 3 photos of Mount Bromo"));
+        assert!(is_visual_search_query("find pictures of Tokyo tower"));
+        assert!(is_visual_search_query("give me high resolution images of aurora"));
+        assert!(is_visual_search_query("download wallpaper of galaxy"));
+
+        assert!(!is_visual_search_query("harga solana hari ini"));
+        assert!(!is_visual_search_query("apa itu rust borrow checker"));
+        assert!(!is_visual_search_query("sejarah kemerdekaan indonesia"));
+        assert!(!is_visual_search_query(""));
+    }
+
+    #[test]
+    fn test_extract_core_search_terms_strips_conversational_verbs() {
+        assert_eq!(
+            extract_core_search_terms("Berikan 2 foto pemandangan gunung rinjani"),
+            "pemandangan gunung rinjani"
+        );
+        assert_eq!(
+            extract_core_search_terms("Tolong carikan gambar kucing persia"),
+            "kucing persia"
+        );
+        assert_eq!(
+            extract_core_search_terms("Show me 3 photos of Mount Bromo"),
+            "Mount Bromo"
+        );
+        assert_eq!(
+            extract_core_search_terms("3 photos of Mount Bromo"),
+            "Mount Bromo"
+        );
+        assert_eq!(
+            extract_core_search_terms("photos of Mount Bromo"),
+            "Mount Bromo"
+        );
+        assert_eq!(
+            extract_core_search_terms("Show me photos of Mount Bromo"),
+            "Mount Bromo"
+        );
+        assert_eq!(
+            extract_core_search_terms("Show me 5 pictures of Tokyo Tower"),
+            "Tokyo Tower"
+        );
+        assert_eq!(
+            extract_core_search_terms("Gunung Rinjani"),
+            "Gunung Rinjani"
+        );
+        // Word boundary tests: whole words like \bphotos?\b must not strip subwords
+        assert_eq!(
+            extract_core_search_terms("photosynthesis process in plants"),
+            "photosynthesis process in plants"
+        );
+        assert_eq!(
+            extract_core_search_terms("fotovoltaik panel surya"),
+            "fotovoltaik panel surya"
+        );
+        // Trailing conversational suffixes
+        assert_eq!(
+            extract_core_search_terms("Mount Bromo, please"),
+            "Mount Bromo"
+        );
+        assert_eq!(
+            extract_core_search_terms("gunung bromo dong"),
+            "gunung bromo"
+        );
+    }
+
+    #[test]
+    fn test_extract_raster_images_from_html() {
+        let html_content = r#"
+            <div>
+                <img src="https://example.com/photos/valid1.jpg" alt="Valid 1">
+                <img data-src="https://example.com/photos/valid2.png" alt="Valid 2">
+                <img data-lazy-src="https://example.com/photos/valid_lazy.webp" alt="Lazy">
+                <img srcset="https://example.com/photos/valid_srcset_small.jpg 400w, https://example.com/photos/valid_srcset_large.webp 1200w">
+                <img src="/relative/valid3.webp" alt="Relative valid">
+                <img src="https://example.com/icon.svg" alt="SVG rejected">
+                <img src="https://google-analytics.com/pixel.gif" alt="Tracker rejected">
+                <img src="https://via.placeholder.com/150.jpg" alt="Placeholder rejected">
+                <a href="https://example.com/gallery/full_mountain.jpg">Download Full</a>
+            </div>
+        "#;
+
+        let extracted = extract_raster_images_from_html(html_content, Some("https://example.com"));
+        assert!(extracted.len() >= 6);
+        assert!(extracted.contains(&"https://example.com/photos/valid1.jpg".to_string()));
+        assert!(extracted.contains(&"https://example.com/photos/valid2.png".to_string()));
+        assert!(extracted.contains(&"https://example.com/photos/valid_lazy.webp".to_string()));
+        assert!(extracted.contains(&"https://example.com/photos/valid_srcset_small.jpg".to_string()));
+        assert!(extracted.contains(&"https://example.com/photos/valid_srcset_large.webp".to_string()));
+        assert!(extracted.contains(&"https://example.com/relative/valid3.webp".to_string()));
+        assert!(extracted.contains(&"https://example.com/gallery/full_mountain.jpg".to_string()));
+    }
+
+    #[test]
+    fn test_duckduckgo_proxy_url_unwrapping() {
+        let proxy_url = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fexample.com%2Fphotos%2Fsummit.jpg&f=1&nofb=1";
+        let unwrapped = sanitize_and_validate_raster_url(proxy_url);
+        assert_eq!(
+            unwrapped,
+            Some("https://example.com/photos/summit.jpg".to_string())
+        );
+
+        let tracking_url = "https://duckduckgo.com/t/tqadb?5540565&s=lite";
+        assert_eq!(sanitize_and_validate_raster_url(tracking_url), None);
+    }
+
+    #[test]
+    fn test_format_verified_images_section_and_guidance() {
+        let imgs = vec![
+            "https://example.com/1.jpg".to_string(),
+            "https://example.com/2.png".to_string(),
+        ];
+        let formatted = format_verified_images_section(&imgs);
+        assert!(formatted.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi"));
+        assert!(formatted.contains("- https://example.com/1.jpg"));
+        assert!(formatted.contains("- https://example.com/2.png"));
+
+        let empty_formatted = format_verified_images_section(&[]);
+        assert!(empty_formatted.is_empty());
+
+        let guidance = format_no_images_guidance("gunung rinjani");
+        assert!(guidance.contains("ℹ️ **Catatan Media**"));
+        assert!(guidance.contains("gunung rinjani"));
+        assert!(guidance.contains("teks Markdown"));
+    }
+
+    #[test]
+    fn test_error_recovery_never_returns_empty_response() {
+        let err_msg = "Connection timeout to search provider";
+        let query = "pemandangan lombok";
+        let recovery = format!(
+            "[Informasi Pencarian Web]\nPencarian web daring untuk topik \"{query}\" saat ini tidak dapat diselesaikan karena kendala koneksi atau penyedia pencarian sedang tidak tersedia ({err_msg}).\n\nℹ️ **Panduan Asisten**: Berikan tanggapan deskriptif dan faktual mengenai topik \"{query}\" berdasarkan pengetahuan internal Anda secara lengkap. Jika pengguna meminta gambar atau foto, jelaskan informasi visualnya secara naratif dalam teks Markdown dan hindari memanggil tool multimedia fiktif."
+        );
+
+        assert!(!recovery.trim().is_empty());
+        assert!(recovery.contains(query));
+        assert!(recovery.contains(err_msg));
+        assert!(recovery.contains("Panduan Asisten"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_web_search_empty_query_returns_clean_guidance() {
+        let empty_res = execute_web_search("").await;
+        assert!(!empty_res.trim().is_empty());
+        assert!(empty_res.contains("tidak boleh kosong"));
+
+        let whitespace_res = execute_web_search("   \t\n  ").await;
+        assert!(!whitespace_res.trim().is_empty());
+        assert!(whitespace_res.contains("tidak boleh kosong"));
     }
 }

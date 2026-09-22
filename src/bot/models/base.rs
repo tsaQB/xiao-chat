@@ -15,6 +15,40 @@ pub struct Location {
     pub horizontal_accuracy: Option<f64>,
 }
 
+impl Location {
+    pub fn new(latitude: f64, longitude: f64) -> Result<Self, String> {
+        let loc = Self {
+            latitude,
+            longitude,
+            horizontal_accuracy: None,
+        };
+        loc.validate()?;
+        Ok(loc)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.latitude.is_finite() {
+            return Err("Location latitude must be a finite number".to_string());
+        }
+        if !(-90.0..=90.0).contains(&self.latitude) {
+            return Err(format!(
+                "Location latitude must be between -90.0 and 90.0; found {}",
+                self.latitude
+            ));
+        }
+        if !self.longitude.is_finite() {
+            return Err("Location longitude must be a finite number".to_string());
+        }
+        if !(-180.0..=180.0).contains(&self.longitude) {
+            return Err(format!(
+                "Location longitude must be between -180.0 and 180.0; found {}",
+                self.longitude
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LoginUrl {
     pub url: String,
@@ -40,7 +74,7 @@ pub struct SwitchInlineQueryChosenChat {
     pub allow_channel_chats: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum InputMedia {
     #[serde(rename = "photo")]
@@ -113,7 +147,7 @@ pub enum InputMedia {
         #[serde(skip_serializing_if = "Option::is_none")]
         parse_mode: Option<String>,
     },
-    #[serde(rename = "voice")]
+    #[serde(rename = "voice_note", alias = "voice")]
     VoiceNote {
         media: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,12 +219,188 @@ impl InputMedia {
             parse_mode,
         }
     }
+
+    pub fn animation(
+        media: impl Into<String>,
+        caption: Option<String>,
+        parse_mode: Option<String>,
+    ) -> Self {
+        InputMedia::Animation {
+            media: media.into(),
+            caption,
+            parse_mode,
+            show_caption_above_media: None,
+            width: None,
+            height: None,
+            duration: None,
+            has_spoiler: None,
+        }
+    }
+
+    pub fn voice_note(
+        media: impl Into<String>,
+        caption: Option<String>,
+        parse_mode: Option<String>,
+        duration: Option<i32>,
+    ) -> Self {
+        InputMedia::VoiceNote {
+            media: media.into(),
+            caption,
+            parse_mode,
+            duration,
+        }
+    }
+
+    pub fn validate_media_group(media: &[Self]) -> Result<(), String> {
+        if !(2..=10).contains(&media.len()) {
+            return Err(format!(
+                "sendMediaGroup requires 2-10 media items; found {}",
+                media.len()
+            ));
+        }
+        let compatible = match &media[0] {
+            Self::Audio { .. } => media.iter().all(|item| matches!(item, Self::Audio { .. })),
+            Self::Document { .. } => media
+                .iter()
+                .all(|item| matches!(item, Self::Document { .. })),
+            Self::Photo { .. } | Self::Video { .. } => media
+                .iter()
+                .all(|item| matches!(item, Self::Photo { .. } | Self::Video { .. })),
+            Self::Animation { .. } | Self::VoiceNote { .. } => false,
+        };
+        compatible.then_some(()).ok_or_else(|| {
+            "sendMediaGroup requires audio-only or document-only albums; photos and videos may be combined"
+                .to_string()
+        })
+    }
+
+    pub fn media_url(&self) -> &str {
+        match self {
+            Self::Photo { media, .. }
+            | Self::Video { media, .. }
+            | Self::Animation { media, .. }
+            | Self::Audio { media, .. }
+            | Self::Document { media, .. }
+            | Self::VoiceNote { media, .. } => media.as_str(),
+        }
+    }
+
+    pub fn set_media_url(&mut self, new_media: impl Into<String>) {
+        let val = new_media.into();
+        match self {
+            Self::Photo { media, .. }
+            | Self::Video { media, .. }
+            | Self::Animation { media, .. }
+            | Self::Audio { media, .. }
+            | Self::Document { media, .. }
+            | Self::VoiceNote { media, .. } => *media = val,
+        }
+    }
+
+    pub fn caption_text(&self) -> Option<&str> {
+        match self {
+            Self::Photo { caption, .. }
+            | Self::Video { caption, .. }
+            | Self::Animation { caption, .. }
+            | Self::Audio { caption, .. }
+            | Self::Document { caption, .. }
+            | Self::VoiceNote { caption, .. } => caption.as_deref(),
+        }
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InputRichMessageMedia {
     pub id: String,
     pub media: InputMedia,
+}
+
+impl InputRichMessageMedia {
+    pub fn new(id: impl Into<String>, media: InputMedia) -> Result<Self, String> {
+        let id = id.into();
+        Self::validate_id(&id)?;
+        Ok(Self { id, media })
+    }
+
+    pub fn validate_id(id: &str) -> Result<(), String> {
+        let count = id.chars().count();
+        if !(1..=64).contains(&count) {
+            return Err(format!(
+                "InputRichMessageMedia ID must be 1-64 characters, found {count}"
+            ));
+        }
+        if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(format!(
+                "InputRichMessageMedia ID must contain only ASCII alphanumeric characters or underscores; found '{id}'"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        Self::validate_id(&self.id)?;
+        if self.media.media_url().trim().is_empty() {
+            return Err(format!(
+                "InputRichMessageMedia ID '{}' has empty media URL",
+                self.id
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn photo(
+        id: impl Into<String>,
+        media: impl Into<String>,
+        caption: Option<String>,
+    ) -> Result<Self, String> {
+        Self::new(id, InputMedia::photo(media, caption, None))
+    }
+
+    pub fn video(
+        id: impl Into<String>,
+        media: impl Into<String>,
+        caption: Option<String>,
+    ) -> Result<Self, String> {
+        Self::new(id, InputMedia::video(media, caption, None))
+    }
+
+    pub fn audio(
+        id: impl Into<String>,
+        media: impl Into<String>,
+        title: Option<String>,
+        performer: Option<String>,
+        caption: Option<String>,
+    ) -> Result<Self, String> {
+        Self::new(
+            id,
+            InputMedia::audio(media, caption, None, title, performer),
+        )
+    }
+
+    pub fn document(
+        id: impl Into<String>,
+        media: impl Into<String>,
+        caption: Option<String>,
+    ) -> Result<Self, String> {
+        Self::new(id, InputMedia::document(media, caption, None))
+    }
+
+    pub fn animation(
+        id: impl Into<String>,
+        media: impl Into<String>,
+        caption: Option<String>,
+    ) -> Result<Self, String> {
+        Self::new(id, InputMedia::animation(media, caption, None))
+    }
+
+    pub fn voice_note(
+        id: impl Into<String>,
+        media: impl Into<String>,
+        caption: Option<String>,
+        duration: Option<i32>,
+    ) -> Result<Self, String> {
+        Self::new(id, InputMedia::voice_note(media, caption, None, duration))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -435,12 +645,12 @@ impl BotCommand {
 // Telegram Bot API 10.3: Rich Message Blocks
 // ==========================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RichTextButton {
     pub button: RichMessageButton,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RichMessageButton {
     pub text: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -567,7 +777,7 @@ impl RichMessageButton {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RichBlockCaption {
     pub text: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -587,7 +797,7 @@ impl RichBlockCaption {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RichBlockTableCell {
     pub text: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -624,7 +834,7 @@ impl RichBlockTableCell {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RichBlockListItem {
     pub blocks: Vec<Value>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -659,7 +869,7 @@ impl RichBlockListItem {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum RichBlock {
     #[serde(rename = "paragraph")]
@@ -991,9 +1201,29 @@ impl RichBlock {
         }
         out.trim().to_string()
     }
+
+    pub fn map(location: Location, zoom: Option<i32>) -> Result<Self, String> {
+        location.validate()?;
+        if let Some(z) = zoom {
+            if !(1..=20).contains(&z) {
+                return Err(format!("Map zoom must be between 1 and 20; found {z}"));
+            }
+        }
+        Ok(RichBlock::Map {
+            location,
+            zoom,
+            width: None,
+            height: None,
+        })
+    }
+
+    pub fn map_coords(latitude: f64, longitude: f64, zoom: Option<i32>) -> Result<Self, String> {
+        let location = Location::new(latitude, longitude)?;
+        Self::map(location, zoom)
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct InputRichMessage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<RichBlock>,
@@ -1002,7 +1232,7 @@ pub struct InputRichMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markdown: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub media: Option<Vec<Value>>,
+    pub media: Option<Vec<InputRichMessageMedia>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_rtl: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1152,8 +1382,36 @@ impl InputRichMessage {
         }
     }
 
+    pub fn from_html(html: impl Into<String>, media: Option<Vec<InputRichMessageMedia>>) -> Self {
+        Self {
+            blocks: Vec::new(),
+            html: Some(html.into()),
+            markdown: None,
+            media,
+            is_rtl: None,
+            skip_entity_detection: None,
+        }
+    }
+
+    pub fn from_markdown(markdown: impl Into<String>) -> Self {
+        Self {
+            blocks: Vec::new(),
+            html: None,
+            markdown: Some(markdown.into()),
+            media: None,
+            is_rtl: None,
+            skip_entity_detection: None,
+        }
+    }
+
+    pub fn with_media(mut self, media: Vec<InputRichMessageMedia>) -> Self {
+        self.media = Some(media);
+        self
+    }
+
     pub fn has_media(&self) -> bool {
         self.blocks.iter().any(|b| b.is_media())
+            || self.media.as_ref().is_some_and(|m| !m.is_empty())
     }
 
     pub fn collect_media_urls(&self) -> Vec<String> {
@@ -1161,12 +1419,24 @@ impl InputRichMessage {
         for block in &self.blocks {
             urls.extend(block.get_media_urls());
         }
+        if let Some(media) = &self.media {
+            for item in media {
+                urls.push(item.media.media_url().to_string());
+            }
+        }
         urls
     }
 
     pub fn replace_media_urls<F: Fn(&str) -> Option<String>>(&mut self, replacer: &F) {
         for block in &mut self.blocks {
             block.replace_media_urls(replacer);
+        }
+        if let Some(media) = &mut self.media {
+            for item in media {
+                if let Some(new_url) = replacer(item.media.media_url()) {
+                    item.media.set_media_url(new_url);
+                }
+            }
         }
     }
 
@@ -1196,14 +1466,22 @@ impl InputRichMessage {
             ));
         }
 
-        if self
-            .media
-            .as_ref()
-            .is_some_and(|media| media.len() > RICH_MESSAGE_MAX_MEDIA)
-        {
-            return Err(format!(
-                "Rich Message media count exceeds Telegram limit of {RICH_MESSAGE_MAX_MEDIA}"
-            ));
+        if let Some(media) = &self.media {
+            if media.len() > RICH_MESSAGE_MAX_MEDIA {
+                return Err(format!(
+                    "Rich Message media count exceeds Telegram limit of {RICH_MESSAGE_MAX_MEDIA}"
+                ));
+            }
+            let mut seen_ids = std::collections::HashSet::new();
+            for item in media {
+                item.validate()?;
+                if !seen_ids.insert(&item.id) {
+                    return Err(format!(
+                        "InputRichMessage media IDs must be unique; duplicate ID found: '{}'",
+                        item.id
+                    ));
+                }
+            }
         }
 
         let mut stats = RichMessageStats::default();
@@ -1315,7 +1593,14 @@ impl InputRichMessage {
                         }
                     }
                 }
-                RichBlock::Map { .. } => {}
+                RichBlock::Map { location, zoom, .. } => {
+                    location.validate()?;
+                    if let Some(z) = zoom {
+                        if !(1..=20).contains(z) {
+                            return Err(format!("Map zoom must be between 1 and 20; found {z}"));
+                        }
+                    }
+                }
                 RichBlock::Details {
                     summary, blocks, ..
                 } => {
@@ -2113,7 +2398,14 @@ mod tests {
         }]);
         message.media = Some(
             (0..RICH_MESSAGE_MAX_MEDIA)
-                .map(|_| serde_json::json!({}))
+                .map(|i| {
+                    InputRichMessageMedia::photo(
+                        format!("pic_{i}"),
+                        format!("https://example.com/pic_{i}.jpg"),
+                        None,
+                    )
+                    .expect("valid media")
+                })
                 .collect(),
         );
         assert!(message.validate().is_ok());
@@ -2121,7 +2413,14 @@ mod tests {
             .media
             .as_mut()
             .expect("media vector present")
-            .push(serde_json::json!({}));
+            .push(
+                InputRichMessageMedia::photo(
+                    format!("pic_{RICH_MESSAGE_MAX_MEDIA}"),
+                    "https://example.com/pic_extra.jpg",
+                    None,
+                )
+                .expect("valid media"),
+            );
         assert!(message.validate().is_err());
 
         let table = |columns: usize| {
@@ -2271,5 +2570,255 @@ mod tests {
         assert!(plain.contains("🧩 Thinking..."));
         assert!(plain.contains("Halo dunia!"));
         assert!(plain.contains("println!(\"hello\");"));
+    }
+
+    #[test]
+    fn input_rich_message_media_id_validation() {
+        // Valid IDs: 1 to 64 chars, ASCII alphanumeric and underscore
+        assert!(InputRichMessageMedia::validate_id("a").is_ok());
+        assert!(InputRichMessageMedia::validate_id("Z").is_ok());
+        assert!(InputRichMessageMedia::validate_id("0").is_ok());
+        assert!(InputRichMessageMedia::validate_id("_").is_ok());
+        assert!(InputRichMessageMedia::validate_id("photo_1_preview").is_ok());
+        assert!(InputRichMessageMedia::validate_id(&"x".repeat(64)).is_ok());
+
+        // Invalid IDs: empty, > 64 chars, or containing invalid characters
+        assert!(InputRichMessageMedia::validate_id("").is_err());
+        assert!(InputRichMessageMedia::validate_id(&"x".repeat(65)).is_err());
+        assert!(InputRichMessageMedia::validate_id("photo 1").is_err());
+        assert!(InputRichMessageMedia::validate_id("photo-1").is_err());
+        assert!(InputRichMessageMedia::validate_id("photo.jpg").is_err());
+        assert!(InputRichMessageMedia::validate_id("pic@home").is_err());
+        assert!(InputRichMessageMedia::validate_id("foto#1").is_err());
+    }
+
+    #[test]
+    fn input_rich_message_media_constructors() {
+        let photo = InputRichMessageMedia::photo("p1", "https://example.com/pic.jpg", Some("Caption".to_string()));
+        assert!(photo.is_ok());
+        let photo = photo.expect("valid photo");
+        assert_eq!(photo.id, "p1");
+        assert_eq!(photo.media.media_url(), "https://example.com/pic.jpg");
+
+        let audio = InputRichMessageMedia::audio("a1", "https://example.com/sound.mp3", Some("Title".to_string()), Some("Artist".to_string()), None);
+        assert!(audio.is_ok());
+        let audio = audio.expect("valid audio");
+        assert_eq!(audio.id, "a1");
+        assert_eq!(audio.media.media_url(), "https://example.com/sound.mp3");
+
+        let doc = InputRichMessageMedia::document("d1", "https://example.com/file.pdf", None);
+        assert!(doc.is_ok());
+
+        let vid = InputRichMessageMedia::video("v1", "https://example.com/vid.mp4", None);
+        assert!(vid.is_ok());
+    }
+
+    #[test]
+    fn input_rich_message_unique_media_ids_enforced() {
+        let item1 = InputRichMessageMedia::photo("same_id", "https://example.com/1.jpg", None).expect("valid");
+        let item2 = InputRichMessageMedia::photo("same_id", "https://example.com/2.jpg", None).expect("valid");
+
+        let msg = InputRichMessage::from_html("<p>test</p>", Some(vec![item1, item2]));
+        let err = msg.validate().expect_err("Duplicate media IDs must be rejected");
+        assert!(err.contains("unique"), "Error must mention unique: {err}");
+        assert!(err.contains("same_id"), "Error must mention duplicated ID: {err}");
+
+        // Distinct IDs are valid
+        let item3 = InputRichMessageMedia::photo("diff_id", "https://example.com/2.jpg", None).expect("valid");
+        let item1 = InputRichMessageMedia::photo("same_id", "https://example.com/1.jpg", None).expect("valid");
+        let valid_msg = InputRichMessage::from_html("<p>test</p>", Some(vec![item1, item3]));
+        assert!(valid_msg.validate().is_ok());
+    }
+
+    #[test]
+    fn input_rich_message_wire_serialization_matches_bot_api_10_2() {
+        let photo = InputRichMessageMedia::photo("pic1", "https://example.com/summit.jpg", Some("Summit view".to_string())).expect("valid");
+        let msg = InputRichMessage::from_html("<h3>Rinjani</h3><img src=\"tg://photo?id=pic1\"/>", Some(vec![photo]));
+        assert!(msg.validate().is_ok());
+
+        let json_val = serde_json::to_value(&msg).expect("serialization succeeds");
+        assert_eq!(json_val["html"], "<h3>Rinjani</h3><img src=\"tg://photo?id=pic1\"/>");
+        assert!(json_val["media"].is_array());
+        let media_arr = json_val["media"].as_array().expect("media array");
+        assert_eq!(media_arr.len(), 1);
+        assert_eq!(media_arr[0]["id"], "pic1");
+        assert_eq!(media_arr[0]["media"]["type"], "photo");
+        assert_eq!(media_arr[0]["media"]["media"], "https://example.com/summit.jpg");
+        assert_eq!(media_arr[0]["media"]["caption"], "Summit view");
+
+        // Roundtrip deserialization
+        let deserialized: InputRichMessage = serde_json::from_value(json_val).expect("deserialization succeeds");
+        assert_eq!(deserialized.html, msg.html);
+        let d_media = deserialized.media.expect("deserialized media present");
+        assert_eq!(d_media.len(), 1);
+        assert_eq!(d_media[0].id, "pic1");
+        assert_eq!(d_media[0].media.media_url(), "https://example.com/summit.jpg");
+    }
+
+    #[test]
+    fn location_and_tg_map_coordinates_validation() {
+        // Valid coordinates
+        let valid_coords = vec![
+            (0.0, 0.0),
+            (-90.0, -180.0),
+            (90.0, 180.0),
+            (-8.4113, 116.4573), // Rinjani
+            (40.7128, -74.0060), // New York
+        ];
+        for (lat, lon) in valid_coords {
+            let loc = Location::new(lat, lon);
+            assert!(loc.is_ok(), "Coordinates ({lat}, {lon}) should be valid");
+        }
+
+        // Invalid latitude
+        assert!(Location::new(90.0001, 0.0).is_err());
+        assert!(Location::new(-90.0001, 0.0).is_err());
+        assert!(Location::new(f64::NAN, 0.0).is_err());
+        assert!(Location::new(f64::INFINITY, 0.0).is_err());
+
+        // Invalid longitude
+        assert!(Location::new(0.0, 180.0001).is_err());
+        assert!(Location::new(0.0, -180.0001).is_err());
+        assert!(Location::new(0.0, f64::NAN).is_err());
+        assert!(Location::new(0.0, f64::NEG_INFINITY).is_err());
+
+        // Map RichBlock validation
+        let valid_map = InputRichMessage::new(vec![RichBlock::Map {
+            location: Location { latitude: -8.4113, longitude: 116.4573, horizontal_accuracy: None },
+            zoom: Some(13),
+            width: None,
+            height: None,
+        }]);
+        assert!(valid_map.validate().is_ok());
+
+        // Invalid zoom
+        let invalid_zoom_zero = InputRichMessage::new(vec![RichBlock::Map {
+            location: Location { latitude: -8.4113, longitude: 116.4573, horizontal_accuracy: None },
+            zoom: Some(0),
+            width: None,
+            height: None,
+        }]);
+        assert!(invalid_zoom_zero.validate().is_err());
+
+        let invalid_zoom_high = InputRichMessage::new(vec![RichBlock::Map {
+            location: Location { latitude: -8.4113, longitude: 116.4573, horizontal_accuracy: None },
+            zoom: Some(25),
+            width: None,
+            height: None,
+        }]);
+        assert!(invalid_zoom_high.validate().is_err());
+
+        // Invalid location inside Map block
+        let invalid_lat_map = InputRichMessage::new(vec![RichBlock::Map {
+            location: Location { latitude: 99.0, longitude: 0.0, horizontal_accuracy: None },
+            zoom: Some(10),
+            width: None,
+            height: None,
+        }]);
+        assert!(invalid_lat_map.validate().is_err());
+    }
+
+    #[test]
+    fn input_rich_message_partial_eq_and_animation_voice() {
+        let photo1 = match InputRichMessageMedia::photo("p1", "https://example.com/1.jpg", None) {
+            Ok(m) => m,
+            Err(e) => panic!("valid photo failed: {e}"),
+        };
+        let photo2 = match InputRichMessageMedia::photo("p1", "https://example.com/1.jpg", None) {
+            Ok(m) => m,
+            Err(e) => panic!("valid photo failed: {e}"),
+        };
+        let photo3 = match InputRichMessageMedia::photo("p2", "https://example.com/2.jpg", None) {
+            Ok(m) => m,
+            Err(e) => panic!("valid photo failed: {e}"),
+        };
+        assert_eq!(photo1, photo2);
+        assert_ne!(photo1, photo3);
+
+        let anim = match InputRichMessageMedia::animation("anim_1", "https://example.com/gif.mp4", Some("Animation".to_string())) {
+            Ok(m) => m,
+            Err(e) => panic!("valid animation failed: {e}"),
+        };
+        assert_eq!(anim.id, "anim_1");
+        assert_eq!(anim.media.media_url(), "https://example.com/gif.mp4");
+
+        let voice = match InputRichMessageMedia::voice_note("voice_1", "https://example.com/voice.ogg", None, Some(15)) {
+            Ok(m) => m,
+            Err(e) => panic!("valid voice failed: {e}"),
+        };
+        assert_eq!(voice.id, "voice_1");
+        assert_eq!(voice.media.media_url(), "https://example.com/voice.ogg");
+
+        let msg1 = InputRichMessage::from_html("<p>test</p>", Some(vec![photo1.clone()]));
+        let msg2 = InputRichMessage::from_html("<p>test</p>", Some(vec![photo2]));
+        let msg3 = InputRichMessage::from_html("<p>diff</p>", Some(vec![photo3]));
+        assert_eq!(msg1, msg2);
+        assert_ne!(msg1, msg3);
+    }
+
+    #[test]
+    fn rich_block_map_helpers_and_validation() {
+        let map_res = RichBlock::map_coords(-8.4113, 116.4573, Some(14));
+        assert!(map_res.is_ok());
+        if let Ok(RichBlock::Map { location, zoom, .. }) = map_res {
+            assert_eq!(location.latitude, -8.4113);
+            assert_eq!(location.longitude, 116.4573);
+            assert_eq!(zoom, Some(14));
+        } else {
+            panic!("Expected RichBlock::Map variant");
+        }
+
+        // Exact boundary coordinates
+        assert!(RichBlock::map_coords(-90.0, -180.0, Some(1)).is_ok());
+        assert!(RichBlock::map_coords(90.0, 180.0, Some(20)).is_ok());
+
+        // Out of boundary coordinates
+        assert!(RichBlock::map_coords(-90.001, 0.0, None).is_err());
+        assert!(RichBlock::map_coords(90.001, 0.0, None).is_err());
+        assert!(RichBlock::map_coords(0.0, -180.001, None).is_err());
+        assert!(RichBlock::map_coords(0.0, 180.001, None).is_err());
+
+        // Non-finite coordinates
+        assert!(RichBlock::map_coords(f64::NAN, 0.0, None).is_err());
+        assert!(RichBlock::map_coords(0.0, f64::INFINITY, None).is_err());
+        assert!(RichBlock::map_coords(0.0, f64::NEG_INFINITY, None).is_err());
+
+        // Zoom boundaries
+        assert!(RichBlock::map_coords(0.0, 0.0, Some(0)).is_err());
+        assert!(RichBlock::map_coords(0.0, 0.0, Some(21)).is_err());
+    }
+
+    #[test]
+    fn input_rich_message_media_count_boundary_50_limit() {
+        let mut items_50 = Vec::new();
+        for i in 0..50 {
+            let item = match InputRichMessageMedia::photo(format!("id_{i}"), format!("https://example.com/{i}.jpg"), None) {
+                Ok(item) => item,
+                Err(e) => panic!("failed to create media item: {e}"),
+            };
+            items_50.push(item);
+        }
+
+        let msg_50 = InputRichMessage::from_html("<p>50 items</p>", Some(items_50.clone()));
+        assert!(msg_50.validate().is_ok(), "50 media items must be accepted");
+
+        let mut items_51 = items_50;
+        let item_51 = match InputRichMessageMedia::photo("id_50", "https://example.com/50.jpg", None) {
+            Ok(item) => item,
+            Err(e) => panic!("failed to create media item: {e}"),
+        };
+        items_51.push(item_51);
+
+        let msg_51 = InputRichMessage::from_html("<p>51 items</p>", Some(items_51));
+        assert!(msg_51.validate().is_err(), "51 media items must be rejected");
+    }
+
+    #[test]
+    fn input_rich_message_media_rejects_empty_media_url() {
+        let empty_photo = InputRichMessageMedia {
+            id: "valid_id".to_string(),
+            media: InputMedia::photo("", None, None),
+        };
+        assert!(empty_photo.validate().is_err(), "Empty media URL must be rejected");
     }
 }

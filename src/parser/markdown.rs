@@ -4,10 +4,39 @@ use regex::Regex;
 use serde_json::{json, Value};
 
 use crate::bot::models::{
-    InputRichMessage, Location, RichBlock, RichBlockCaption, RichBlockListItem, RichBlockTableCell,
+    InputMedia, InputRichMessage, InputRichMessageMedia, Location, RichBlock, RichBlockCaption,
+    RichBlockListItem, RichBlockTableCell,
 };
 use crate::parser::latex::sanitize_latex_for_telegram;
 use crate::parser::rtl;
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParserError {
+    InvalidCoordinate(String),
+    InvalidTag(String),
+    MediaValidation(String),
+    MalformedHtml(String),
+}
+
+impl std::fmt::Display for ParserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidCoordinate(msg) => write!(f, "Invalid coordinate: {msg}"),
+            Self::InvalidTag(msg) => write!(f, "Invalid tag: {msg}"),
+            Self::MediaValidation(msg) => write!(f, "Media validation error: {msg}"),
+            Self::MalformedHtml(msg) => write!(f, "Malformed HTML: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ParserError {}
+
+impl From<String> for ParserError {
+    fn from(s: String) -> Self {
+        Self::MediaValidation(s)
+    }
+}
 
 static RE_HTML_SPOILER_TG: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?is)<tg-spoiler(?:\s+[^>]*)?>(.*?)</tg-spoiler>").expect("valid static regex")
@@ -489,16 +518,7 @@ fn try_parse_map_block(line: &str) -> Option<RichBlock> {
                     };
 
                     if let Some((lat, lon, zoom)) = parse_coords_pair(coords_source) {
-                        return Some(RichBlock::Map {
-                            location: Location {
-                                latitude: lat,
-                                longitude: lon,
-                                horizontal_accuracy: None,
-                            },
-                            zoom,
-                            width: None,
-                            height: None,
-                        });
+                        return RichBlock::map_coords(lat, lon, zoom).ok();
                     }
                 }
             }
@@ -513,50 +533,22 @@ fn try_parse_map_block(line: &str) -> Option<RichBlock> {
         .and_then(|r| r.strip_suffix(')'))
     {
         if let Some((lat, lon, zoom)) = parse_coords_pair(geo) {
-            return Some(RichBlock::Map {
-                location: Location {
-                    latitude: lat,
-                    longitude: lon,
-                    horizontal_accuracy: None,
-                },
-                zoom,
-                width: None,
-                height: None,
-            });
+            return RichBlock::map_coords(lat, lon, zoom).ok();
         }
     }
 
-    // <tg-map lat="..." lon="..."/>
+    // <tg-map lat="..." lon="..." zoom="..."/>
     if let Some(rest) = s.strip_prefix("<tg-map") {
-        let trimmed = rest.trim().trim_end_matches('>').trim_end_matches('/');
-        let lat_s = trimmed
-            .split("lat=\"")
-            .nth(1)
-            .and_then(|s| s.split('"').next())
-            .unwrap_or("");
-        let lon_s = trimmed
-            .split("lon=\"")
-            .nth(1)
-            .and_then(|s| s.split('"').next())
-            .unwrap_or("");
-        let zoom_s = trimmed
-            .split("zoom=\"")
-            .nth(1)
-            .and_then(|s| s.split('"').next())
-            .unwrap_or("");
+        let lat_s = extract_html_attribute(rest, "lat").unwrap_or("");
+        let lon_s = extract_html_attribute(rest, "lon").unwrap_or("");
+        let zoom_s = extract_html_attribute(rest, "zoom");
         let lat = lat_s.parse::<f64>().ok()?;
         let lon = lon_s.parse::<f64>().ok()?;
-        let zoom = zoom_s.parse::<i32>().ok();
-        return Some(RichBlock::Map {
-            location: Location {
-                latitude: lat,
-                longitude: lon,
-                horizontal_accuracy: None,
-            },
-            zoom,
-            width: None,
-            height: None,
-        });
+        let zoom = match zoom_s {
+            Some(z) => Some(z.parse::<i32>().ok()?),
+            None => None,
+        };
+        return RichBlock::map_coords(lat, lon, zoom).ok();
     }
 
     None
@@ -637,13 +629,39 @@ pub fn is_unsupported_image_format(url: &str) -> bool {
 }
 
 fn extract_html_attribute<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
-    let needle_double = format!("{attr}=\"");
-    let needle_single = format!("{attr}='");
-    if let Some(rest) = tag.split(&needle_double).nth(1) {
-        return rest.split('"').next().map(str::trim);
-    }
-    if let Some(rest) = tag.split(&needle_single).nth(1) {
-        return rest.split('\'').next().map(str::trim);
+    let mut cursor = 0;
+    let attr_lower = attr.to_lowercase();
+    let tag_lower = tag.to_lowercase();
+    while let Some(idx) = tag_lower[cursor..].find(&attr_lower) {
+        let pos = cursor + idx;
+        let after_attr = &tag[pos + attr.len()..];
+        // Ensure word boundary before attr
+        if pos > 0 {
+            let prev = tag.as_bytes()[pos - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'-' || prev == b'_' {
+                cursor = pos + attr.len();
+                continue;
+            }
+        }
+        let trimmed_after = after_attr.trim_start();
+        if let Some(rest) = trimmed_after.strip_prefix('=') {
+            let rest = rest.trim_start();
+            if let Some(val) = rest.strip_prefix('"') {
+                if let Some(end) = val.find('"') {
+                    return Some(&val[..end]);
+                }
+            } else if let Some(val) = rest.strip_prefix('\'') {
+                if let Some(end) = val.find('\'') {
+                    return Some(&val[..end]);
+                }
+            } else {
+                let end = rest.find([' ', '>', '/', '\t', '\n']).unwrap_or(rest.len());
+                if end > 0 {
+                    return Some(&rest[..end]);
+                }
+            }
+        }
+        cursor = pos + attr.len();
     }
     None
 }
@@ -1030,11 +1048,12 @@ fn try_parse_media_block(line: &str) -> Option<RichBlock> {
         }
     }
 
-    // 3. Telegram native HTML media tags: <tg-photo ...>, <tg-video ...>, <tg-audio ...>, <img ...>
+    // 3. Telegram native HTML media tags: <tg-photo ...>, <tg-video ...>, <tg-audio ...>, <img ...>, <audio ...>
     if s.starts_with("<tg-photo")
         || s.starts_with("<tg-video")
         || s.starts_with("<tg-audio")
         || s.starts_with("<img")
+        || s.starts_with("<audio")
     {
         if let Some(block) = try_parse_html_media_tag(s) {
             return Some(block);
@@ -1050,20 +1069,21 @@ fn try_parse_html_media_tag(tag: &str) -> Option<RichBlock> {
     if src.is_empty() {
         return None;
     }
-    let cap_attr = extract_html_attribute(s, "caption")
-        .or_else(|| extract_html_attribute(s, "alt"))
-        .or_else(|| extract_html_attribute(s, "title"));
     let inner_text = s
         .split('>')
         .nth(1)
         .and_then(|t| t.split("</").next())
         .map(str::trim)
         .filter(|t| !t.is_empty());
-    let caption_text = cap_attr.or(inner_text).unwrap_or("");
-    let caption =
-        (!caption_text.is_empty()).then(|| RichBlockCaption::new(parse_inline(caption_text)));
 
     if s.starts_with("<tg-photo") || s.starts_with("<img") {
+        let cap_attr = extract_html_attribute(s, "caption")
+            .or_else(|| extract_html_attribute(s, "alt"))
+            .or_else(|| extract_html_attribute(s, "title"));
+        let caption_text = cap_attr.or(inner_text).unwrap_or("");
+        let caption =
+            (!caption_text.is_empty()).then(|| RichBlockCaption::new(parse_inline(caption_text)));
+
         if is_streaming_web_video(src) {
             return Some(format_media_fallback_paragraph(
                 caption_text,
@@ -1095,6 +1115,12 @@ fn try_parse_html_media_tag(tag: &str) -> Option<RichBlock> {
     }
 
     if s.starts_with("<tg-video") {
+        let cap_attr = extract_html_attribute(s, "caption")
+            .or_else(|| extract_html_attribute(s, "title"));
+        let caption_text = cap_attr.or(inner_text).unwrap_or("");
+        let caption =
+            (!caption_text.is_empty()).then(|| RichBlockCaption::new(parse_inline(caption_text)));
+
         if is_streaming_web_video(src) {
             return Some(format_media_fallback_paragraph(
                 caption_text,
@@ -1109,7 +1135,12 @@ fn try_parse_html_media_tag(tag: &str) -> Option<RichBlock> {
         });
     }
 
-    if s.starts_with("<tg-audio") {
+    if s.starts_with("<tg-audio") || s.starts_with("<audio") {
+        let cap_attr = extract_html_attribute(s, "caption");
+        let caption_text = cap_attr.or(inner_text).unwrap_or("");
+        let caption =
+            (!caption_text.is_empty()).then(|| RichBlockCaption::new(parse_inline(caption_text)));
+
         if is_streaming_web_audio(src) {
             return Some(format_media_fallback_paragraph(
                 caption_text,
@@ -1118,8 +1149,17 @@ fn try_parse_html_media_tag(tag: &str) -> Option<RichBlock> {
                 "🎵",
             ));
         }
+        let title = extract_html_attribute(s, "title");
+        let performer = extract_html_attribute(s, "performer");
+        let mut audio_obj = json!({"type": "audio", "media": src});
+        if let Some(t) = title {
+            audio_obj["title"] = Value::String(t.to_string());
+        }
+        if let Some(p) = performer {
+            audio_obj["performer"] = Value::String(p.to_string());
+        }
         return Some(RichBlock::Audio {
-            audio: json!({"type": "audio", "media": src}),
+            audio: audio_obj,
             caption,
         });
     }
@@ -1188,37 +1228,89 @@ fn try_parse_container_media_block(
         Regex::new(r#"(?i)(?:src=["']([^"']+)["']|!?\[[^\]]*\]\(([^)]+)\)|https?://[^\s"'<>()]+)"#)
             .expect("valid static regex")
     });
+    static RE_CHILD_TAG: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?is)<(?:img|tg-photo|video|tg-video)\s+[^>]*?/?>"#)
+            .expect("valid static regex")
+    });
 
     let mut sub_blocks = Vec::new();
-    for caps in RE_MEDIA_SRC.captures_iter(&full_content) {
-        let url = caps
-            .get(1)
-            .or_else(|| caps.get(2))
-            .or_else(|| caps.get(0))
-            .map(|m| m.as_str().trim())
-            .unwrap_or("");
-        let clean_url = url.trim_matches(['"', '\'', '<', '>']);
+    // First try tag-based extraction to preserve per-image alt/caption
+    for tag_mat in RE_CHILD_TAG.find_iter(&full_content) {
+        let tag_str = tag_mat.as_str();
+        let src = extract_html_attribute(tag_str, "src").unwrap_or("");
+        let clean_url = src.trim_matches(['"', '\'', '<', '>']);
         if clean_url.starts_with("http://")
             || clean_url.starts_with("https://")
             || clean_url.starts_with("tg://")
+            || clean_url.starts_with("attach://")
         {
             let lower = clean_url.to_lowercase();
-            if lower.ends_with(".mp4") || lower.ends_with(".webm") || lower.ends_with(".mov") {
-                sub_blocks
-                    .push(json!({"type": "video", "video": {"type": "video", "media": clean_url}}));
+            let is_vid = lower.ends_with(".mp4")
+                || lower.ends_with(".webm")
+                || lower.ends_with(".mov")
+                || tag_str.to_lowercase().starts_with("<video")
+                || tag_str.to_lowercase().starts_with("<tg-video");
+            let child_cap = extract_html_attribute(tag_str, "caption")
+                .or_else(|| extract_html_attribute(tag_str, "alt"))
+                .or_else(|| extract_html_attribute(tag_str, "title"));
+
+            if is_vid {
+                let mut vid_obj = json!({"type": "video", "media": clean_url});
+                if let Some(c) = child_cap {
+                    vid_obj["caption"] = Value::String(c.to_string());
+                }
+                sub_blocks.push(json!({"type": "video", "video": vid_obj}));
             } else if !lower.ends_with(".html")
                 && !lower.ends_with(".htm")
                 && !is_streaming_web_video(clean_url)
                 && !is_streaming_web_audio(clean_url)
                 && !is_unsupported_image_format(clean_url)
             {
-                sub_blocks
-                    .push(json!({"type": "photo", "photo": {"type": "photo", "media": clean_url}}));
+                let mut photo_obj = json!({"type": "photo", "media": clean_url});
+                if let Some(c) = child_cap {
+                    photo_obj["caption"] = Value::String(c.to_string());
+                }
+                sub_blocks.push(json!({"type": "photo", "photo": photo_obj}));
+            }
+        }
+    }
+
+    // If no HTML child tags found, fall back to RE_MEDIA_SRC
+    if sub_blocks.is_empty() {
+        for caps in RE_MEDIA_SRC.captures_iter(&full_content) {
+            let url = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .or_else(|| caps.get(0))
+                .map(|m| m.as_str().trim())
+                .unwrap_or("");
+            let clean_url = url.trim_matches(['"', '\'', '<', '>']);
+            if clean_url.starts_with("http://")
+                || clean_url.starts_with("https://")
+                || clean_url.starts_with("tg://")
+                || clean_url.starts_with("attach://")
+            {
+                let lower = clean_url.to_lowercase();
+                if lower.ends_with(".mp4") || lower.ends_with(".webm") || lower.ends_with(".mov") {
+                    sub_blocks
+                        .push(json!({"type": "video", "video": {"type": "video", "media": clean_url}}));
+                } else if !lower.ends_with(".html")
+                    && !lower.ends_with(".htm")
+                    && !is_streaming_web_video(clean_url)
+                    && !is_streaming_web_audio(clean_url)
+                    && !is_unsupported_image_format(clean_url)
+                {
+                    sub_blocks
+                        .push(json!({"type": "photo", "photo": {"type": "photo", "media": clean_url}}));
+                }
             }
         }
     }
 
     if sub_blocks.len() >= 2 {
+        if !is_slideshow && sub_blocks.len() > 10 {
+            sub_blocks.truncate(10);
+        }
         let block = if is_slideshow {
             RichBlock::Slideshow {
                 blocks: sub_blocks,
@@ -1282,7 +1374,7 @@ fn try_parse_container_media_block(
 
 static RE_EMBEDDED_MEDIA: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)(!?\[(?:photo|foto|image|img|gambar|picture|pic|video|vid|audio|musik|music|lagu|song|voice|voicenote|voice_note|suara|rekaman|vn|animation|animasi|gif|collage|kolase|gallery|galeri|album|slideshow|slide|document|dokumen|doc|file|berkas|map|location|lokasi|peta|geo)\s*:[^\]]+\](?:\s*\([^\)]+\))?[.,;:]?|!\[[^\]]*\]\s*\([^\)]+\)[.,;:]?|<tg-(?:photo|video|audio|document|map|collage|slideshow)[^>]*>|</tg-(?:photo|video|audio|document|map|collage|slideshow)>|<img[^>]*>)"#
+        r#"(?i)(!?\[(?:photo|foto|image|img|gambar|picture|pic|video|vid|audio|musik|music|lagu|song|voice|voicenote|voice_note|suara|rekaman|vn|animation|animasi|gif|collage|kolase|gallery|galeri|album|slideshow|slide|document|dokumen|doc|file|berkas|map|location|lokasi|peta|geo)\s*:[^\]]+\](?:\s*\([^\)]+\))?[.,;:]?|!\[[^\]]*\]\s*\([^\)]+\)[.,;:]?|<tg-(?:photo|video|audio|document|map|collage|slideshow)[^>]*>|</tg-(?:photo|video|audio|document|map|collage|slideshow)>|<img[^>]*>|<audio[^>]*>|</audio>)"#
     ).expect("valid static regex")
 });
 
@@ -2118,6 +2210,12 @@ fn sanitize_provisional_markdown(tail: &str) -> String {
 
 static RE_BLOCK_HEADING: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(#{1,6})\s*([^\s#].*)$").expect("valid static regex"));
+static RE_HTML_HEADING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)^<h([1-6])(?:\s+[^>]*)?>(.*?)</h[1-6]>$"#).expect("valid static regex")
+});
+static RE_HTML_HEADING_START: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)^<h([1-6])(?:\s+[^>]*)?>"#).expect("valid static regex")
+});
 static RE_BLOCK_DIVIDER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\-{3,}|\*{3,}|_{3,}|─{3,}|—{2,})$").expect("valid static regex")
 });
@@ -2326,10 +2424,130 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
             continue;
         }
 
-        // 4. Horizontal Divider (---, ***, ___, ───)
-        if RE_BLOCK_DIVIDER.is_match(stripped) {
+        // 4. Horizontal Divider (---, ***, ___, ───, or <hr>, <hr/>)
+        if RE_BLOCK_DIVIDER.is_match(stripped)
+            || stripped.eq_ignore_ascii_case("<hr>")
+            || stripped.eq_ignore_ascii_case("<hr/>")
+            || stripped.eq_ignore_ascii_case("<hr />")
+        {
             blocks.push(RichBlock::Divider {});
             i += 1;
+            continue;
+        }
+
+        // 5a. HTML Heading (<h1>...</h1> to <h6>...</h6>)
+        if let Some(caps) = RE_HTML_HEADING_START.captures(stripped) {
+            let level = caps
+                .get(1)
+                .and_then(|m| m.as_str().parse::<usize>().ok())
+                .unwrap_or(1);
+            let after_open = &stripped[caps.get(0).map_or(0, |m| m.end())..];
+            let close_tag = format!("</h{level}>");
+
+            if let Some(end) = after_open.to_lowercase().rfind(&close_tag) {
+                let inner = after_open[..end].trim();
+                blocks.push(RichBlock::SectionHeading {
+                    text: parse_inline(inner),
+                    level: level.min(6),
+                });
+                i += 1;
+                continue;
+            }
+            if let Some(end) = after_open.to_lowercase().rfind("</h") {
+                if let Some(_gt) = after_open[end..].find('>') {
+                    let inner = after_open[..end].trim();
+                    blocks.push(RichBlock::SectionHeading {
+                        text: parse_inline(inner),
+                        level: level.min(6),
+                    });
+                    i += 1;
+                    continue;
+                }
+            }
+
+            // Multi-line heading
+            let mut h_lines = Vec::new();
+            if !after_open.trim().is_empty() {
+                h_lines.push(after_open.trim().to_string());
+            }
+            i += 1;
+            while i < n {
+                let line_str = lines[i].trim();
+                let lower = line_str.to_lowercase();
+                if let Some(end) = lower.rfind(&close_tag) {
+                    let before = line_str[..end].trim();
+                    if !before.is_empty() {
+                        h_lines.push(before.to_string());
+                    }
+                    i += 1;
+                    break;
+                } else if let Some(end) = lower.rfind("</h") {
+                    if let Some(_gt) = lower[end..].find('>') {
+                        let before = line_str[..end].trim();
+                        if !before.is_empty() {
+                            h_lines.push(before.to_string());
+                        }
+                        i += 1;
+                        break;
+                    }
+                }
+                if !line_str.is_empty() {
+                    h_lines.push(line_str.to_string());
+                }
+                i += 1;
+            }
+            let joined = h_lines.join(" ");
+            blocks.push(RichBlock::SectionHeading {
+                text: parse_inline(&joined),
+                level: level.min(6),
+            });
+            continue;
+        }
+
+        // 5b. HTML Paragraph (<p>...</p>)
+        if stripped.starts_with("<p>") || stripped.starts_with("<p ") {
+            let mut p_lines = Vec::new();
+            let mut curr = stripped.to_string();
+            if let Some(pos) = curr.find('>') {
+                curr = curr[pos + 1..].to_string();
+            }
+            if let Some(end) = curr.rfind("</p>") {
+                let inner = curr[..end].trim();
+                if !inner.is_empty() {
+                    let lrm_text = rtl::ensure_lrm_if_needed(inner, is_message_rtl);
+                    blocks.push(RichBlock::Paragraph {
+                        text: parse_inline(&lrm_text),
+                    });
+                }
+                i += 1;
+                continue;
+            }
+            if !curr.trim().is_empty() {
+                p_lines.push(curr.trim().to_string());
+            }
+            i += 1;
+            while i < n {
+                let line_str = lines[i].trim();
+                if let Some(end) = line_str.rfind("</p>") {
+                    let before = line_str[..end].trim();
+                    if !before.is_empty() {
+                        p_lines.push(before.to_string());
+                    }
+                    i += 1;
+                    break;
+                }
+                if !line_str.is_empty() {
+                    p_lines.push(line_str.to_string());
+                }
+                i += 1;
+            }
+            if !p_lines.is_empty() {
+                let joined = p_lines.join(" ");
+                let lrm_text = rtl::ensure_lrm_if_needed(&joined, is_message_rtl);
+                blocks.push(RichBlock::Paragraph {
+                    text: parse_inline(&lrm_text),
+                });
+            }
             continue;
         }
 
@@ -2642,6 +2860,12 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 || s_curr.starts_with("$$")
                 || s_curr.starts_with(r"\[")
                 || RE_BLOCK_HEADING.is_match(s_curr)
+                || RE_HTML_HEADING.is_match(s_curr)
+                || s_curr.starts_with("<p>")
+                || s_curr.starts_with("<p ")
+                || s_curr.eq_ignore_ascii_case("<hr>")
+                || s_curr.eq_ignore_ascii_case("<hr/>")
+                || s_curr.eq_ignore_ascii_case("<hr />")
                 || s_curr.starts_with("**>")
                 || s_curr.starts_with("<blockquote")
                 || s_curr.starts_with('>')
@@ -2650,6 +2874,12 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                 || s_curr.starts_with("[caption:")
                 || s_curr.starts_with("<tg-map")
                 || s_curr.starts_with("<tg-document")
+                || s_curr.starts_with("<tg-collage")
+                || s_curr.starts_with("<tg-slideshow")
+                || s_curr.starts_with("<audio")
+                || s_curr.starts_with("<tg-audio")
+                || s_curr.starts_with("<img")
+                || s_curr.starts_with("<tg-photo")
                 || try_parse_media_block(s_curr).is_some()
                 || try_parse_doc_block(s_curr).is_some()
                 || try_parse_map_block(s_curr).is_some()
@@ -2693,6 +2923,343 @@ pub fn build_full_rich_message(answer_text: &str, footer_text: Option<&str>) -> 
     let mut message = InputRichMessage::new(blocks);
     rtl::apply_rtl_direction(&mut message, answer_text);
     message
+}
+
+/// Validates container tags and geographic map parameters within rich HTML.
+#[allow(dead_code)]
+fn validate_rich_html_containers(html: &str) -> Result<(), ParserError> {
+    static RE_COLLAGE_CONTAINER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?is)<tg-collage(?:\s+[^>]*)?>(.*?)</tg-collage>"#).expect("valid static regex")
+    });
+
+    for caps in RE_COLLAGE_CONTAINER.captures_iter(html) {
+        let content = caps.get(1).map_or("", |m| m.as_str());
+        let lower = content.to_lowercase();
+        if lower.contains("<audio")
+            || lower.contains("<tg-audio")
+            || lower.contains("<tg-document")
+            || lower.contains("<document")
+        {
+            return Err(ParserError::InvalidTag(
+                "Collage album cannot mix audio or documents with visual items".to_string(),
+            ));
+        }
+    }
+
+    static RE_MAP_TAG: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?is)<tg-map(?:\s+[^>]*)?/?>"#).expect("valid static regex")
+    });
+
+    for caps in RE_MAP_TAG.captures_iter(html) {
+        let tag = caps.get(0).map_or("", |m| m.as_str());
+        let lat_s = extract_html_attribute(tag, "lat").ok_or_else(|| {
+            ParserError::InvalidCoordinate("Missing 'lat' attribute on <tg-map>".to_string())
+        })?;
+        let lon_s = extract_html_attribute(tag, "lon").ok_or_else(|| {
+            ParserError::InvalidCoordinate("Missing 'lon' attribute on <tg-map>".to_string())
+        })?;
+        let lat = lat_s.parse::<f64>().map_err(|_| {
+            ParserError::InvalidCoordinate(format!("Invalid latitude float value: '{lat_s}'"))
+        })?;
+        let lon = lon_s.parse::<f64>().map_err(|_| {
+            ParserError::InvalidCoordinate(format!("Invalid longitude float value: '{lon_s}'"))
+        })?;
+
+        if !lat.is_finite() || !lon.is_finite() {
+            return Err(ParserError::InvalidCoordinate(
+                "Geo coordinates must be finite numbers".to_string(),
+            ));
+        }
+        if !(-90.0..=90.0).contains(&lat) {
+            return Err(ParserError::InvalidCoordinate(format!(
+                "Latitude {lat} out of range [-90.0, 90.0]"
+            )));
+        }
+        if !(-180.0..=180.0).contains(&lon) {
+            return Err(ParserError::InvalidCoordinate(format!(
+                "Longitude {lon} out of range [-180.0, 180.0]"
+            )));
+        }
+
+        if let Some(zoom_s) = extract_html_attribute(tag, "zoom") {
+            let zoom = zoom_s.parse::<i32>().map_err(|_| {
+                ParserError::InvalidCoordinate(format!("Invalid zoom integer value: '{zoom_s}'"))
+            })?;
+            if !(1..=20).contains(&zoom) {
+                return Err(ParserError::InvalidCoordinate(format!(
+                    "Zoom level {zoom} out of range [1, 20]"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Extracts and validates media items referenced in HTML tags, resolving their IDs and metadata.
+#[allow(dead_code)]
+pub fn extract_rich_html_media(html: &str) -> Result<Vec<InputRichMessageMedia>, ParserError> {
+    static RE_HTML_MEDIA_TAGS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?is)<(img|tg-photo|audio|tg-audio|video|tg-video|tg-document|document)(?:\s+[^>]*?)(?:/>|>.*?</(?:img|tg-photo|audio|tg-audio|video|tg-video|tg-document|document)>|>)"#)
+            .expect("valid static regex")
+    });
+
+    let mut media_items: Vec<InputRichMessageMedia> = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut counter: usize = 1;
+
+    for caps in RE_HTML_MEDIA_TAGS.captures_iter(html) {
+        let tag_match = caps.get(0).map_or("", |m| m.as_str());
+        let tag_name = caps.get(1).map_or("", |m| m.as_str()).to_lowercase();
+
+        let src = match extract_html_attribute(tag_match, "src") {
+            Some(s) if !s.trim().is_empty() => s.trim(),
+            _ => continue,
+        };
+
+        let is_photo = matches!(tag_name.as_str(), "img" | "tg-photo");
+        let is_audio = matches!(tag_name.as_str(), "audio" | "tg-audio");
+        let is_video = matches!(tag_name.as_str(), "video" | "tg-video");
+        let is_doc = matches!(tag_name.as_str(), "tg-document" | "document");
+
+        let id = if let Some(stripped) = src.strip_prefix("tg://") {
+            let (scheme_type, query) = stripped.split_once('?').unwrap_or((stripped, ""));
+            let extracted_id = if let Some(id_val) = query.strip_prefix("id=") {
+                id_val.split('&').next().unwrap_or(id_val)
+            } else if let Some((_, val)) = query
+                .split('&')
+                .filter_map(|p| p.split_once('='))
+                .find(|(k, _)| *k == "id")
+            {
+                val
+            } else {
+                ""
+            };
+
+            if extracted_id.is_empty() {
+                return Err(ParserError::InvalidTag(format!(
+                    "Missing ID in tg:// scheme: '{src}'"
+                )));
+            }
+
+            if (is_photo && scheme_type != "photo")
+                || (is_audio && scheme_type != "audio")
+                || (is_video && scheme_type != "video")
+                || (is_doc && scheme_type != "document")
+            {
+                return Err(ParserError::InvalidTag(format!(
+                    "Tag <{tag_name}> cannot reference scheme 'tg://{scheme_type}'"
+                )));
+            }
+
+            InputRichMessageMedia::validate_id(extracted_id).map_err(ParserError::MediaValidation)?;
+            extracted_id.to_string()
+        } else if let Some(key) = src.strip_prefix("attach://") {
+            let extracted_id = extract_html_attribute(tag_match, "id").unwrap_or(key);
+            InputRichMessageMedia::validate_id(extracted_id).map_err(ParserError::MediaValidation)?;
+            extracted_id.to_string()
+        } else {
+            if let Some(explicit_id) = extract_html_attribute(tag_match, "id") {
+                InputRichMessageMedia::validate_id(explicit_id).map_err(ParserError::MediaValidation)?;
+                explicit_id.to_string()
+            } else {
+                let prefix = if is_photo {
+                    "photo"
+                } else if is_audio {
+                    "audio"
+                } else if is_video {
+                    "video"
+                } else {
+                    "doc"
+                };
+                let generated = format!("{prefix}_{counter}");
+                counter += 1;
+                generated
+            }
+        };
+
+        let caption = extract_html_attribute(tag_match, "caption")
+            .or_else(|| {
+                if is_photo {
+                    extract_html_attribute(tag_match, "alt")
+                } else {
+                    None
+                }
+            })
+            .map(str::to_string);
+
+        let input_media = if is_photo {
+            InputMedia::photo(src, caption, None)
+        } else if is_audio {
+            let title = extract_html_attribute(tag_match, "title").map(str::to_string);
+            let performer = extract_html_attribute(tag_match, "performer").map(str::to_string);
+            InputMedia::audio(src, caption, None, title, performer)
+        } else if is_video {
+            InputMedia::video(src, caption, None)
+        } else if is_doc {
+            InputMedia::document(src, caption, None)
+        } else {
+            continue;
+        };
+
+        let media_item = InputRichMessageMedia {
+            id: id.clone(),
+            media: input_media,
+        };
+        media_item.validate().map_err(ParserError::MediaValidation)?;
+
+        if seen_ids.insert(id.clone()) {
+            if media_items.len() >= 50 {
+                return Err(ParserError::MediaValidation(
+                    "Rich Message media count exceeds Telegram limit of 50".to_string(),
+                ));
+            }
+            media_items.push(media_item);
+        } else if let Some(existing) = media_items.iter().find(|m| m.id == id) {
+            if existing.media.media_url() != src {
+                return Err(ParserError::MediaValidation(format!(
+                    "Duplicate media ID found with conflicting URL: '{id}'"
+                )));
+            }
+        }
+    }
+
+    Ok(media_items)
+}
+
+/// Normalizes HTML blocks by ensuring block-level tags reside on separate lines.
+#[allow(dead_code)]
+fn normalize_html_blocks(html: &str) -> String {
+    static RE_NORM_BLOCKS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?is)(</?(?:p|h[1-6]|blockquote|pre|table|hr|tg-collage|tg-slideshow|tg-map|audio|tg-audio|img|tg-photo|video|tg-video|tg-document|document)(?:\s+[^>]*)?/?>)"#)
+            .expect("valid static regex")
+    });
+
+    let mut result = String::with_capacity(html.len() + 128);
+    let mut last_end = 0;
+
+    for mat in RE_NORM_BLOCKS.find_iter(html) {
+        let text_before = &html[last_end..mat.start()];
+        let tag = mat.as_str().trim();
+
+        if !text_before.trim().is_empty() {
+            result.push_str(text_before);
+        }
+
+        let is_closing = tag.starts_with("</");
+        let is_self_closing = tag.ends_with("/>")
+            || tag.eq_ignore_ascii_case("<hr>")
+            || tag.to_lowercase().starts_with("<hr ")
+            || tag.to_lowercase().starts_with("<img")
+            || tag.to_lowercase().starts_with("<tg-photo")
+            || tag.to_lowercase().starts_with("<tg-map")
+            || (tag.to_lowercase().starts_with("<audio") && !html.to_lowercase().contains("</audio>"))
+            || (tag.to_lowercase().starts_with("<tg-audio") && !html.to_lowercase().contains("</tg-audio>"));
+
+        if is_closing {
+            result.push_str(tag);
+            result.push_str("\n\n");
+        } else if is_self_closing {
+            if !result.is_empty() && !result.ends_with('\n') {
+                result.push('\n');
+            }
+            result.push_str(tag);
+            result.push_str("\n\n");
+        } else {
+            // Opening block tag
+            if !result.is_empty() && !result.ends_with('\n') {
+                result.push('\n');
+            }
+            result.push_str(tag);
+        }
+
+        last_end = mat.end();
+    }
+
+    let remaining = &html[last_end..];
+    if !remaining.trim().is_empty() {
+        result.push_str(remaining);
+    }
+
+    result
+}
+
+/// Helper function to parse HTML rich message representation with media resolution.
+/// Parses `<img>`, `<audio>`, `<tg-collage>`, `<tg-slideshow>`, `<tg-map>` as well as
+/// HTML typography tags into `Vec<RichBlock>` and resolves/extracts `Vec<InputRichMessageMedia>`.
+#[allow(dead_code)]
+pub fn parse_rich_html(
+    html: &str,
+) -> Result<(Vec<RichBlock>, Vec<InputRichMessageMedia>), ParserError> {
+    let trimmed = html.trim();
+    if trimmed.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    if trimmed.chars().count() > 32_768 {
+        return Err(ParserError::MalformedHtml(
+            "Rich Message HTML text exceeds Telegram limit of 32768 characters".to_string(),
+        ));
+    }
+
+    // 1. Validate container integrity and geographic map parameters
+    validate_rich_html_containers(trimmed)?;
+
+    // 2. Extract and resolve media objects
+    let media = extract_rich_html_media(trimmed)?;
+
+    // 3. Normalize HTML blocks and parse to RichBlocks
+    let normalized = normalize_html_blocks(trimmed);
+    let mut blocks = parse_markdown_to_rich_blocks(&normalized);
+
+    // Normalize voice_note wire discriminators
+    for block in &mut blocks {
+        if let RichBlock::VoiceNote { voice_note, .. } = block {
+            if let Some(object) = voice_note.as_object_mut() {
+                object.insert("type".to_string(), Value::String("voice_note".to_string()));
+            }
+        }
+    }
+
+    if blocks.len() > 500 {
+        return Err(ParserError::MalformedHtml(format!(
+            "Rich Message contains {} blocks; Telegram limit is 500",
+            blocks.len()
+        )));
+    }
+
+    Ok((blocks, media))
+}
+
+/// Resolves media references in `blocks` against `media_items`, replacing `tg://` scheme URIs
+/// with their actual target media URLs.
+#[allow(dead_code)]
+pub fn resolve_media_references(
+    blocks: &mut [RichBlock],
+    media_items: &[InputRichMessageMedia],
+) {
+    let map: std::collections::HashMap<&str, &str> = media_items
+        .iter()
+        .map(|item| (item.id.as_str(), item.media.media_url()))
+        .collect();
+
+    for block in blocks {
+        block.replace_media_urls(&|url| {
+            for prefix in &[
+                "tg://photo?id=",
+                "tg://audio?id=",
+                "tg://video?id=",
+                "tg://document?id=",
+            ] {
+                if let Some(id) = url.strip_prefix(prefix) {
+                    if let Some(target_url) = map.get(id) {
+                        return Some(target_url.to_string());
+                    }
+                }
+            }
+            None
+        });
+    }
 }
 
 #[cfg(test)]
@@ -3694,5 +4261,234 @@ Berikut adalah uraian I'rab:
             para_json.contains('\u{200E}'),
             "Mixed paragraph starting with Arabic must have LRM: {para_json}"
         );
+    }
+
+    // =========================================================================
+    // Milestone M2: Rich Tag HTML Parser & Media Resolution Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_rich_html_single_img_with_tg_scheme() {
+        let html = r#"<img src="tg://photo?id=pic_summit" alt="Puncak Rinjani"/>"#;
+        let res = parse_rich_html(html);
+        assert!(res.is_ok(), "Expected Ok, got: {res:?}");
+        let (blocks, media) = res.expect("valid result");
+
+        assert_eq!(blocks.len(), 1);
+        let Some(RichBlock::Photo { photo, caption }) = blocks.first() else {
+            panic!("Expected RichBlock::Photo, got: {:?}", blocks.first());
+        };
+        assert_eq!(photo["type"], "photo");
+        assert_eq!(photo["media"], "tg://photo?id=pic_summit");
+        assert_eq!(
+            caption.as_ref().map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
+            Some("\"Puncak Rinjani\"".to_string())
+        );
+
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].id, "pic_summit");
+        assert_eq!(media[0].media.media_url(), "tg://photo?id=pic_summit");
+        assert_eq!(media[0].media.caption_text(), Some("Puncak Rinjani"));
+    }
+
+    #[test]
+    fn test_parse_rich_html_single_img_with_direct_url() {
+        let html = r#"<img src="https://example.com/rinjani.jpg" caption="Puncak Matahari Terbit"/>"#;
+        let (blocks, media) = parse_rich_html(html).expect("valid direct url img");
+
+        assert_eq!(blocks.len(), 1);
+        let Some(RichBlock::Photo { photo, caption }) = blocks.first() else {
+            panic!("Expected RichBlock::Photo");
+        };
+        assert_eq!(photo["type"], "photo");
+        assert_eq!(photo["media"], "https://example.com/rinjani.jpg");
+        assert!(caption.is_some());
+
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].id, "photo_1");
+        assert_eq!(media[0].media.media_url(), "https://example.com/rinjani.jpg");
+        assert_eq!(media[0].media.caption_text(), Some("Puncak Matahari Terbit"));
+    }
+
+    #[test]
+    fn test_parse_rich_html_audio_tag_attributes() {
+        let html = r#"<audio src="tg://audio?id=aud1" title="Angin Sembalun" performer="Lombok Sounds" caption="Suara Alam"/>"#;
+        let (blocks, media) = parse_rich_html(html).expect("valid audio tag");
+
+        assert_eq!(blocks.len(), 1);
+        let Some(RichBlock::Audio { audio, caption }) = blocks.first() else {
+            panic!("Expected RichBlock::Audio");
+        };
+        assert_eq!(audio["type"], "audio");
+        assert_eq!(audio["media"], "tg://audio?id=aud1");
+        assert_eq!(audio["title"], "Angin Sembalun");
+        assert_eq!(audio["performer"], "Lombok Sounds");
+        assert_eq!(
+            caption.as_ref().map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
+            Some("\"Suara Alam\"".to_string())
+        );
+
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].id, "aud1");
+        assert_eq!(media[0].media.media_url(), "tg://audio?id=aud1");
+        if let InputMedia::Audio { title, performer, caption, .. } = &media[0].media {
+            assert_eq!(title.as_deref(), Some("Angin Sembalun"));
+            assert_eq!(performer.as_deref(), Some("Lombok Sounds"));
+            assert_eq!(caption.as_deref(), Some("Suara Alam"));
+        } else {
+            panic!("Expected InputMedia::Audio");
+        }
+    }
+
+    #[test]
+    fn test_parse_rich_html_collage_container() {
+        let html = r#"<tg-collage caption="Album Kawah"><img src="tg://photo?id=p1" alt="Danau"/><img src="tg://photo?id=p2" alt="Puncak"/></tg-collage>"#;
+        let (blocks, media) = parse_rich_html(html).expect("valid collage");
+
+        assert_eq!(blocks.len(), 1);
+        let Some(RichBlock::Collage { blocks: child_blocks, caption }) = blocks.first() else {
+            panic!("Expected RichBlock::Collage");
+        };
+        assert_eq!(child_blocks.len(), 2);
+        assert_eq!(child_blocks[0]["type"], "photo");
+        assert_eq!(child_blocks[0]["photo"]["media"], "tg://photo?id=p1");
+        assert_eq!(child_blocks[0]["photo"]["caption"], "Danau");
+        assert_eq!(child_blocks[1]["photo"]["media"], "tg://photo?id=p2");
+        assert_eq!(child_blocks[1]["photo"]["caption"], "Puncak");
+        assert_eq!(
+            caption.as_ref().map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
+            Some("\"Album Kawah\"".to_string())
+        );
+
+        assert_eq!(media.len(), 2);
+        assert_eq!(media[0].id, "p1");
+        assert_eq!(media[0].media.caption_text(), Some("Danau"));
+        assert_eq!(media[1].id, "p2");
+        assert_eq!(media[1].media.caption_text(), Some("Puncak"));
+    }
+
+    #[test]
+    fn test_parse_rich_html_slideshow_container() {
+        let html = r#"<tg-slideshow caption="Slideshow Pendakian"><img src="tg://photo?id=s1"/><img src="tg://photo?id=s2"/><img src="tg://photo?id=s3"/></tg-slideshow>"#;
+        let (blocks, media) = parse_rich_html(html).expect("valid slideshow");
+
+        assert_eq!(blocks.len(), 1);
+        let Some(RichBlock::Slideshow { blocks: child_blocks, caption }) = blocks.first() else {
+            panic!("Expected RichBlock::Slideshow");
+        };
+        assert_eq!(child_blocks.len(), 3);
+        assert!(caption.is_some());
+        assert_eq!(media.len(), 3);
+        assert_eq!(media[0].id, "s1");
+        assert_eq!(media[1].id, "s2");
+        assert_eq!(media[2].id, "s3");
+    }
+
+    #[test]
+    fn test_parse_rich_html_tg_map_valid_coordinates_and_zoom() {
+        let html = r#"<tg-map lat="-8.4113" lon="116.4573" zoom="13" title="Puncak Rinjani 3.726 mdpl"/>"#;
+        let (blocks, media) = parse_rich_html(html).expect("valid map tag");
+
+        assert_eq!(blocks.len(), 1);
+        let Some(RichBlock::Map { location, zoom, .. }) = blocks.first() else {
+            panic!("Expected RichBlock::Map");
+        };
+        assert_eq!(location.latitude, -8.4113);
+        assert_eq!(location.longitude, 116.4573);
+        assert_eq!(*zoom, Some(13));
+        assert!(media.is_empty(), "Map produces no media upload items");
+    }
+
+    #[test]
+    fn test_parse_rich_html_tg_map_rejects_out_of_bounds_and_non_finite() {
+        // Latitude out of bounds [-90, 90]
+        assert!(parse_rich_html(r#"<tg-map lat="91.0" lon="0.0"/>"#).is_err());
+        assert!(parse_rich_html(r#"<tg-map lat="-91.0" lon="0.0"/>"#).is_err());
+
+        // Longitude out of bounds [-180, 180]
+        assert!(parse_rich_html(r#"<tg-map lat="0.0" lon="181.0"/>"#).is_err());
+        assert!(parse_rich_html(r#"<tg-map lat="0.0" lon="-181.0"/>"#).is_err());
+
+        // Non-finite coordinates
+        assert!(parse_rich_html(r#"<tg-map lat="NaN" lon="0.0"/>"#).is_err());
+        assert!(parse_rich_html(r#"<tg-map lat="0.0" lon="Infinity"/>"#).is_err());
+
+        // Zoom out of bounds [1, 20]
+        assert!(parse_rich_html(r#"<tg-map lat="0.0" lon="0.0" zoom="0"/>"#).is_err());
+        assert!(parse_rich_html(r#"<tg-map lat="0.0" lon="0.0" zoom="21"/>"#).is_err());
+    }
+
+    #[test]
+    fn test_parse_rich_html_rejects_collage_with_audio_or_docs() {
+        let mixed = r#"<tg-collage><img src="tg://photo?id=p1"/><audio src="tg://audio?id=a1"/></tg-collage>"#;
+        assert!(parse_rich_html(mixed).is_err());
+
+        let mixed_doc = r#"<tg-collage><img src="tg://photo?id=p1"/><tg-document src="tg://document?id=d1"/></tg-collage>"#;
+        assert!(parse_rich_html(mixed_doc).is_err());
+    }
+
+    #[test]
+    fn test_parse_rich_html_media_deduplication() {
+        let html = r#"<p>Dua kali foto sama:</p><img src="tg://photo?id=pic1"/><img src="tg://photo?id=pic1"/>"#;
+        let (blocks, media) = parse_rich_html(html).expect("dedup html");
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(media.len(), 1, "Duplicate ID must be deduplicated in media array");
+        assert_eq!(media[0].id, "pic1");
+    }
+
+    #[test]
+    fn test_parse_rich_html_conflicting_duplicate_id_rejected() {
+        let html = r#"<img src="tg://photo?id=pic1"/><img id="pic1" src="https://example.com/different.jpg"/>"#;
+        assert!(parse_rich_html(html).is_err());
+    }
+
+    #[test]
+    fn test_parse_rich_html_composite_single_unified_bubble() {
+        let commentary_html = r#"<h3>Eksplorasi Gunung Rinjani</h3><p>Gunung Rinjani di Pulau Lombok adalah gunung berapi kedua tertinggi di Indonesia (3.726 mdpl) yang terkenal dengan kaldera megah dan danau kawah Segara Anak.</p><tg-collage caption="Pemandangan Kaldera & Segara Anak"><img src="tg://photo?id=pic_rinjani_1"/><img src="tg://photo?id=pic_rinjani_2"/></tg-collage><p>Berikut lokasi geografis puncak Rinjani pada peta satelit:</p><tg-map lat="-8.4113" lon="116.4573" zoom="13" title="Puncak Rinjani 3.726 mdpl"/>"#;
+
+        let (blocks, media) = parse_rich_html(commentary_html).expect("rinjani composite rich html");
+
+        assert_eq!(blocks.len(), 5);
+        assert!(matches!(blocks[0], RichBlock::SectionHeading { level: 3, .. }));
+        assert!(matches!(blocks[1], RichBlock::Paragraph { .. }));
+        assert!(matches!(blocks[2], RichBlock::Collage { .. }));
+        assert!(matches!(blocks[3], RichBlock::Paragraph { .. }));
+        assert!(matches!(blocks[4], RichBlock::Map { .. }));
+
+        assert_eq!(media.len(), 2);
+        assert_eq!(media[0].id, "pic_rinjani_1");
+        assert_eq!(media[1].id, "pic_rinjani_2");
+    }
+
+    #[test]
+    fn test_resolve_media_references() {
+        let html = r#"<img src="tg://photo?id=pic1" alt="Rinjani"/>"#;
+        let (mut blocks, _media) = parse_rich_html(html).expect("parse rich html");
+
+        // External resolution: media item target is remote URL
+        let resolved_media = vec![InputRichMessageMedia {
+            id: "pic1".to_string(),
+            media: InputMedia::photo("https://example.com/resolved_rinjani.jpg", None, None),
+        }];
+
+        resolve_media_references(&mut blocks, &resolved_media);
+
+        let Some(RichBlock::Photo { photo, .. }) = blocks.first() else {
+            panic!("Expected RichBlock::Photo");
+        };
+        assert_eq!(photo["media"], "https://example.com/resolved_rinjani.jpg");
+    }
+
+    #[test]
+    fn test_parse_rich_html_container_degradation() {
+        let collage_one = r#"<tg-collage><img src="tg://photo?id=single1"/></tg-collage>"#;
+        let (blocks, _) = parse_rich_html(collage_one).expect("degrade collage 1");
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], RichBlock::Photo { .. }), "Collage with 1 item degrades to Photo");
+
+        let slideshow_one = r#"<tg-slideshow><img src="tg://photo?id=single2"/></tg-slideshow>"#;
+        let (blocks, _) = parse_rich_html(slideshow_one).expect("degrade slideshow 1");
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], RichBlock::Photo { .. }), "Slideshow with 1 item degrades to Photo");
     }
 }
