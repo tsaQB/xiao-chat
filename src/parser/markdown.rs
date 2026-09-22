@@ -1115,8 +1115,8 @@ fn try_parse_html_media_tag(tag: &str) -> Option<RichBlock> {
     }
 
     if s.starts_with("<tg-video") {
-        let cap_attr = extract_html_attribute(s, "caption")
-            .or_else(|| extract_html_attribute(s, "title"));
+        let cap_attr =
+            extract_html_attribute(s, "caption").or_else(|| extract_html_attribute(s, "title"));
         let caption_text = cap_attr.or(inner_text).unwrap_or("");
         let caption =
             (!caption_text.is_empty()).then(|| RichBlockCaption::new(parse_inline(caption_text)));
@@ -1292,16 +1292,18 @@ fn try_parse_container_media_block(
             {
                 let lower = clean_url.to_lowercase();
                 if lower.ends_with(".mp4") || lower.ends_with(".webm") || lower.ends_with(".mov") {
-                    sub_blocks
-                        .push(json!({"type": "video", "video": {"type": "video", "media": clean_url}}));
+                    sub_blocks.push(
+                        json!({"type": "video", "video": {"type": "video", "media": clean_url}}),
+                    );
                 } else if !lower.ends_with(".html")
                     && !lower.ends_with(".htm")
                     && !is_streaming_web_video(clean_url)
                     && !is_streaming_web_audio(clean_url)
                     && !is_unsupported_image_format(clean_url)
                 {
-                    sub_blocks
-                        .push(json!({"type": "photo", "photo": {"type": "photo", "media": clean_url}}));
+                    sub_blocks.push(
+                        json!({"type": "photo", "photo": {"type": "photo", "media": clean_url}}),
+                    );
                 }
             }
         }
@@ -2213,9 +2215,8 @@ static RE_BLOCK_HEADING: LazyLock<Regex> =
 static RE_HTML_HEADING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)^<h([1-6])(?:\s+[^>]*)?>(.*?)</h[1-6]>$"#).expect("valid static regex")
 });
-static RE_HTML_HEADING_START: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?is)^<h([1-6])(?:\s+[^>]*)?>"#).expect("valid static regex")
-});
+static RE_HTML_HEADING_START: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?is)^<h([1-6])(?:\s+[^>]*)?>"#).expect("valid static regex"));
 static RE_BLOCK_DIVIDER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(\-{3,}|\*{3,}|_{3,}|─{3,}|—{2,})$").expect("valid static regex")
 });
@@ -2929,7 +2930,8 @@ pub fn build_full_rich_message(answer_text: &str, footer_text: Option<&str>) -> 
 #[allow(dead_code)]
 fn validate_rich_html_containers(html: &str) -> Result<(), ParserError> {
     static RE_COLLAGE_CONTAINER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?is)<tg-collage(?:\s+[^>]*)?>(.*?)</tg-collage>"#).expect("valid static regex")
+        Regex::new(r#"(?is)<tg-collage(?:\s+[^>]*)?>(.*?)</tg-collage>"#)
+            .expect("valid static regex")
     });
 
     for caps in RE_COLLAGE_CONTAINER.captures_iter(html) {
@@ -3052,15 +3054,18 @@ pub fn extract_rich_html_media(html: &str) -> Result<Vec<InputRichMessageMedia>,
                 )));
             }
 
-            InputRichMessageMedia::validate_id(extracted_id).map_err(ParserError::MediaValidation)?;
+            InputRichMessageMedia::validate_id(extracted_id)
+                .map_err(ParserError::MediaValidation)?;
             extracted_id.to_string()
         } else if let Some(key) = src.strip_prefix("attach://") {
             let extracted_id = extract_html_attribute(tag_match, "id").unwrap_or(key);
-            InputRichMessageMedia::validate_id(extracted_id).map_err(ParserError::MediaValidation)?;
+            InputRichMessageMedia::validate_id(extracted_id)
+                .map_err(ParserError::MediaValidation)?;
             extracted_id.to_string()
         } else {
             if let Some(explicit_id) = extract_html_attribute(tag_match, "id") {
-                InputRichMessageMedia::validate_id(explicit_id).map_err(ParserError::MediaValidation)?;
+                InputRichMessageMedia::validate_id(explicit_id)
+                    .map_err(ParserError::MediaValidation)?;
                 explicit_id.to_string()
             } else {
                 let prefix = if is_photo {
@@ -3106,7 +3111,9 @@ pub fn extract_rich_html_media(html: &str) -> Result<Vec<InputRichMessageMedia>,
             id: id.clone(),
             media: input_media,
         };
-        media_item.validate().map_err(ParserError::MediaValidation)?;
+        media_item
+            .validate()
+            .map_err(ParserError::MediaValidation)?;
 
         if seen_ids.insert(id.clone()) {
             if media_items.len() >= 50 {
@@ -3153,8 +3160,10 @@ fn normalize_html_blocks(html: &str) -> String {
             || tag.to_lowercase().starts_with("<img")
             || tag.to_lowercase().starts_with("<tg-photo")
             || tag.to_lowercase().starts_with("<tg-map")
-            || (tag.to_lowercase().starts_with("<audio") && !html.to_lowercase().contains("</audio>"))
-            || (tag.to_lowercase().starts_with("<tg-audio") && !html.to_lowercase().contains("</tg-audio>"));
+            || (tag.to_lowercase().starts_with("<audio")
+                && !html.to_lowercase().contains("</audio>"))
+            || (tag.to_lowercase().starts_with("<tg-audio")
+                && !html.to_lowercase().contains("</tg-audio>"));
 
         if is_closing {
             result.push_str(tag);
@@ -3234,10 +3243,7 @@ pub fn parse_rich_html(
 /// Resolves media references in `blocks` against `media_items`, replacing `tg://` scheme URIs
 /// with their actual target media URLs.
 #[allow(dead_code)]
-pub fn resolve_media_references(
-    blocks: &mut [RichBlock],
-    media_items: &[InputRichMessageMedia],
-) {
+pub fn resolve_media_references(blocks: &mut [RichBlock], media_items: &[InputRichMessageMedia]) {
     let map: std::collections::HashMap<&str, &str> = media_items
         .iter()
         .map(|item| (item.id.as_str(), item.media.media_url()))
@@ -4281,7 +4287,9 @@ Berikut adalah uraian I'rab:
         assert_eq!(photo["type"], "photo");
         assert_eq!(photo["media"], "tg://photo?id=pic_summit");
         assert_eq!(
-            caption.as_ref().map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
+            caption
+                .as_ref()
+                .map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
             Some("\"Puncak Rinjani\"".to_string())
         );
 
@@ -4293,7 +4301,8 @@ Berikut adalah uraian I'rab:
 
     #[test]
     fn test_parse_rich_html_single_img_with_direct_url() {
-        let html = r#"<img src="https://example.com/rinjani.jpg" caption="Puncak Matahari Terbit"/>"#;
+        let html =
+            r#"<img src="https://example.com/rinjani.jpg" caption="Puncak Matahari Terbit"/>"#;
         let (blocks, media) = parse_rich_html(html).expect("valid direct url img");
 
         assert_eq!(blocks.len(), 1);
@@ -4306,8 +4315,14 @@ Berikut adalah uraian I'rab:
 
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].id, "photo_1");
-        assert_eq!(media[0].media.media_url(), "https://example.com/rinjani.jpg");
-        assert_eq!(media[0].media.caption_text(), Some("Puncak Matahari Terbit"));
+        assert_eq!(
+            media[0].media.media_url(),
+            "https://example.com/rinjani.jpg"
+        );
+        assert_eq!(
+            media[0].media.caption_text(),
+            Some("Puncak Matahari Terbit")
+        );
     }
 
     #[test]
@@ -4324,14 +4339,22 @@ Berikut adalah uraian I'rab:
         assert_eq!(audio["title"], "Angin Sembalun");
         assert_eq!(audio["performer"], "Lombok Sounds");
         assert_eq!(
-            caption.as_ref().map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
+            caption
+                .as_ref()
+                .map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
             Some("\"Suara Alam\"".to_string())
         );
 
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].id, "aud1");
         assert_eq!(media[0].media.media_url(), "tg://audio?id=aud1");
-        if let InputMedia::Audio { title, performer, caption, .. } = &media[0].media {
+        if let InputMedia::Audio {
+            title,
+            performer,
+            caption,
+            ..
+        } = &media[0].media
+        {
             assert_eq!(title.as_deref(), Some("Angin Sembalun"));
             assert_eq!(performer.as_deref(), Some("Lombok Sounds"));
             assert_eq!(caption.as_deref(), Some("Suara Alam"));
@@ -4346,7 +4369,11 @@ Berikut adalah uraian I'rab:
         let (blocks, media) = parse_rich_html(html).expect("valid collage");
 
         assert_eq!(blocks.len(), 1);
-        let Some(RichBlock::Collage { blocks: child_blocks, caption }) = blocks.first() else {
+        let Some(RichBlock::Collage {
+            blocks: child_blocks,
+            caption,
+        }) = blocks.first()
+        else {
             panic!("Expected RichBlock::Collage");
         };
         assert_eq!(child_blocks.len(), 2);
@@ -4356,7 +4383,9 @@ Berikut adalah uraian I'rab:
         assert_eq!(child_blocks[1]["photo"]["media"], "tg://photo?id=p2");
         assert_eq!(child_blocks[1]["photo"]["caption"], "Puncak");
         assert_eq!(
-            caption.as_ref().map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
+            caption
+                .as_ref()
+                .map(|c| serde_json::to_string(&c.text).unwrap_or_default()),
             Some("\"Album Kawah\"".to_string())
         );
 
@@ -4373,7 +4402,11 @@ Berikut adalah uraian I'rab:
         let (blocks, media) = parse_rich_html(html).expect("valid slideshow");
 
         assert_eq!(blocks.len(), 1);
-        let Some(RichBlock::Slideshow { blocks: child_blocks, caption }) = blocks.first() else {
+        let Some(RichBlock::Slideshow {
+            blocks: child_blocks,
+            caption,
+        }) = blocks.first()
+        else {
             panic!("Expected RichBlock::Slideshow");
         };
         assert_eq!(child_blocks.len(), 3);
@@ -4386,7 +4419,8 @@ Berikut adalah uraian I'rab:
 
     #[test]
     fn test_parse_rich_html_tg_map_valid_coordinates_and_zoom() {
-        let html = r#"<tg-map lat="-8.4113" lon="116.4573" zoom="13" title="Puncak Rinjani 3.726 mdpl"/>"#;
+        let html =
+            r#"<tg-map lat="-8.4113" lon="116.4573" zoom="13" title="Puncak Rinjani 3.726 mdpl"/>"#;
         let (blocks, media) = parse_rich_html(html).expect("valid map tag");
 
         assert_eq!(blocks.len(), 1);
@@ -4432,7 +4466,11 @@ Berikut adalah uraian I'rab:
         let html = r#"<p>Dua kali foto sama:</p><img src="tg://photo?id=pic1"/><img src="tg://photo?id=pic1"/>"#;
         let (blocks, media) = parse_rich_html(html).expect("dedup html");
         assert_eq!(blocks.len(), 3);
-        assert_eq!(media.len(), 1, "Duplicate ID must be deduplicated in media array");
+        assert_eq!(
+            media.len(),
+            1,
+            "Duplicate ID must be deduplicated in media array"
+        );
         assert_eq!(media[0].id, "pic1");
     }
 
@@ -4446,10 +4484,14 @@ Berikut adalah uraian I'rab:
     fn test_parse_rich_html_composite_single_unified_bubble() {
         let commentary_html = r#"<h3>Eksplorasi Gunung Rinjani</h3><p>Gunung Rinjani di Pulau Lombok adalah gunung berapi kedua tertinggi di Indonesia (3.726 mdpl) yang terkenal dengan kaldera megah dan danau kawah Segara Anak.</p><tg-collage caption="Pemandangan Kaldera & Segara Anak"><img src="tg://photo?id=pic_rinjani_1"/><img src="tg://photo?id=pic_rinjani_2"/></tg-collage><p>Berikut lokasi geografis puncak Rinjani pada peta satelit:</p><tg-map lat="-8.4113" lon="116.4573" zoom="13" title="Puncak Rinjani 3.726 mdpl"/>"#;
 
-        let (blocks, media) = parse_rich_html(commentary_html).expect("rinjani composite rich html");
+        let (blocks, media) =
+            parse_rich_html(commentary_html).expect("rinjani composite rich html");
 
         assert_eq!(blocks.len(), 5);
-        assert!(matches!(blocks[0], RichBlock::SectionHeading { level: 3, .. }));
+        assert!(matches!(
+            blocks[0],
+            RichBlock::SectionHeading { level: 3, .. }
+        ));
         assert!(matches!(blocks[1], RichBlock::Paragraph { .. }));
         assert!(matches!(blocks[2], RichBlock::Collage { .. }));
         assert!(matches!(blocks[3], RichBlock::Paragraph { .. }));
@@ -4484,11 +4526,17 @@ Berikut adalah uraian I'rab:
         let collage_one = r#"<tg-collage><img src="tg://photo?id=single1"/></tg-collage>"#;
         let (blocks, _) = parse_rich_html(collage_one).expect("degrade collage 1");
         assert_eq!(blocks.len(), 1);
-        assert!(matches!(blocks[0], RichBlock::Photo { .. }), "Collage with 1 item degrades to Photo");
+        assert!(
+            matches!(blocks[0], RichBlock::Photo { .. }),
+            "Collage with 1 item degrades to Photo"
+        );
 
         let slideshow_one = r#"<tg-slideshow><img src="tg://photo?id=single2"/></tg-slideshow>"#;
         let (blocks, _) = parse_rich_html(slideshow_one).expect("degrade slideshow 1");
         assert_eq!(blocks.len(), 1);
-        assert!(matches!(blocks[0], RichBlock::Photo { .. }), "Slideshow with 1 item degrades to Photo");
+        assert!(
+            matches!(blocks[0], RichBlock::Photo { .. }),
+            "Slideshow with 1 item degrades to Photo"
+        );
     }
 }

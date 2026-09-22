@@ -92,7 +92,7 @@ static RE_CONVERSATIONAL_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid static regex")
 });
 static RE_CONVERSATIONAL_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\s*[,.]?\s*(?:please|ya|dong|tolong|kan)\s*$").expect("valid static regex")
+    Regex::new(r"(?i)\s*[,.]?\s*\b(?:please|ya|dong|tolong|kan)\b\s*$").expect("valid static regex")
 });
 static RE_ID_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -304,8 +304,12 @@ pub fn sanitize_and_validate_raster_url(url_str: &str) -> Option<String> {
         || path.ends_with(".webp");
 
     let is_unsplash = host_lower == "images.unsplash.com" || host_lower.ends_with(".unsplash.com");
-    let is_wikimedia = (host_lower.contains("wikimedia.org") || host_lower.contains("wikipedia.org"))
-        && (path.contains(".jpg") || path.contains(".jpeg") || path.contains(".png") || path.contains(".webp"));
+    let is_wikimedia = (host_lower.contains("wikimedia.org")
+        || host_lower.contains("wikipedia.org"))
+        && (path.contains(".jpg")
+            || path.contains(".jpeg")
+            || path.contains(".png")
+            || path.contains(".webp"));
 
     if !has_raster_extension && format_hint.is_none() && !is_unsplash && !is_wikimedia {
         return None;
@@ -724,7 +728,10 @@ pub async fn execute_web_search(query: &str) -> String {
                 if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
                     if let Ok(wiki_res) = search_wikipedia(&client, q).await {
                         if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
-                            let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                            let clean_res = res
+                                .replace(&format_no_images_guidance(q), "")
+                                .trim()
+                                .to_string();
                             res = clean_res;
                             res.push_str("\n\n---\n\n");
                             res.push_str(&wiki_res);
@@ -745,7 +752,10 @@ pub async fn execute_web_search(query: &str) -> String {
                 if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
                     if let Ok(wiki_res) = search_wikipedia(&client, q).await {
                         if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
-                            let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                            let clean_res = res
+                                .replace(&format_no_images_guidance(q), "")
+                                .trim()
+                                .to_string();
                             res = clean_res;
                             res.push_str("\n\n---\n\n");
                             res.push_str(&wiki_res);
@@ -766,7 +776,10 @@ pub async fn execute_web_search(query: &str) -> String {
                 if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
                     if let Ok(wiki_res) = search_wikipedia(&client, q).await {
                         if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
-                            let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                            let clean_res = res
+                                .replace(&format_no_images_guidance(q), "")
+                                .trim()
+                                .to_string();
                             res = clean_res;
                             res.push_str("\n\n---\n\n");
                             res.push_str(&wiki_res);
@@ -791,7 +804,10 @@ pub async fn execute_web_search(query: &str) -> String {
             if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
                 if let Ok(wiki_res) = search_wikipedia(&client, q).await {
                     if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
-                        let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                        let clean_res = res
+                            .replace(&format_no_images_guidance(q), "")
+                            .trim()
+                            .to_string();
                         res = clean_res;
                         res.push_str("\n\n---\n\n");
                         res.push_str(&wiki_res);
@@ -816,7 +832,10 @@ pub async fn execute_web_search(query: &str) -> String {
             if is_visual && !res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
                 if let Ok(wiki_res) = search_wikipedia(&client, q).await {
                     if wiki_res.contains("🖼️ **URL Foto/Gambar Raster Terverifikasi") {
-                        let clean_res = res.replace(&format_no_images_guidance(q), "").trim().to_string();
+                        let clean_res = res
+                            .replace(&format_no_images_guidance(q), "")
+                            .trim()
+                            .to_string();
                         res = clean_res;
                         res.push_str("\n\n---\n\n");
                         res.push_str(&wiki_res);
@@ -1242,13 +1261,21 @@ pub(crate) async fn search_exa_mcp(
 
 fn unwrap_ddg_url(raw_url: &str) -> String {
     if let Ok(parsed) = Url::parse(raw_url) {
-        if let Some(uddg) = parsed.query_pairs().find(|(k, _)| k == "uddg").map(|(_, v)| v.to_string()) {
+        if let Some(uddg) = parsed
+            .query_pairs()
+            .find(|(k, _)| k == "uddg")
+            .map(|(_, v)| v.to_string())
+        {
             if let Ok(decoded) = urlencoding::decode(&uddg) {
                 return decoded.to_string();
             }
         }
     } else if let Ok(parsed) = Url::parse(&format!("https://duckduckgo.com{raw_url}")) {
-        if let Some(uddg) = parsed.query_pairs().find(|(k, _)| k == "uddg").map(|(_, v)| v.to_string()) {
+        if let Some(uddg) = parsed
+            .query_pairs()
+            .find(|(k, _)| k == "uddg")
+            .map(|(_, v)| v.to_string())
+        {
             if let Ok(decoded) = urlencoding::decode(&uddg) {
                 return decoded.to_string();
             }
@@ -1316,7 +1343,8 @@ async fn search_duckduckgo(client: &reqwest::Client, query: &str) -> Result<Stri
         ));
     }
 
-    let mut extracted_images = extract_raster_images_from_html(&html, Some("https://duckduckgo.com"));
+    let mut extracted_images =
+        extract_raster_images_from_html(&html, Some("https://duckduckgo.com"));
 
     // If visual query and no images were directly in DDG HTML, scrape top result URLs
     if is_visual && extracted_images.is_empty() {
@@ -1465,16 +1493,14 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
     let core_terms = extract_core_search_terms(q);
     let is_visual = is_visual_search_query(q);
 
-    let search_attempts = if is_visual
-        && !core_terms.is_empty()
-        && core_terms.to_lowercase() != q.to_lowercase()
-    {
-        vec![core_terms.as_str(), q]
-    } else if !core_terms.is_empty() && core_terms.to_lowercase() != q.to_lowercase() {
-        vec![q, core_terms.as_str()]
-    } else {
-        vec![q]
-    };
+    let search_attempts =
+        if is_visual && !core_terms.is_empty() && core_terms.to_lowercase() != q.to_lowercase() {
+            vec![core_terms.as_str(), q]
+        } else if !core_terms.is_empty() && core_terms.to_lowercase() != q.to_lowercase() {
+            vec![q, core_terms.as_str()]
+        } else {
+            vec![q]
+        };
 
     for lang in &langs {
         for attempt in &search_attempts {
@@ -1534,7 +1560,10 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
             let mut verified_images = Vec::new();
 
             for (i, page) in page_list.iter().enumerate().take(5) {
-                let title = page.get("title").and_then(Value::as_str).unwrap_or("Tanpa Judul");
+                let title = page
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Tanpa Judul");
                 let extract = page.get("extract").and_then(Value::as_str).unwrap_or("");
                 let clean_extract = extract.trim();
                 let page_url = format!(
@@ -2799,11 +2828,21 @@ mod tests {
 
     #[test]
     fn test_is_valid_raster_image_url_accepts_valid_raster_extensions() {
-        assert!(is_valid_raster_image_url("https://example.com/photos/mountain.jpg"));
-        assert!(is_valid_raster_image_url("https://example.com/photos/mountain.jpeg"));
-        assert!(is_valid_raster_image_url("https://example.com/photos/mountain.png"));
-        assert!(is_valid_raster_image_url("https://example.com/photos/mountain.webp"));
-        assert!(is_valid_raster_image_url("http://example.com/photos/mountain.JPG"));
+        assert!(is_valid_raster_image_url(
+            "https://example.com/photos/mountain.jpg"
+        ));
+        assert!(is_valid_raster_image_url(
+            "https://example.com/photos/mountain.jpeg"
+        ));
+        assert!(is_valid_raster_image_url(
+            "https://example.com/photos/mountain.png"
+        ));
+        assert!(is_valid_raster_image_url(
+            "https://example.com/photos/mountain.webp"
+        ));
+        assert!(is_valid_raster_image_url(
+            "http://example.com/photos/mountain.JPG"
+        ));
 
         assert!(is_valid_raster_image_url(
             "https://upload.wikimedia.org/wikipedia/commons/4/4c/KAGAGAHAN_RIJANI.jpg"
@@ -2819,23 +2858,33 @@ mod tests {
             "https://images.unsplash.com/photo-1546527868-ccb7ee7dfa6a?fm=jpg&w=1080"
         ));
 
-        assert!(is_valid_raster_image_url("//cdn.example.com/images/cat.png"));
-        assert!(is_valid_raster_image_url("https://example.com/fetch-image?id=123&format=webp"));
+        assert!(is_valid_raster_image_url(
+            "//cdn.example.com/images/cat.png"
+        ));
+        assert!(is_valid_raster_image_url(
+            "https://example.com/fetch-image?id=123&format=webp"
+        ));
     }
 
     #[test]
     fn test_is_valid_raster_image_url_rejects_svg_gif_and_data_urls() {
         assert!(!is_valid_raster_image_url("https://example.com/logo.svg"));
-        assert!(!is_valid_raster_image_url("https://upload.wikimedia.org/wikipedia/en/4/4a/Commons-logo.svg"));
+        assert!(!is_valid_raster_image_url(
+            "https://upload.wikimedia.org/wikipedia/en/4/4a/Commons-logo.svg"
+        ));
 
-        assert!(!is_valid_raster_image_url("https://example.com/spinner.gif"));
+        assert!(!is_valid_raster_image_url(
+            "https://example.com/spinner.gif"
+        ));
         assert!(!is_valid_raster_image_url("https://example.com/icon.ico"));
 
         assert!(!is_valid_raster_image_url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="));
 
         assert!(!is_valid_raster_image_url("javascript:alert(1)"));
         assert!(!is_valid_raster_image_url("file:///etc/passwd"));
-        assert!(!is_valid_raster_image_url("blob:https://example.com/1234-5678"));
+        assert!(!is_valid_raster_image_url(
+            "blob:https://example.com/1234-5678"
+        ));
 
         assert!(!is_valid_raster_image_url(""));
         assert!(!is_valid_raster_image_url("   "));
@@ -2843,22 +2892,40 @@ mod tests {
 
     #[test]
     fn test_is_valid_raster_image_url_rejects_tracking_and_placeholders() {
-        assert!(!is_valid_raster_image_url("https://duckduckgo.com/t/tqadb?5540565&s=lite"));
-        assert!(!is_valid_raster_image_url("//duckduckgo.com/t/tqadb?5540565&s=lite"));
+        assert!(!is_valid_raster_image_url(
+            "https://duckduckgo.com/t/tqadb?5540565&s=lite"
+        ));
+        assert!(!is_valid_raster_image_url(
+            "//duckduckgo.com/t/tqadb?5540565&s=lite"
+        ));
 
-        assert!(!is_valid_raster_image_url("https://example.com/tracking/pixel.gif"));
+        assert!(!is_valid_raster_image_url(
+            "https://example.com/tracking/pixel.gif"
+        ));
         assert!(!is_valid_raster_image_url("https://example.com/1x1.gif"));
         assert!(!is_valid_raster_image_url("https://example.com/spacer.gif"));
-        assert!(!is_valid_raster_image_url("https://google-analytics.com/collect.jpg"));
+        assert!(!is_valid_raster_image_url(
+            "https://google-analytics.com/collect.jpg"
+        ));
 
-        assert!(!is_valid_raster_image_url("https://via.placeholder.com/300.jpg"));
-        assert!(!is_valid_raster_image_url("https://dummyimage.com/600x400.png"));
-        assert!(!is_valid_raster_image_url("https://placekitten.com/200/300.jpg"));
+        assert!(!is_valid_raster_image_url(
+            "https://via.placeholder.com/300.jpg"
+        ));
+        assert!(!is_valid_raster_image_url(
+            "https://dummyimage.com/600x400.png"
+        ));
+        assert!(!is_valid_raster_image_url(
+            "https://placekitten.com/200/300.jpg"
+        ));
 
-        assert!(!is_valid_raster_image_url("http://localhost:8080/image.jpg"));
+        assert!(!is_valid_raster_image_url(
+            "http://localhost:8080/image.jpg"
+        ));
         assert!(!is_valid_raster_image_url("http://127.0.0.1/test.png"));
 
-        assert!(!is_valid_raster_image_url("../assets/anomaly/images/challenge/123.jpg"));
+        assert!(!is_valid_raster_image_url(
+            "../assets/anomaly/images/challenge/123.jpg"
+        ));
     }
 
     #[test]
@@ -2873,7 +2940,9 @@ mod tests {
 
     #[test]
     fn test_is_visual_search_query_detection() {
-        assert!(is_visual_search_query("Berikan 2 foto pemandangan gunung rinjani"));
+        assert!(is_visual_search_query(
+            "Berikan 2 foto pemandangan gunung rinjani"
+        ));
         assert!(is_visual_search_query("cari gambar kucing persia lucu"));
         assert!(is_visual_search_query("tampilkan potret presiden soekarno"));
         assert!(is_visual_search_query("pemandangan danau toba"));
@@ -2881,7 +2950,9 @@ mod tests {
 
         assert!(is_visual_search_query("show me 3 photos of Mount Bromo"));
         assert!(is_visual_search_query("find pictures of Tokyo tower"));
-        assert!(is_visual_search_query("give me high resolution images of aurora"));
+        assert!(is_visual_search_query(
+            "give me high resolution images of aurora"
+        ));
         assert!(is_visual_search_query("download wallpaper of galaxy"));
 
         assert!(!is_visual_search_query("harga solana hari ini"));
@@ -2965,8 +3036,12 @@ mod tests {
         assert!(extracted.contains(&"https://example.com/photos/valid1.jpg".to_string()));
         assert!(extracted.contains(&"https://example.com/photos/valid2.png".to_string()));
         assert!(extracted.contains(&"https://example.com/photos/valid_lazy.webp".to_string()));
-        assert!(extracted.contains(&"https://example.com/photos/valid_srcset_small.jpg".to_string()));
-        assert!(extracted.contains(&"https://example.com/photos/valid_srcset_large.webp".to_string()));
+        assert!(
+            extracted.contains(&"https://example.com/photos/valid_srcset_small.jpg".to_string())
+        );
+        assert!(
+            extracted.contains(&"https://example.com/photos/valid_srcset_large.webp".to_string())
+        );
         assert!(extracted.contains(&"https://example.com/relative/valid3.webp".to_string()));
         assert!(extracted.contains(&"https://example.com/gallery/full_mountain.jpg".to_string()));
     }

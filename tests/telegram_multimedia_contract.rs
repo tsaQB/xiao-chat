@@ -33,8 +33,7 @@ pub mod tools;
 use models::{
     EphemeralMessageParameters, InlineKeyboardButton, InlineKeyboardMarkup, InputMedia,
     InputRichMessage, InputRichMessageMedia, Location, ReplyParameters, RichBlock,
-    RichBlockCaption, RICH_MESSAGE_MAX_BLOCKS, RICH_MESSAGE_MAX_MEDIA,
-    RICH_MESSAGE_MAX_TEXT_CHARS,
+    RichBlockCaption, RICH_MESSAGE_MAX_BLOCKS, RICH_MESSAGE_MAX_MEDIA, RICH_MESSAGE_MAX_TEXT_CHARS,
 };
 use serde_json::{json, Value};
 use tools::{
@@ -287,9 +286,7 @@ fn validate_html_media_reference_integrity(
     Ok(())
 }
 
-fn convert_remote_media_to_rich_links_contract(
-    msg: &InputRichMessage,
-) -> InputRichMessage {
+fn convert_remote_media_to_rich_links_contract(msg: &InputRichMessage) -> InputRichMessage {
     let mut converted = msg.clone();
     for block in &mut converted.blocks {
         match block {
@@ -2232,10 +2229,7 @@ fn test_tier1_rich_message_media_photo_wire_serialization() {
         serialized["media"]["media"],
         "https://example.com/rinjani.jpg"
     );
-    assert_eq!(
-        serialized["media"]["caption"],
-        "Puncak Rinjani 3.726 mdpl"
-    );
+    assert_eq!(serialized["media"]["caption"], "Puncak Rinjani 3.726 mdpl");
     assert_eq!(serialized["media"]["parse_mode"], "HTML");
     assert_eq!(serialized["media"]["show_caption_above_media"], true);
     assert_eq!(serialized["media"]["has_spoiler"], false);
@@ -2244,7 +2238,11 @@ fn test_tier1_rich_message_media_photo_wire_serialization() {
     let map = serialized.as_object().expect("object map");
     assert!(map.contains_key("id"), "JSON must contain 'id' field");
     assert!(map.contains_key("media"), "JSON must contain 'media' field");
-    assert_eq!(map.len(), 2, "JSON must strictly contain exactly 2 top-level fields");
+    assert_eq!(
+        map.len(),
+        2,
+        "JSON must strictly contain exactly 2 top-level fields"
+    );
 }
 
 #[test]
@@ -2283,11 +2281,11 @@ fn test_tier1_rich_message_media_document_wire_serialization() {
     let serialized = serde_json::to_value(&item).expect("document media item must serialize");
     assert_eq!(serialized["id"], "doc_trekking_guide");
     assert_eq!(serialized["media"]["type"], "document");
-    assert_eq!(serialized["media"]["media"], "https://example.com/guide.pdf");
     assert_eq!(
-        serialized["media"]["caption"],
-        "Panduan Resmi Pendakian"
+        serialized["media"]["media"],
+        "https://example.com/guide.pdf"
     );
+    assert_eq!(serialized["media"]["caption"], "Panduan Resmi Pendakian");
     assert_eq!(serialized["media"]["parse_mode"], "HTML");
 }
 
@@ -2380,7 +2378,10 @@ fn test_tier1_rich_message_html_representation_with_media() {
     assert!(rich_msg.markdown.is_none());
     assert!(rich_msg.blocks.is_empty());
 
-    let media_array = rich_msg.media.as_ref().expect("media array must be present");
+    let media_array = rich_msg
+        .media
+        .as_ref()
+        .expect("media array must be present");
     assert_eq!(media_array.len(), 1);
     assert_eq!(media_array[0].id, "pic1");
     match &media_array[0].media {
@@ -2507,7 +2508,8 @@ fn test_tier1_tag_wire_img_tg_photo_reference() {
 
 #[test]
 fn test_tier1_tag_wire_audio_tg_audio_reference() {
-    let tag = r#"<audio src="tg://audio?id=aud1" title="Angin Sembalun" performer="Lombok Sounds"/>"#;
+    let tag =
+        r#"<audio src="tg://audio?id=aud1" title="Angin Sembalun" performer="Lombok Sounds"/>"#;
     let refs = extract_tg_scheme_ids(tag);
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0].0, "audio");
@@ -2608,10 +2610,7 @@ fn test_tier1_send_rich_message_request_json_payload_structure() {
         payload["rich_message"]["html"],
         "<p>Halo dunia!</p><img src=\"tg://photo?id=pic_1\"/>"
     );
-    assert_eq!(
-        payload["rich_message"]["media"][0]["id"],
-        "pic_1"
-    );
+    assert_eq!(payload["rich_message"]["media"][0]["id"], "pic_1");
     assert_eq!(
         payload["reply_markup"]["inline_keyboard"][0][0]["text"],
         "Detail"
@@ -2621,8 +2620,8 @@ fn test_tier1_send_rich_message_request_json_payload_structure() {
 
 #[test]
 fn test_tier1_send_rich_message_omits_draft_id_in_permanent_send() {
-    let rich_msg = create_html_rich_message("<p>Pesan permanen</p>", vec![])
-        .expect("rich message create");
+    let rich_msg =
+        create_html_rich_message("<p>Pesan permanen</p>", vec![]).expect("rich message create");
     let payload = json!({
         "chat_id": 999888_i64,
         "rich_message": rich_msg,
@@ -2651,10 +2650,7 @@ fn test_tier1_send_rich_message_draft_wire_payload_structure() {
 
     assert_eq!(payload["chat_id"], 123456_i64);
     assert_eq!(payload["draft_id"], 876543219012_i64);
-    assert_eq!(
-        payload["rich_message"]["blocks"][0]["type"],
-        "thinking"
-    );
+    assert_eq!(payload["rich_message"]["blocks"][0]["type"], "thinking");
     assert_eq!(payload["can_stop"], true);
     assert_eq!(payload["keep_on_stop"], false);
 }
@@ -2666,8 +2662,8 @@ fn test_tier1_edit_message_media_wire_payload_structure() {
         Some("Updated Slide 2".to_string()),
         None,
     );
-    let kb = build_carousel_keyboard_contract("car_42", 1, 4)
-        .expect("carousel keyboard construction");
+    let kb =
+        build_carousel_keyboard_contract("car_42", 1, 4).expect("carousel keyboard construction");
 
     let payload = json!({
         "chat_id": 333444_i64,
@@ -3105,8 +3101,7 @@ fn test_tier3_composite_rich_message_full_wire_json_fidelity() {
 
 #[test]
 fn test_tier3_reference_integrity_html_tags_must_match_media_ids() {
-    let html_with_missing_media =
-        "<p>Foto:</p><img src=\"tg://photo?id=pic_unresolved\"/>";
+    let html_with_missing_media = "<p>Foto:</p><img src=\"tg://photo?id=pic_unresolved\"/>";
     let existing_media = vec![InputRichMessageMedia {
         id: "pic_different".to_string(),
         media: InputMedia::photo("https://ex.com/diff.jpg", None, None),
@@ -3162,7 +3157,9 @@ fn test_tier3_multipart_form_serialization_with_attach_schemes() {
     .expect("build multipart form contract");
 
     assert_eq!(form_contract.chat_id, "123456789");
-    assert!(form_contract.rich_message.contains("attach://upload_part_map"));
+    assert!(form_contract
+        .rich_message
+        .contains("attach://upload_part_map"));
     assert_eq!(form_contract.file_parts.len(), 1);
     assert_eq!(form_contract.file_parts[0].name, "upload_part_map");
     assert_eq!(
@@ -3190,8 +3187,16 @@ fn test_tier3_multipart_form_multiple_attachments_with_distinct_keys() {
     .expect("create rich message");
 
     let attached_files = vec![
-        ("part_photo1".to_string(), vec![1, 2, 3], "image/jpeg".to_string()),
-        ("part_photo2".to_string(), vec![4, 5, 6, 7], "image/jpeg".to_string()),
+        (
+            "part_photo1".to_string(),
+            vec![1, 2, 3],
+            "image/jpeg".to_string(),
+        ),
+        (
+            "part_photo2".to_string(),
+            vec![4, 5, 6, 7],
+            "image/jpeg".to_string(),
+        ),
     ];
 
     let form_contract = build_multipart_rich_message_form_contract(
@@ -3231,7 +3236,11 @@ fn test_tier3_dual_mode_transport_pure_json_vs_multipart() {
         .starts_with("https://"));
 
     // Mode 2: Local attachments -> Multipart form
-    let local_files = vec![("part_upload".to_string(), vec![0u8; 100], "image/png".to_string())];
+    let local_files = vec![(
+        "part_upload".to_string(),
+        vec![0u8; 100],
+        "image/png".to_string(),
+    )];
     let form = build_multipart_rich_message_form_contract(
         12345,
         &remote_msg,
@@ -3268,18 +3277,13 @@ fn test_tier3_send_rich_message_draft_prohibits_multipart_attachments() {
 
 #[test]
 fn test_tier3_composite_rich_message_with_reply_markup_and_parameters() {
-    let rich_msg = create_html_rich_message(
-        "<p>Pilihan jalur pendakian:</p>",
-        vec![],
-    )
-    .expect("rich msg");
+    let rich_msg =
+        create_html_rich_message("<p>Pilihan jalur pendakian:</p>", vec![]).expect("rich msg");
 
-    let keyboard = InlineKeyboardMarkup::new(vec![
-        vec![
-            InlineKeyboardButton::url_btn("Jalur Sembalun", "https://rinjani.id/sembalun"),
-            InlineKeyboardButton::url_btn("Jalur Senaru", "https://rinjani.id/senaru"),
-        ],
-    ]);
+    let keyboard = InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::url_btn("Jalur Sembalun", "https://rinjani.id/sembalun"),
+        InlineKeyboardButton::url_btn("Jalur Senaru", "https://rinjani.id/senaru"),
+    ]]);
     let reply_params = ReplyParameters::new(777111);
 
     let payload = json!({
@@ -3446,11 +3450,8 @@ fn test_tier3_cross_representation_conflict_matrix() {
 
 #[test]
 fn test_tier3_rtl_direction_with_rich_html_and_media() {
-    let mut rich_msg = create_html_rich_message(
-        "<p>مرحبا بكم في جبل رينجاني</p>",
-        vec![],
-    )
-    .expect("rtl msg");
+    let mut rich_msg =
+        create_html_rich_message("<p>مرحبا بكم في جبل رينجاني</p>", vec![]).expect("rtl msg");
     rich_msg.is_rtl = Some(true);
     assert!(rich_msg.validate().is_ok());
 
@@ -3460,11 +3461,9 @@ fn test_tier3_rtl_direction_with_rich_html_and_media() {
 
 #[test]
 fn test_tier3_skip_entity_detection_flag_propagation() {
-    let mut rich_msg = create_html_rich_message(
-        "<p>Clean text without bot parsing entities</p>",
-        vec![],
-    )
-    .expect("msg");
+    let mut rich_msg =
+        create_html_rich_message("<p>Clean text without bot parsing entities</p>", vec![])
+            .expect("msg");
     rich_msg.skip_entity_detection = Some(true);
     assert!(rich_msg.validate().is_ok());
 
@@ -3533,7 +3532,10 @@ fn test_tier4_scenario_rinjani_tourism_single_unified_bubble() {
     assert_eq!(send_payload["chat_id"], 99887766_i64);
     assert!(send_payload.get("draft_id").is_none());
     assert_eq!(
-        send_payload["rich_message"]["media"].as_array().expect("media array").len(),
+        send_payload["rich_message"]["media"]
+            .as_array()
+            .expect("media array")
+            .len(),
         2
     );
     assert_eq!(
@@ -3551,7 +3553,10 @@ fn test_tier4_scenario_dead_image_url_zero_download_fallback() {
             level: 3,
         },
         RichBlock::Paragraph {
-            text: Value::String("Pantai Kuta memiliki pasir putih dan ombak yang cocok untuk berselancar.".to_string()),
+            text: Value::String(
+                "Pantai Kuta memiliki pasir putih dan ombak yang cocok untuk berselancar."
+                    .to_string(),
+            ),
         },
         RichBlock::Photo {
             photo: json!({
@@ -3576,7 +3581,10 @@ fn test_tier4_scenario_dead_image_url_zero_download_fallback() {
     assert!(plain_text.contains("berselancar"));
 
     // Invariant 2: Converted message is NOT empty
-    assert!(!plain_text.trim().is_empty(), "AI response must never be empty");
+    assert!(
+        !plain_text.trim().is_empty(),
+        "AI response must never be empty"
+    );
 
     // Invariant 3: Photo block was converted to text link paragraph
     let last_block = &recovered_msg.blocks[2];
@@ -3618,10 +3626,7 @@ fn test_tier4_scenario_borobudur_audio_tour_single_bubble() {
         "rich_message": rich_msg,
     });
     assert_eq!(payload["chat_id"], 112233_i64);
-    assert_eq!(
-        payload["rich_message"]["media"][0]["id"],
-        "borobudur_audio"
-    );
+    assert_eq!(payload["rich_message"]["media"][0]["id"], "borobudur_audio");
 }
 
 #[test]
@@ -3635,8 +3640,8 @@ fn test_tier4_scenario_interactive_photo_album_slideshow_pagination() {
     let session_id = "album_42";
 
     // Step 1: Initial presentation at slide index 0
-    let kb_0 = build_carousel_keyboard_contract(session_id, 0, slides.len())
-        .expect("build keyboard 0");
+    let kb_0 =
+        build_carousel_keyboard_contract(session_id, 0, slides.len()).expect("build keyboard 0");
     assert_eq!(kb_0.inline_keyboard[0][1].text, "1/4");
 
     // Step 2: User taps "▶️" -> callback query received
@@ -3745,11 +3750,8 @@ fn test_tier4_scenario_streaming_draft_to_final_send_lifecycle() {
 #[test]
 fn test_tier4_scenario_forum_topic_supergroup_thread_delivery() {
     let topic_thread_id = 888_i64;
-    let rich_msg = create_html_rich_message(
-        "<p>Pesan di topic forum pendakian</p>",
-        vec![],
-    )
-    .expect("rich msg");
+    let rich_msg = create_html_rich_message("<p>Pesan di topic forum pendakian</p>", vec![])
+        .expect("rich msg");
 
     let payload = json!({
         "chat_id": -1001234567890_i64,
@@ -3811,22 +3813,18 @@ fn test_tier4_scenario_anti_empty_ai_response_graceful_recovery() {
 
     let output_msg = if candidate_images.is_empty() {
         // Degrade to informative text
-        create_html_rich_message(
-            &format!("<p>{fallback_commentary}</p>"),
-            vec![],
-        )
-        .expect("fallback msg creation")
+        create_html_rich_message(&format!("<p>{fallback_commentary}</p>"), vec![])
+            .expect("fallback msg creation")
     } else {
         panic!("Should have taken fallback branch");
     };
 
     assert!(output_msg.validate().is_ok());
     let extracted_text = output_msg.extract_plain_text();
-    assert!(!extracted_text.trim().is_empty(), "AI response must never be empty");
+    assert!(
+        !extracted_text.trim().is_empty(),
+        "AI response must never be empty"
+    );
     assert!(extracted_text.contains("Gunung Rinjani"));
     assert!(extracted_text.contains("Pulau Lombok"));
 }
-
-
-
-

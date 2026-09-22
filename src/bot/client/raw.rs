@@ -2072,7 +2072,9 @@ impl TelegramBotClient {
                         .get("description")
                         .and_then(Value::as_str)
                         .unwrap_or("unknown");
-                    info!("Telegram rejected Rich Message ({desc}); checking multipart resolution.");
+                    info!(
+                        "Telegram rejected Rich Message ({desc}); checking multipart resolution."
+                    );
                 }
                 Err(error) if !fallback_allowed_error(&error) => {
                     return Err(error);

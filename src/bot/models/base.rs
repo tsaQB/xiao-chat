@@ -2409,18 +2409,14 @@ mod tests {
                 .collect(),
         );
         assert!(message.validate().is_ok());
-        message
-            .media
-            .as_mut()
-            .expect("media vector present")
-            .push(
-                InputRichMessageMedia::photo(
-                    format!("pic_{RICH_MESSAGE_MAX_MEDIA}"),
-                    "https://example.com/pic_extra.jpg",
-                    None,
-                )
-                .expect("valid media"),
-            );
+        message.media.as_mut().expect("media vector present").push(
+            InputRichMessageMedia::photo(
+                format!("pic_{RICH_MESSAGE_MAX_MEDIA}"),
+                "https://example.com/pic_extra.jpg",
+                None,
+            )
+            .expect("valid media"),
+        );
         assert!(message.validate().is_err());
 
         let table = |columns: usize| {
@@ -2594,13 +2590,23 @@ mod tests {
 
     #[test]
     fn input_rich_message_media_constructors() {
-        let photo = InputRichMessageMedia::photo("p1", "https://example.com/pic.jpg", Some("Caption".to_string()));
+        let photo = InputRichMessageMedia::photo(
+            "p1",
+            "https://example.com/pic.jpg",
+            Some("Caption".to_string()),
+        );
         assert!(photo.is_ok());
         let photo = photo.expect("valid photo");
         assert_eq!(photo.id, "p1");
         assert_eq!(photo.media.media_url(), "https://example.com/pic.jpg");
 
-        let audio = InputRichMessageMedia::audio("a1", "https://example.com/sound.mp3", Some("Title".to_string()), Some("Artist".to_string()), None);
+        let audio = InputRichMessageMedia::audio(
+            "a1",
+            "https://example.com/sound.mp3",
+            Some("Title".to_string()),
+            Some("Artist".to_string()),
+            None,
+        );
         assert!(audio.is_ok());
         let audio = audio.expect("valid audio");
         assert_eq!(audio.id, "a1");
@@ -2615,44 +2621,71 @@ mod tests {
 
     #[test]
     fn input_rich_message_unique_media_ids_enforced() {
-        let item1 = InputRichMessageMedia::photo("same_id", "https://example.com/1.jpg", None).expect("valid");
-        let item2 = InputRichMessageMedia::photo("same_id", "https://example.com/2.jpg", None).expect("valid");
+        let item1 = InputRichMessageMedia::photo("same_id", "https://example.com/1.jpg", None)
+            .expect("valid");
+        let item2 = InputRichMessageMedia::photo("same_id", "https://example.com/2.jpg", None)
+            .expect("valid");
 
         let msg = InputRichMessage::from_html("<p>test</p>", Some(vec![item1, item2]));
-        let err = msg.validate().expect_err("Duplicate media IDs must be rejected");
+        let err = msg
+            .validate()
+            .expect_err("Duplicate media IDs must be rejected");
         assert!(err.contains("unique"), "Error must mention unique: {err}");
-        assert!(err.contains("same_id"), "Error must mention duplicated ID: {err}");
+        assert!(
+            err.contains("same_id"),
+            "Error must mention duplicated ID: {err}"
+        );
 
         // Distinct IDs are valid
-        let item3 = InputRichMessageMedia::photo("diff_id", "https://example.com/2.jpg", None).expect("valid");
-        let item1 = InputRichMessageMedia::photo("same_id", "https://example.com/1.jpg", None).expect("valid");
+        let item3 = InputRichMessageMedia::photo("diff_id", "https://example.com/2.jpg", None)
+            .expect("valid");
+        let item1 = InputRichMessageMedia::photo("same_id", "https://example.com/1.jpg", None)
+            .expect("valid");
         let valid_msg = InputRichMessage::from_html("<p>test</p>", Some(vec![item1, item3]));
         assert!(valid_msg.validate().is_ok());
     }
 
     #[test]
     fn input_rich_message_wire_serialization_matches_bot_api_10_2() {
-        let photo = InputRichMessageMedia::photo("pic1", "https://example.com/summit.jpg", Some("Summit view".to_string())).expect("valid");
-        let msg = InputRichMessage::from_html("<h3>Rinjani</h3><img src=\"tg://photo?id=pic1\"/>", Some(vec![photo]));
+        let photo = InputRichMessageMedia::photo(
+            "pic1",
+            "https://example.com/summit.jpg",
+            Some("Summit view".to_string()),
+        )
+        .expect("valid");
+        let msg = InputRichMessage::from_html(
+            "<h3>Rinjani</h3><img src=\"tg://photo?id=pic1\"/>",
+            Some(vec![photo]),
+        );
         assert!(msg.validate().is_ok());
 
         let json_val = serde_json::to_value(&msg).expect("serialization succeeds");
-        assert_eq!(json_val["html"], "<h3>Rinjani</h3><img src=\"tg://photo?id=pic1\"/>");
+        assert_eq!(
+            json_val["html"],
+            "<h3>Rinjani</h3><img src=\"tg://photo?id=pic1\"/>"
+        );
         assert!(json_val["media"].is_array());
         let media_arr = json_val["media"].as_array().expect("media array");
         assert_eq!(media_arr.len(), 1);
         assert_eq!(media_arr[0]["id"], "pic1");
         assert_eq!(media_arr[0]["media"]["type"], "photo");
-        assert_eq!(media_arr[0]["media"]["media"], "https://example.com/summit.jpg");
+        assert_eq!(
+            media_arr[0]["media"]["media"],
+            "https://example.com/summit.jpg"
+        );
         assert_eq!(media_arr[0]["media"]["caption"], "Summit view");
 
         // Roundtrip deserialization
-        let deserialized: InputRichMessage = serde_json::from_value(json_val).expect("deserialization succeeds");
+        let deserialized: InputRichMessage =
+            serde_json::from_value(json_val).expect("deserialization succeeds");
         assert_eq!(deserialized.html, msg.html);
         let d_media = deserialized.media.expect("deserialized media present");
         assert_eq!(d_media.len(), 1);
         assert_eq!(d_media[0].id, "pic1");
-        assert_eq!(d_media[0].media.media_url(), "https://example.com/summit.jpg");
+        assert_eq!(
+            d_media[0].media.media_url(),
+            "https://example.com/summit.jpg"
+        );
     }
 
     #[test]
@@ -2684,7 +2717,11 @@ mod tests {
 
         // Map RichBlock validation
         let valid_map = InputRichMessage::new(vec![RichBlock::Map {
-            location: Location { latitude: -8.4113, longitude: 116.4573, horizontal_accuracy: None },
+            location: Location {
+                latitude: -8.4113,
+                longitude: 116.4573,
+                horizontal_accuracy: None,
+            },
             zoom: Some(13),
             width: None,
             height: None,
@@ -2693,7 +2730,11 @@ mod tests {
 
         // Invalid zoom
         let invalid_zoom_zero = InputRichMessage::new(vec![RichBlock::Map {
-            location: Location { latitude: -8.4113, longitude: 116.4573, horizontal_accuracy: None },
+            location: Location {
+                latitude: -8.4113,
+                longitude: 116.4573,
+                horizontal_accuracy: None,
+            },
             zoom: Some(0),
             width: None,
             height: None,
@@ -2701,7 +2742,11 @@ mod tests {
         assert!(invalid_zoom_zero.validate().is_err());
 
         let invalid_zoom_high = InputRichMessage::new(vec![RichBlock::Map {
-            location: Location { latitude: -8.4113, longitude: 116.4573, horizontal_accuracy: None },
+            location: Location {
+                latitude: -8.4113,
+                longitude: 116.4573,
+                horizontal_accuracy: None,
+            },
             zoom: Some(25),
             width: None,
             height: None,
@@ -2710,7 +2755,11 @@ mod tests {
 
         // Invalid location inside Map block
         let invalid_lat_map = InputRichMessage::new(vec![RichBlock::Map {
-            location: Location { latitude: 99.0, longitude: 0.0, horizontal_accuracy: None },
+            location: Location {
+                latitude: 99.0,
+                longitude: 0.0,
+                horizontal_accuracy: None,
+            },
             zoom: Some(10),
             width: None,
             height: None,
@@ -2735,14 +2784,23 @@ mod tests {
         assert_eq!(photo1, photo2);
         assert_ne!(photo1, photo3);
 
-        let anim = match InputRichMessageMedia::animation("anim_1", "https://example.com/gif.mp4", Some("Animation".to_string())) {
+        let anim = match InputRichMessageMedia::animation(
+            "anim_1",
+            "https://example.com/gif.mp4",
+            Some("Animation".to_string()),
+        ) {
             Ok(m) => m,
             Err(e) => panic!("valid animation failed: {e}"),
         };
         assert_eq!(anim.id, "anim_1");
         assert_eq!(anim.media.media_url(), "https://example.com/gif.mp4");
 
-        let voice = match InputRichMessageMedia::voice_note("voice_1", "https://example.com/voice.ogg", None, Some(15)) {
+        let voice = match InputRichMessageMedia::voice_note(
+            "voice_1",
+            "https://example.com/voice.ogg",
+            None,
+            Some(15),
+        ) {
             Ok(m) => m,
             Err(e) => panic!("valid voice failed: {e}"),
         };
@@ -2792,7 +2850,11 @@ mod tests {
     fn input_rich_message_media_count_boundary_50_limit() {
         let mut items_50 = Vec::new();
         for i in 0..50 {
-            let item = match InputRichMessageMedia::photo(format!("id_{i}"), format!("https://example.com/{i}.jpg"), None) {
+            let item = match InputRichMessageMedia::photo(
+                format!("id_{i}"),
+                format!("https://example.com/{i}.jpg"),
+                None,
+            ) {
                 Ok(item) => item,
                 Err(e) => panic!("failed to create media item: {e}"),
             };
@@ -2803,14 +2865,18 @@ mod tests {
         assert!(msg_50.validate().is_ok(), "50 media items must be accepted");
 
         let mut items_51 = items_50;
-        let item_51 = match InputRichMessageMedia::photo("id_50", "https://example.com/50.jpg", None) {
-            Ok(item) => item,
-            Err(e) => panic!("failed to create media item: {e}"),
-        };
+        let item_51 =
+            match InputRichMessageMedia::photo("id_50", "https://example.com/50.jpg", None) {
+                Ok(item) => item,
+                Err(e) => panic!("failed to create media item: {e}"),
+            };
         items_51.push(item_51);
 
         let msg_51 = InputRichMessage::from_html("<p>51 items</p>", Some(items_51));
-        assert!(msg_51.validate().is_err(), "51 media items must be rejected");
+        assert!(
+            msg_51.validate().is_err(),
+            "51 media items must be rejected"
+        );
     }
 
     #[test]
@@ -2819,6 +2885,9 @@ mod tests {
             id: "valid_id".to_string(),
             media: InputMedia::photo("", None, None),
         };
-        assert!(empty_photo.validate().is_err(), "Empty media URL must be rejected");
+        assert!(
+            empty_photo.validate().is_err(),
+            "Empty media URL must be rejected"
+        );
     }
 }

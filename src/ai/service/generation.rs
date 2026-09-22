@@ -1404,7 +1404,10 @@ impl AIChatService {
                                 match args.validate() {
                                     Ok(()) => {
                                         let caption_attr = if let Some(caption) = &args.caption {
-                                            format!(r#" caption="{}""#, caption.replace('"', "&quot;"))
+                                            format!(
+                                                r#" caption="{}""#,
+                                                caption.replace('"', "&quot;")
+                                            )
                                         } else {
                                             String::new()
                                         };
@@ -1440,7 +1443,10 @@ impl AIChatService {
                                 match args.validate() {
                                     Ok(()) => {
                                         let caption_attr = if let Some(caption) = &args.caption {
-                                            format!(r#" caption="{}""#, caption.replace('"', "&quot;"))
+                                            format!(
+                                                r#" caption="{}""#,
+                                                caption.replace('"', "&quot;")
+                                            )
                                         } else {
                                             String::new()
                                         };
@@ -1548,10 +1554,7 @@ impl AIChatService {
                                 match args.validate() {
                                     Ok(()) => {
                                         let title_attr = if let Some(title) = &args.title {
-                                            format!(
-                                                r#" title="{}""#,
-                                                title.replace('"', "&quot;")
-                                            )
+                                            format!(r#" title="{}""#, title.replace('"', "&quot;"))
                                         } else {
                                             String::new()
                                         };
