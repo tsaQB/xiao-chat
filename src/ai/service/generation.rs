@@ -79,11 +79,72 @@ pub(crate) fn cancelled_chat_result(
     )
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct PendingToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+}
+
+fn extract_leaked_tool_calls(raw: &str) -> Vec<PendingToolCall> {
+    static RE_TOOL_CALL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?is)<(?:tool_call|function_call)\b[^>]*>(.*?)</(?:tool_call|function_call)>"#,
+        )
+        .expect("valid static regex")
+    });
+
+    let mut result = Vec::new();
+    for cap in RE_TOOL_CALL.captures_iter(raw) {
+        if let Some(inner) = cap.get(1) {
+            let s = inner.as_str().trim();
+            if let Ok(v) = serde_json::from_str::<Value>(s) {
+                if let Some(name) = v.get("name").and_then(Value::as_str) {
+                    let args = if let Some(args_str) = v.get("arguments").and_then(Value::as_str) {
+                        args_str.to_string()
+                    } else if let Some(args_val) = v.get("arguments") {
+                        args_val.to_string()
+                    } else {
+                        String::new()
+                    };
+                    let id = v
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("call_leaked")
+                        .to_string();
+                    result.push(PendingToolCall {
+                        id,
+                        name: name.to_string(),
+                        arguments: args,
+                    });
+                }
+            } else if let Ok(arr) = serde_json::from_str::<Vec<Value>>(s) {
+                for v in arr {
+                    if let Some(name) = v.get("name").and_then(Value::as_str) {
+                        let args =
+                            if let Some(args_str) = v.get("arguments").and_then(Value::as_str) {
+                                args_str.to_string()
+                            } else if let Some(args_val) = v.get("arguments") {
+                                args_val.to_string()
+                            } else {
+                                String::new()
+                            };
+                        let id = v
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("call_leaked")
+                            .to_string();
+                        result.push(PendingToolCall {
+                            id,
+                            name: name.to_string(),
+                            arguments: args,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    result
 }
 
 pub struct GenerationGuard {
@@ -807,8 +868,9 @@ impl AIChatService {
         let mut stream_interrupted = false;
         let mut has_started_answer = false;
         let mut staged_media_tags: Vec<String> = Vec::new();
+        let mut has_executed_multimedia_or_quiz = false;
 
-        for turn in 0..2 {
+        for turn in 0..3 {
             accumulated_raw.clear();
             accumulated_reasoning.clear();
             let mut accumulated_tool_calls: Vec<PendingToolCall> = Vec::new();
@@ -816,7 +878,7 @@ impl AIChatService {
             let mut stream_done = false;
             has_started_answer = false;
 
-            if turn == 0 && supports_tools {
+            if supports_tools && !has_executed_multimedia_or_quiz {
                 payload["tools"] = crate::ai::tools::get_tools_definition();
             } else if let Some(obj) = payload.as_object_mut() {
                 obj.remove("tools");
@@ -1134,7 +1196,14 @@ impl AIChatService {
                 }
             }
 
-            if turn == 0 && !accumulated_tool_calls.is_empty() && !cancelled {
+            if accumulated_tool_calls.is_empty() && !accumulated_raw.is_empty() {
+                let leaked = extract_leaked_tool_calls(&accumulated_raw);
+                if !leaked.is_empty() {
+                    accumulated_tool_calls = leaked;
+                }
+            }
+
+            if turn < 2 && !accumulated_tool_calls.is_empty() && !cancelled {
                 let mut tool_results = Vec::new();
                 let mut quiz_sent = false;
                 let mut quiz_history_summary: Option<String> = None;
@@ -1724,10 +1793,14 @@ impl AIChatService {
                         || name == "send_location"
                         || name == "send_document"
                 });
-                let follow_up_prompt = if has_quiz_or_media {
+                if has_quiz_or_media {
+                    has_executed_multimedia_or_quiz = true;
+                }
+
+                let follow_up_prompt = if has_executed_multimedia_or_quiz {
                     "Berdasarkan media yang telah disiapkan di atas, berikan penjelasan naratif yang kaya, informatif, dan lengkap untuk menjawab pertanyaan pengguna."
                 } else {
-                    "Berdasarkan data dan ringkasan hasil pencarian web di atas, jawab pertanyaan awal pengguna secara lengkap dan jelas."
+                    "Berdasarkan hasil pencarian dan informasi di atas, Anda dapat memanggil tool multimedia resmi yang sesuai (seperti `send_photo`, `send_collage`, `send_slideshow`) jika pengguna meminta media/gambar, atau berikan penjelasan naratif yang lengkap dan jelas."
                 };
                 messages.push(json!({
                     "role": "user",
@@ -1735,8 +1808,12 @@ impl AIChatService {
                 }));
 
                 payload["messages"] = json!(messages);
-                if let Some(obj) = payload.as_object_mut() {
-                    obj.remove("tools");
+                if has_executed_multimedia_or_quiz {
+                    if let Some(obj) = payload.as_object_mut() {
+                        obj.remove("tools");
+                    }
+                } else if supports_tools {
+                    payload["tools"] = crate::ai::tools::get_tools_definition();
                 }
 
                 if let Some(s) = sink {
@@ -1762,13 +1839,22 @@ impl AIChatService {
             let media_header = staged_media_tags.join("\n\n");
             if answer_text.trim().is_empty() {
                 answer_text = media_header;
-            } else if !answer_text.contains("<tg-")
-                && !answer_text.contains("<img")
-                && !answer_text.contains("<audio")
-                && !answer_text.contains("[rekaman:")
-                && !answer_text.contains("[document:")
-            {
-                answer_text = format!("{media_header}\n\n{}", answer_text.trim());
+            } else {
+                let mut missing_tags = Vec::new();
+                for tag in &staged_media_tags {
+                    let src_snippet = tag
+                        .split(r#"src=""#)
+                        .nth(1)
+                        .and_then(|s| s.split('"').next())
+                        .unwrap_or("");
+                    if src_snippet.is_empty() || !answer_text.contains(src_snippet) {
+                        missing_tags.push(tag.as_str());
+                    }
+                }
+                if !missing_tags.is_empty() {
+                    let header = missing_tags.join("\n\n");
+                    answer_text = format!("{header}\n\n{}", answer_text.trim());
+                }
             }
         }
 
