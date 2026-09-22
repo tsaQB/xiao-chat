@@ -133,6 +133,175 @@ pub fn get_tools_definition() -> Value {
                     "required": ["question", "options", "correct_option_id"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_photo",
+                "description": "Kirim sebuah foto atau gambar langsung ke obrolan Telegram via URL gambar publik raster (.jpg, .jpeg, .png, .webp).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL langsung file gambar raster publik (.jpg, .png, .webp). Hindari tautan Wikimedia yang memblokir bot (HTTP 403) dan jangan gunakan SVG."
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Keterangan atau teks pengantar untuk foto (opsional, mendukung Markdown standar)"
+                        }
+                    },
+                    "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_collage",
+                "description": "Kirim album kolase foto (2 sampai 10 foto) ke obrolan Telegram sebagai native sendMediaGroup.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "urls": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Daftar URL gambar langsung (minimal 2, maksimal 10 foto raster)"
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Keterangan atau teks pengantar untuk seluruh album kolase foto (opsional)"
+                        }
+                    },
+                    "required": ["urls"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_slideshow",
+                "description": "Kirim tayangan slide foto interaktif (carousel) ke obrolan Telegram dengan tombol navigasi pagination inline keyboard (⬅️, 1/N, ➡️).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "urls": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Daftar URL gambar langsung untuk setiap slide carousel"
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Keterangan atau deskripsi tayangan slide (opsional)"
+                        }
+                    },
+                    "required": ["urls"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_audio",
+                "description": "Kirim berkas audio musik native ke obrolan Telegram via URL.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL langsung berkas audio (misal .mp3, .m4a)"
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Judul lagu atau audio (opsional)"
+                        },
+                        "performer": {
+                            "type": "string",
+                            "description": "Nama penyanyi atau pencipta audio (opsional)"
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Keterangan atau deskripsi audio (opsional)"
+                        }
+                    },
+                    "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_voice",
+                "description": "Kirim rekaman suara (voice note) dengan visual waveform native ke obrolan Telegram via URL audio (.ogg/.mp3).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL langsung berkas suara (.ogg atau .mp3)"
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Keterangan pesan suara (opsional)"
+                        }
+                    },
+                    "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_location",
+                "description": "Kirim koordinat lokasi geografis native Telegram berupa pin peta interaktif.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "latitude": {
+                            "type": "number",
+                            "description": "Garis lintang lokasi geografis (antara -90.0 dan 90.0)"
+                        },
+                        "longitude": {
+                            "type": "number",
+                            "description": "Garis bujur lokasi geografis (antara -180.0 dan 180.0)"
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Nama tempat atau label lokasi (opsional)"
+                        }
+                    },
+                    "required": ["latitude", "longitude"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_document",
+                "description": "Kirim berkas dokumen umum (.pdf, .zip, .docx, spreadsheet, dll.) ke obrolan Telegram via URL berkas.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL langsung berkas dokumen yang akan dikirim"
+                        },
+                        "file_name": {
+                            "type": "string",
+                            "description": "Nama file berkas beserta ekstensinya, misalnya 'laporan.pdf' (opsional)"
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Keterangan ringkas dokumen (opsional)"
+                        }
+                    },
+                    "required": ["url"]
+                }
+            }
         }
     ])
 }
@@ -1055,6 +1224,333 @@ impl CreateQuizArgs {
     }
 }
 
+#[allow(dead_code)]
+pub const MULTIMEDIA_CAPTION_MAX_CHARS: usize = 1024;
+#[allow(dead_code)]
+pub const CAPTION_MAX_CHARS: usize = MULTIMEDIA_CAPTION_MAX_CHARS;
+
+#[allow(dead_code)]
+pub fn deserialize_flexible_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum F64Helper {
+        Num(f64),
+        Str(String),
+    }
+
+    let val = match F64Helper::deserialize(deserializer)? {
+        F64Helper::Num(n) => n,
+        F64Helper::Str(s) => s.trim().parse::<f64>().map_err(serde::de::Error::custom)?,
+    };
+
+    if val.is_finite() {
+        Ok(val)
+    } else {
+        Err(serde::de::Error::custom("coordinate must be a finite number"))
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct SendPhotoArgs {
+    pub url: String,
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
+#[allow(dead_code)]
+impl SendPhotoArgs {
+    pub fn sanitize(&mut self) {
+        self.url = self.url.trim().to_string();
+        if let Some(caption) = &mut self.caption {
+            let trimmed = caption.trim().to_string();
+            if trimmed.is_empty() {
+                self.caption = None;
+            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
+                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+            } else {
+                *caption = trimmed;
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.url.trim().is_empty() {
+            return Err("URL foto tidak boleh kosong".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct SendCollageArgs {
+    pub urls: Vec<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
+#[allow(dead_code)]
+impl SendCollageArgs {
+    pub fn sanitize(&mut self) {
+        self.urls.retain(|u| !u.trim().is_empty());
+        for u in &mut self.urls {
+            *u = u.trim().to_string();
+        }
+        if self.urls.len() > 10 {
+            self.urls.truncate(10);
+        }
+        if let Some(caption) = &mut self.caption {
+            let trimmed = caption.trim().to_string();
+            if trimmed.is_empty() {
+                self.caption = None;
+            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
+                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+            } else {
+                *caption = trimmed;
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.urls.len() < 2 {
+            return Err(format!(
+                "Kolase foto memerlukan minimal 2 foto (maksimal 10), ditemukan {}",
+                self.urls.len()
+            ));
+        }
+        if self.urls.len() > 10 {
+            return Err(format!(
+                "Kolase foto maksimal 10 foto, ditemukan {}",
+                self.urls.len()
+            ));
+        }
+        for (i, url) in self.urls.iter().enumerate() {
+            if url.trim().is_empty() {
+                return Err(format!("URL foto kolase ke-{} tidak boleh kosong", i + 1));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_input_media(&self) -> Vec<crate::bot::models::InputMedia> {
+        self.urls
+            .iter()
+            .enumerate()
+            .map(|(idx, url)| {
+                let caption = if idx == 0 { self.caption.clone() } else { None };
+                crate::bot::models::InputMedia::Photo {
+                    media: url.clone(),
+                    caption,
+                    parse_mode: Some("Markdown".to_string()),
+                    show_caption_above_media: None,
+                    has_spoiler: None,
+                }
+            })
+            .collect()
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct SendSlideshowArgs {
+    pub urls: Vec<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
+#[allow(dead_code)]
+impl SendSlideshowArgs {
+    pub fn sanitize(&mut self) {
+        self.urls.retain(|u| !u.trim().is_empty());
+        for u in &mut self.urls {
+            *u = u.trim().to_string();
+        }
+        if let Some(caption) = &mut self.caption {
+            let trimmed = caption.trim().to_string();
+            if trimmed.is_empty() {
+                self.caption = None;
+            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
+                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+            } else {
+                *caption = trimmed;
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.urls.is_empty() {
+            return Err("Slideshow memerlukan minimal 1 URL slide gambar".to_string());
+        }
+        for (i, url) in self.urls.iter().enumerate() {
+            if url.trim().is_empty() {
+                return Err(format!("URL slide ke-{} tidak boleh kosong", i + 1));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct SendAudioArgs {
+    pub url: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub performer: Option<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
+#[allow(dead_code)]
+impl SendAudioArgs {
+    pub fn sanitize(&mut self) {
+        self.url = self.url.trim().to_string();
+        if let Some(title) = &mut self.title {
+            let trimmed = title.trim().to_string();
+            self.title = if trimmed.is_empty() { None } else { Some(trimmed) };
+        }
+        if let Some(performer) = &mut self.performer {
+            let trimmed = performer.trim().to_string();
+            self.performer = if trimmed.is_empty() { None } else { Some(trimmed) };
+        }
+        if let Some(caption) = &mut self.caption {
+            let trimmed = caption.trim().to_string();
+            if trimmed.is_empty() {
+                self.caption = None;
+            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
+                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+            } else {
+                *caption = trimmed;
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.url.trim().is_empty() {
+            return Err("URL audio tidak boleh kosong".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct SendVoiceArgs {
+    pub url: String,
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
+#[allow(dead_code)]
+impl SendVoiceArgs {
+    pub fn sanitize(&mut self) {
+        self.url = self.url.trim().to_string();
+        if let Some(caption) = &mut self.caption {
+            let trimmed = caption.trim().to_string();
+            if trimmed.is_empty() {
+                self.caption = None;
+            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
+                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+            } else {
+                *caption = trimmed;
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.url.trim().is_empty() {
+            return Err("URL voice note tidak boleh kosong".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
+pub struct SendLocationArgs {
+    #[serde(deserialize_with = "deserialize_flexible_f64")]
+    pub latitude: f64,
+    #[serde(deserialize_with = "deserialize_flexible_f64")]
+    pub longitude: f64,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+#[allow(dead_code)]
+impl SendLocationArgs {
+    pub fn sanitize(&mut self) {
+        if let Some(title) = &mut self.title {
+            let trimmed = title.trim().to_string();
+            self.title = if trimmed.is_empty() { None } else { Some(trimmed) };
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.latitude.is_finite() {
+            return Err("Garis lintang (latitude) harus berupa angka berhingga (finite)".to_string());
+        }
+        if !self.longitude.is_finite() {
+            return Err("Garis bujur (longitude) harus berupa angka berhingga (finite)".to_string());
+        }
+        if !(-90.0..=90.0).contains(&self.latitude) {
+            return Err(format!(
+                "Garis lintang (latitude) harus berada dalam rentang -90.0 hingga 90.0, ditemukan {}",
+                self.latitude
+            ));
+        }
+        if !(-180.0..=180.0).contains(&self.longitude) {
+            return Err(format!(
+                "Garis bujur (longitude) harus berada dalam rentang -180.0 hingga 180.0, ditemukan {}",
+                self.longitude
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct SendDocumentArgs {
+    pub url: String,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
+#[allow(dead_code)]
+impl SendDocumentArgs {
+    pub fn sanitize(&mut self) {
+        self.url = self.url.trim().to_string();
+        if let Some(file_name) = &mut self.file_name {
+            let trimmed = file_name.trim().to_string();
+            self.file_name = if trimmed.is_empty() { None } else { Some(trimmed) };
+        }
+        if let Some(caption) = &mut self.caption {
+            let trimmed = caption.trim().to_string();
+            if trimmed.is_empty() {
+                self.caption = None;
+            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
+                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+            } else {
+                *caption = trimmed;
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.url.trim().is_empty() {
+            return Err("URL dokumen tidak boleh kosong".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,7 +1559,7 @@ mod tests {
     fn test_tools_definition_contains_expected_tools() {
         let tools = get_tools_definition();
         let array = tools.as_array().expect("tools should be an array");
-        assert_eq!(array.len(), 3);
+        assert_eq!(array.len(), 10);
 
         let names: Vec<_> = array
             .iter()
@@ -1072,6 +1568,13 @@ mod tests {
         assert!(names.contains(&"web_search"));
         assert!(names.contains(&"fetch_url"));
         assert!(names.contains(&"create_quiz"));
+        assert!(names.contains(&"send_photo"));
+        assert!(names.contains(&"send_collage"));
+        assert!(names.contains(&"send_slideshow"));
+        assert!(names.contains(&"send_audio"));
+        assert!(names.contains(&"send_voice"));
+        assert!(names.contains(&"send_location"));
+        assert!(names.contains(&"send_document"));
     }
 
     #[test]
@@ -1215,5 +1718,285 @@ mod tests {
             pre.chars().count(),
             crate::bot::models::RICH_MESSAGE_MAX_TEXT_CHARS
         );
+    }
+
+    #[test]
+    fn test_deserialize_flexible_f64() {
+        #[derive(serde::Deserialize)]
+        struct Coord {
+            #[serde(deserialize_with = "deserialize_flexible_f64")]
+            val: f64,
+        }
+
+        // Float number
+        let c1: Coord =
+            serde_json::from_str(r#"{"val": -6.2088}"#).expect("should deserialize float");
+        assert!((c1.val - -6.2088).abs() < 1e-6);
+
+        // Integer number
+        let c2: Coord =
+            serde_json::from_str(r#"{"val": 106}"#).expect("should deserialize integer");
+        assert_eq!(c2.val, 106.0);
+
+        // Float string
+        let c3: Coord =
+            serde_json::from_str(r#"{"val": " -6.2088 "}"#).expect("should deserialize float string");
+        assert!((c3.val - -6.2088).abs() < 1e-6);
+
+        // Integer string
+        let c4: Coord =
+            serde_json::from_str(r#"{"val": "180"}"#).expect("should deserialize integer string");
+        assert_eq!(c4.val, 180.0);
+
+        // Non-number string should fail
+        assert!(serde_json::from_str::<Coord>(r#"{"val": "abc"}"#).is_err());
+
+        // Empty string should fail
+        assert!(serde_json::from_str::<Coord>(r#"{"val": ""}"#).is_err());
+
+        // NaN string should fail
+        assert!(serde_json::from_str::<Coord>(r#"{"val": "NaN"}"#).is_err());
+
+        // Infinity string should fail
+        assert!(serde_json::from_str::<Coord>(r#"{"val": "Infinity"}"#).is_err());
+        assert!(serde_json::from_str::<Coord>(r#"{"val": "-inf"}"#).is_err());
+    }
+
+    #[test]
+    fn test_send_location_args_validation() {
+        // String coordinates
+        let json_str = r#"{"latitude": "-6.2088", "longitude": " 106.8456 ", "title": " Monas "}"#;
+        let mut args: SendLocationArgs =
+            serde_json::from_str(json_str).expect("deserialize location");
+        args.sanitize();
+        assert_eq!(args.title.as_deref(), Some("Monas"));
+        assert!(args.validate().is_ok());
+
+        // Exact boundary coordinates
+        let b1 = SendLocationArgs {
+            latitude: 90.0,
+            longitude: 180.0,
+            title: None,
+        };
+        assert!(b1.validate().is_ok());
+
+        let b2 = SendLocationArgs {
+            latitude: -90.0,
+            longitude: -180.0,
+            title: None,
+        };
+        assert!(b2.validate().is_ok());
+
+        // Latitude out of bounds
+        let bad_lat = SendLocationArgs {
+            latitude: 90.001,
+            longitude: 0.0,
+            title: None,
+        };
+        assert!(bad_lat.validate().is_err());
+
+        let bad_lat_neg = SendLocationArgs {
+            latitude: -90.001,
+            longitude: 0.0,
+            title: None,
+        };
+        assert!(bad_lat_neg.validate().is_err());
+
+        // Longitude out of bounds
+        let bad_lon = SendLocationArgs {
+            latitude: 0.0,
+            longitude: 180.001,
+            title: None,
+        };
+        assert!(bad_lon.validate().is_err());
+
+        let bad_lon_neg = SendLocationArgs {
+            latitude: 0.0,
+            longitude: -180.001,
+            title: None,
+        };
+        assert!(bad_lon_neg.validate().is_err());
+
+        // Non-finite coordinates
+        let nan_loc = SendLocationArgs {
+            latitude: f64::NAN,
+            longitude: 0.0,
+            title: None,
+        };
+        assert!(nan_loc.validate().is_err());
+
+        let inf_loc = SendLocationArgs {
+            latitude: 0.0,
+            longitude: f64::INFINITY,
+            title: None,
+        };
+        assert!(inf_loc.validate().is_err());
+    }
+
+    #[test]
+    fn test_send_collage_args_validation_and_media_mapping() {
+        // 1 item should fail validation
+        let mut single = SendCollageArgs {
+            urls: vec!["https://example.com/1.jpg".to_string()],
+            caption: Some("Single photo".to_string()),
+        };
+        single.sanitize();
+        assert!(single.validate().is_err());
+
+        // 2 items should pass
+        let mut two = SendCollageArgs {
+            urls: vec![
+                "https://example.com/1.jpg".to_string(),
+                "https://example.com/2.jpg".to_string(),
+            ],
+            caption: Some("Album".to_string()),
+        };
+        two.sanitize();
+        assert!(two.validate().is_ok());
+
+        // InputMedia conversion verifies caption on first item only
+        let media = two.to_input_media();
+        assert_eq!(media.len(), 2);
+        match &media[0] {
+            crate::bot::models::InputMedia::Photo { media, caption, .. } => {
+                assert_eq!(media, "https://example.com/1.jpg");
+                assert_eq!(caption.as_deref(), Some("Album"));
+            }
+            _ => panic!("Expected InputMedia::Photo"),
+        }
+        match &media[1] {
+            crate::bot::models::InputMedia::Photo { media, caption, .. } => {
+                assert_eq!(media, "https://example.com/2.jpg");
+                assert!(caption.is_none());
+            }
+            _ => panic!("Expected InputMedia::Photo"),
+        }
+
+        // 11 items sanitized truncates to 10
+        let urls_11: Vec<String> = (0..11)
+            .map(|i| format!("https://example.com/{i}.jpg"))
+            .collect();
+        let mut collage_11 = SendCollageArgs {
+            urls: urls_11,
+            caption: None,
+        };
+        assert!(collage_11.validate().is_err());
+        collage_11.sanitize();
+        assert_eq!(collage_11.urls.len(), 10);
+        assert!(collage_11.validate().is_ok());
+
+        // Empty URL string fails validation
+        let empty_url = SendCollageArgs {
+            urls: vec![
+                "https://example.com/1.jpg".to_string(),
+                "   ".to_string(),
+            ],
+            caption: None,
+        };
+        assert!(empty_url.validate().is_err());
+    }
+
+    #[test]
+    fn test_send_slideshow_args_validation() {
+        let empty = SendSlideshowArgs {
+            urls: vec![],
+            caption: None,
+        };
+        assert!(empty.validate().is_err());
+
+        let mut valid = SendSlideshowArgs {
+            urls: vec!["https://example.com/1.jpg".to_string()],
+            caption: Some("   Slide caption   ".to_string()),
+        };
+        valid.sanitize();
+        assert_eq!(valid.caption.as_deref(), Some("Slide caption"));
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn test_send_photo_args_validation() {
+        let empty = SendPhotoArgs {
+            url: "   ".to_string(),
+            caption: None,
+        };
+        assert!(empty.validate().is_err());
+
+        let mut valid = SendPhotoArgs {
+            url: "https://example.com/photo.png".to_string(),
+            caption: Some("Caption".to_string()),
+        };
+        valid.sanitize();
+        assert!(valid.validate().is_ok());
+
+        // Oversized caption truncated to MULTIMEDIA_CAPTION_MAX_CHARS (1024)
+        let huge_caption = "x".repeat(1500);
+        let mut oversized = SendPhotoArgs {
+            url: "https://example.com/photo.png".to_string(),
+            caption: Some(huge_caption),
+        };
+        oversized.sanitize();
+        assert_eq!(
+            oversized.caption.as_deref().map(|c| c.chars().count()),
+            Some(MULTIMEDIA_CAPTION_MAX_CHARS)
+        );
+    }
+
+    #[test]
+    fn test_send_audio_args_validation() {
+        let empty = SendAudioArgs {
+            url: "".to_string(),
+            title: None,
+            performer: None,
+            caption: None,
+        };
+        assert!(empty.validate().is_err());
+
+        let mut valid = SendAudioArgs {
+            url: "https://example.com/song.mp3".to_string(),
+            title: Some(" Song Title ".to_string()),
+            performer: Some(" Artist Name ".to_string()),
+            caption: Some(" Great track ".to_string()),
+        };
+        valid.sanitize();
+        assert_eq!(valid.title.as_deref(), Some("Song Title"));
+        assert_eq!(valid.performer.as_deref(), Some("Artist Name"));
+        assert_eq!(valid.caption.as_deref(), Some("Great track"));
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn test_send_voice_args_validation() {
+        let empty = SendVoiceArgs {
+            url: "".to_string(),
+            caption: None,
+        };
+        assert!(empty.validate().is_err());
+
+        let mut valid = SendVoiceArgs {
+            url: "https://example.com/voice.ogg".to_string(),
+            caption: Some("Voice note".to_string()),
+        };
+        valid.sanitize();
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn test_send_document_args_validation() {
+        let empty = SendDocumentArgs {
+            url: "".to_string(),
+            file_name: None,
+            caption: None,
+        };
+        assert!(empty.validate().is_err());
+
+        let mut valid = SendDocumentArgs {
+            url: "https://example.com/doc.pdf".to_string(),
+            file_name: Some(" doc.pdf ".to_string()),
+            caption: Some(" Annual Report ".to_string()),
+        };
+        valid.sanitize();
+        assert_eq!(valid.file_name.as_deref(), Some("doc.pdf"));
+        assert_eq!(valid.caption.as_deref(), Some("Annual Report"));
+        assert!(valid.validate().is_ok());
     }
 }

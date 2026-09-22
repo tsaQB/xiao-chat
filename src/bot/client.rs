@@ -8,8 +8,8 @@ use tracing::warn;
 
 use super::client_raw as raw;
 use super::models::{
-    ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo, InputMedia,
-    InputPollOption, InputRichMessage, ReplyParameters, Update, User,
+    ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo, InlineKeyboardMarkup,
+    InputMedia, InputPollOption, InputRichMessage, ReplyParameters, Update, User,
 };
 use super::transport_policy::{
     fallback_allowed_error, fallback_allowed_response, retry_delay_for_http_status,
@@ -87,6 +87,10 @@ impl TelegramBotClient {
 
     pub fn current_delivery_context() -> TelegramDeliveryContext {
         raw::TelegramBotClient::current_delivery_context()
+    }
+
+    pub fn raw(&self) -> &raw::TelegramBotClient {
+        &self.inner
     }
 
     fn replace_callback_query_message() -> Option<bool> {
@@ -1039,6 +1043,19 @@ impl TelegramBotClient {
             payload["reply_markup"] = reply_markup;
         }
         self.post_json("editEphemeralMessageMedia", payload).await
+    }
+
+    pub async fn edit_message_media(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        media: InputMedia,
+        reply_markup: Option<InlineKeyboardMarkup>,
+    ) -> Result<Value, String> {
+        // Delegate to raw client transport for editMessageMedia
+        self.raw()
+            .edit_message_media(chat_id, message_id, media, reply_markup)
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]

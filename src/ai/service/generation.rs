@@ -677,19 +677,10 @@ impl AIChatService {
                     Lakukan penalaran secara internal dan berikan hanya jawaban yang berguna bagi pengguna; jangan menampilkan chain-of-thought tersembunyi. \
                     Gunakan gaya bahasa yang alami dan format teks yang elegan. \
                     Jika membuat tabel atau data berkolom, gunakan Markdown Table standar agar Xiao dapat merendernya secara rapi. \
-                    Jika menyajikan visual atau media publik yang relevan, letakkan format blok media pada baris tersendiri:\n\
-                    - Foto Tunggal: [photo: Judul](https://url-gambar-langsung) atau ![Judul](https://url-gambar-langsung)\n\
-                    - Galeri/Kolase Foto (2+ foto): [collage: Judul](https://url-1, https://url-2) atau [kolase: Judul](url1, url2)\n\
-                    - Slide Foto: [slideshow: Judul](https://url-1, https://url-2)\n\
-                    - Format tag Telegram native juga didukung: <tg-photo src=\"...\" caption=\"...\"/>, <tg-collage caption=\"...\">...</tg-collage>, <tg-slideshow caption=\"...\">...</tg-slideshow>, <tg-video src=\"...\" caption=\"...\"/>, <tg-audio src=\"...\" caption=\"...\"/>\n\
-                    - Gambar langsung harus URL file raster publik (.jpg, .jpeg, .png, .webp). Hindari hotlink langsung Wikimedia/Wikipedia yang sering memblokir bot (HTTP 403) dan jangan gunakan format vektor .svg untuk foto.\n\
-                    - Audio/Musik: [audio: Judul Lagu](https://url-audio)\n\
-                    - Rekaman Suara: [voice: Catatan Suara](https://url-audio)\n\
-                    - Video Langsung (.mp4): [video: Judul Video](https://url-video.mp4)\n\
-                    - Video Streaming Web (YouTube, Vimeo, Twitch): gunakan tautan teks standar [Judul Video](https://youtube.com/...) agar Telegram otomatis memunculkan rich link preview interaktif.\n\
-                    - Peta/Lokasi: [map: latitude, longitude]\n\
-                    - Dokumen: [document: Nama Dokumen](https://url-dokumen)\n\
-                    Jika pengguna meminta untuk membuat kuis, latihan soal, tebak-tebakan, atau trivia interaktif, selalu panggil tool `create_quiz`. Jika ada teks soal panjang, konteks bacaan, studi kasus, atau potongan kode, sertakan pada parameter `preamble` terformat Markdown, dan letakkan pertanyaan kuis spesifik pada `question`.\n\
+                    Jika pengguna meminta atau membutuhkan konten visual, foto, album kolase, tayangan slide, berkas audio/musik, rekaman suara, lokasi peta, dokumen berkas, atau kuis interaktif, SELALU panggil tool resmi yang sesuai (`send_photo`, `send_collage`, `send_slideshow`, `send_audio`, `send_voice`, `send_location`, `send_document`, `create_quiz`). \
+                    JANGAN PERNAH menyematkan pseudo-tag atau format teks fiktif untuk media di dalam teks jawaban. Teks jawaban harus murni teks berformat Markdown standar. \
+                    Untuk tautan video streaming eksternal (seperti YouTube, Vimeo, Twitch), sertakan tautan teks Markdown standar [Judul Video](https://...) agar Telegram otomatis memunculkan rich link preview interaktif. \
+                    Jika pengguna meminta kuis interaktif, latihan soal, atau tebak-tebakan, selalu panggil tool `create_quiz` (gunakan parameter `preamble` terformat Markdown jika ada materi pengantar, studi kasus, atau potongan kode sebelum kuis).\n\
                     Jangan pernah menampilkan tag internal seperti <think>, <thought>, <tool_call>, atau blok JSON raw ke pengguna.\n\
                     Jika pengguna mengirim '/start' atau salam pembuka di awal sesi baru, sambut mereka dengan hangat, ramah, dan ringkas sebagai asisten AI Xiao tanpa menyebut-nyebut perintah slash. \
                     Jika pengguna mengirim '/start' ketika percakapan sudah berjalan, berikan rangkuman ringkas mengenai hal-hal yang telah dibahas sebelumnya dan tanyakan kelanjutannya secara natural.".to_string();
@@ -1146,6 +1137,8 @@ impl AIChatService {
                 let mut tool_results = Vec::new();
                 let mut quiz_sent = false;
                 let mut quiz_history_summary: Option<String> = None;
+                let mut multimedia_sent = false;
+                let mut media_history_summary: Option<String> = None;
                 for tc in accumulated_tool_calls.iter() {
                     let name = tc.name.trim();
                     let tool_id = if tc.id.is_empty() {
@@ -1369,6 +1362,482 @@ impl AIChatService {
                                 format!("Format argumen kuis tidak valid: {parse_err}")
                             }
                         }
+                    } else if name == "send_photo" {
+                        if let Some(s) = sink {
+                            s.on_action("Photo", Some(ProgressActivity::Drawing));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::SendPhotoArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        if let Some(bot_client) = &bot {
+                                            match bot_client
+                                                .send_photo(
+                                                    chat_id,
+                                                    &args.url,
+                                                    args.caption.as_deref(),
+                                                    Some("Markdown"),
+                                                    None,
+                                                    reply_to_message_id,
+                                                )
+                                                .await
+                                            {
+                                                Ok(_res) => {
+                                                    multimedia_sent = true;
+                                                    let mut summary = format!("📷 **Foto**: {}\n", args.url);
+                                                    if let Some(caption) = &args.caption {
+                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                    }
+                                                    if let Some(existing) = &mut media_history_summary {
+                                                        existing.push_str("\n\n---\n\n");
+                                                        existing.push_str(&summary);
+                                                    } else {
+                                                        media_history_summary = Some(summary);
+                                                    }
+                                                    "Foto native Telegram berhasil dikirim ke obrolan.".to_string()
+                                                }
+                                                Err(err) => {
+                                                    format!("Gagal mengirim foto ke Telegram: {err}")
+                                                }
+                                            }
+                                        } else {
+                                            let mut output = format!("📷 **Foto**: {}\n", args.url);
+                                            if let Some(caption) = &args.caption {
+                                                output.push_str(&format!("\n{caption}\n"));
+                                            }
+                                            output
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi foto gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen send_photo tidak valid: {parse_err}")
+                            }
+                        }
+                    } else if name == "send_collage" {
+                        if let Some(s) = sink {
+                            s.on_action("Collage", Some(ProgressActivity::Drawing));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::SendCollageArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        if let Some(bot_client) = &bot {
+                                            let input_media = args.to_input_media();
+                                            match bot_client
+                                                .send_media_group(
+                                                    chat_id,
+                                                    &input_media,
+                                                    reply_to_message_id,
+                                                )
+                                                .await
+                                            {
+                                                Ok(_res) => {
+                                                    multimedia_sent = true;
+                                                    let mut summary = format!(
+                                                        "🖼️ **Kolase Foto** ({} foto):\n",
+                                                        args.urls.len()
+                                                    );
+                                                    for (i, u) in args.urls.iter().enumerate() {
+                                                        summary.push_str(&format!("{}. {}\n", i + 1, u));
+                                                    }
+                                                    if let Some(caption) = &args.caption {
+                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                    }
+                                                    if let Some(existing) = &mut media_history_summary {
+                                                        existing.push_str("\n\n---\n\n");
+                                                        existing.push_str(&summary);
+                                                    } else {
+                                                        media_history_summary = Some(summary);
+                                                    }
+                                                    "Album kolase foto native Telegram berhasil dikirim ke obrolan.".to_string()
+                                                }
+                                                Err(err) => {
+                                                    format!("Gagal mengirim kolase foto ke Telegram: {err}")
+                                                }
+                                            }
+                                        } else {
+                                            let mut output = format!(
+                                                "🖼️ **Kolase Foto** ({} foto):\n",
+                                                args.urls.len()
+                                            );
+                                            for (i, u) in args.urls.iter().enumerate() {
+                                                output.push_str(&format!("{}. {}\n", i + 1, u));
+                                            }
+                                            if let Some(caption) = &args.caption {
+                                                output.push_str(&format!("\n{caption}\n"));
+                                            }
+                                            output
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi kolase foto gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen send_collage tidak valid: {parse_err}")
+                            }
+                        }
+                    } else if name == "send_slideshow" {
+                        if let Some(s) = sink {
+                            s.on_action("Slideshow", Some(ProgressActivity::Drawing));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::SendSlideshowArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        if let Some(bot_client) = &bot {
+                                            let first_url = match args.urls.first() {
+                                                Some(url) => url.clone(),
+                                                None => {
+                                                    "https://example.com/placeholder.jpg".to_string()
+                                                }
+                                            };
+                                            let carousel_id = format!("{:08x}", rand::random::<u32>());
+                                            crate::bot::router::register_carousel(
+                                                carousel_id.clone(),
+                                                args.urls.clone(),
+                                                args.caption.clone(),
+                                            );
+                                            let keyboard = crate::bot::router::build_carousel_keyboard(
+                                                &carousel_id,
+                                                0,
+                                                args.urls.len(),
+                                            );
+                                            let reply_markup = serde_json::to_value(&keyboard).ok();
+
+                                            match bot_client
+                                                .send_photo(
+                                                    chat_id,
+                                                    &first_url,
+                                                    args.caption.as_deref(),
+                                                    Some("Markdown"),
+                                                    reply_markup,
+                                                    reply_to_message_id,
+                                                )
+                                                .await
+                                            {
+                                                Ok(_res) => {
+                                                    multimedia_sent = true;
+                                                    let mut summary = format!(
+                                                        "🎠 **Tayangan Slide (Carousel)** ({} slide):\n",
+                                                        args.urls.len()
+                                                    );
+                                                    for (i, u) in args.urls.iter().enumerate() {
+                                                        summary.push_str(&format!("{}. {}\n", i + 1, u));
+                                                    }
+                                                    if let Some(caption) = &args.caption {
+                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                    }
+                                                    if let Some(existing) = &mut media_history_summary {
+                                                        existing.push_str("\n\n---\n\n");
+                                                        existing.push_str(&summary);
+                                                    } else {
+                                                        media_history_summary = Some(summary);
+                                                    }
+                                                    "Tayangan slide interaktif native Telegram berhasil dikirim ke obrolan.".to_string()
+                                                }
+                                                Err(err) => {
+                                                    format!("Gagal mengirim tayangan slide ke Telegram: {err}")
+                                                }
+                                            }
+                                        } else {
+                                            let mut output = format!(
+                                                "🎠 **Tayangan Slide (Carousel)** ({} slide):\n",
+                                                args.urls.len()
+                                            );
+                                            for (i, u) in args.urls.iter().enumerate() {
+                                                output.push_str(&format!("{}. {}\n", i + 1, u));
+                                            }
+                                            if let Some(caption) = &args.caption {
+                                                output.push_str(&format!("\n{caption}\n"));
+                                            }
+                                            output
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi tayangan slide gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen send_slideshow tidak valid: {parse_err}")
+                            }
+                        }
+                    } else if name == "send_audio" {
+                        if let Some(s) = sink {
+                            s.on_action("Audio", Some(ProgressActivity::Listening));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::SendAudioArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        if let Some(bot_client) = &bot {
+                                            match bot_client
+                                                .send_audio(
+                                                    chat_id,
+                                                    &args.url,
+                                                    args.caption.as_deref(),
+                                                    Some("Markdown"),
+                                                    args.title.as_deref(),
+                                                    args.performer.as_deref(),
+                                                    None,
+                                                    None,
+                                                    reply_to_message_id,
+                                                )
+                                                .await
+                                            {
+                                                Ok(_res) => {
+                                                    multimedia_sent = true;
+                                                    let mut summary = format!("🎵 **Audio**: {}\n", args.url);
+                                                    if let Some(title) = &args.title {
+                                                        summary.push_str(&format!("Judul: {title}\n"));
+                                                    }
+                                                    if let Some(performer) = &args.performer {
+                                                        summary.push_str(&format!("Artis: {performer}\n"));
+                                                    }
+                                                    if let Some(caption) = &args.caption {
+                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                    }
+                                                    if let Some(existing) = &mut media_history_summary {
+                                                        existing.push_str("\n\n---\n\n");
+                                                        existing.push_str(&summary);
+                                                    } else {
+                                                        media_history_summary = Some(summary);
+                                                    }
+                                                    "Audio native Telegram berhasil dikirim ke obrolan.".to_string()
+                                                }
+                                                Err(err) => {
+                                                    format!("Gagal mengirim audio ke Telegram: {err}")
+                                                }
+                                            }
+                                        } else {
+                                            let mut output = format!("🎵 **Audio**: {}\n", args.url);
+                                            if let Some(title) = &args.title {
+                                                output.push_str(&format!("Judul: {title}\n"));
+                                            }
+                                            if let Some(performer) = &args.performer {
+                                                output.push_str(&format!("Artis: {performer}\n"));
+                                            }
+                                            if let Some(caption) = &args.caption {
+                                                output.push_str(&format!("\n{caption}\n"));
+                                            }
+                                            output
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi audio gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen send_audio tidak valid: {parse_err}")
+                            }
+                        }
+                    } else if name == "send_voice" {
+                        if let Some(s) = sink {
+                            s.on_action("Voice", Some(ProgressActivity::Listening));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::SendVoiceArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        if let Some(bot_client) = &bot {
+                                            match bot_client
+                                                .send_voice(
+                                                    chat_id,
+                                                    &args.url,
+                                                    args.caption.as_deref(),
+                                                    Some("Markdown"),
+                                                    None,
+                                                    None,
+                                                    reply_to_message_id,
+                                                )
+                                                .await
+                                            {
+                                                Ok(_res) => {
+                                                    multimedia_sent = true;
+                                                    let mut summary = format!("🎙️ **Pesan Suara (Voice Note)**: {}\n", args.url);
+                                                    if let Some(caption) = &args.caption {
+                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                    }
+                                                    if let Some(existing) = &mut media_history_summary {
+                                                        existing.push_str("\n\n---\n\n");
+                                                        existing.push_str(&summary);
+                                                    } else {
+                                                        media_history_summary = Some(summary);
+                                                    }
+                                                    "Pesan suara native Telegram berhasil dikirim ke obrolan.".to_string()
+                                                }
+                                                Err(err) => {
+                                                    format!("Gagal mengirim pesan suara ke Telegram: {err}")
+                                                }
+                                            }
+                                        } else {
+                                            let mut output = format!("🎙️ **Pesan Suara (Voice Note)**: {}\n", args.url);
+                                            if let Some(caption) = &args.caption {
+                                                output.push_str(&format!("\n{caption}\n"));
+                                            }
+                                            output
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi pesan suara gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen send_voice tidak valid: {parse_err}")
+                            }
+                        }
+                    } else if name == "send_location" {
+                        if let Some(s) = sink {
+                            s.on_action("Location", Some(ProgressActivity::Looking));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::SendLocationArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        if let Some(bot_client) = &bot {
+                                            match bot_client
+                                                .send_location(
+                                                    chat_id,
+                                                    args.latitude,
+                                                    args.longitude,
+                                                    None,
+                                                    None,
+                                                    None,
+                                                    reply_to_message_id,
+                                                )
+                                                .await
+                                            {
+                                                Ok(_res) => {
+                                                    multimedia_sent = true;
+                                                    let mut summary = format!(
+                                                        "📍 **Lokasi**: {}, {}\n",
+                                                        args.latitude, args.longitude
+                                                    );
+                                                    if let Some(title) = &args.title {
+                                                        summary.push_str(&format!("Nama Tempat: {title}\n"));
+                                                    }
+                                                    if let Some(existing) = &mut media_history_summary {
+                                                        existing.push_str("\n\n---\n\n");
+                                                        existing.push_str(&summary);
+                                                    } else {
+                                                        media_history_summary = Some(summary);
+                                                    }
+                                                    "Lokasi native Telegram berhasil dikirim ke obrolan.".to_string()
+                                                }
+                                                Err(err) => {
+                                                    format!("Gagal mengirim lokasi ke Telegram: {err}")
+                                                }
+                                            }
+                                        } else {
+                                            let mut output = format!(
+                                                "📍 **Lokasi**: {}, {}\n",
+                                                args.latitude, args.longitude
+                                            );
+                                            if let Some(title) = &args.title {
+                                                output.push_str(&format!("Nama Tempat: {title}\n"));
+                                            }
+                                            output
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi lokasi gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen send_location tidak valid: {parse_err}")
+                            }
+                        }
+                    } else if name == "send_document" {
+                        if let Some(s) = sink {
+                            s.on_action("Document", Some(ProgressActivity::Reading));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::SendDocumentArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        if let Some(bot_client) = &bot {
+                                            match bot_client
+                                                .send_document(
+                                                    chat_id,
+                                                    &args.url,
+                                                    args.caption.as_deref(),
+                                                    Some("Markdown"),
+                                                    None,
+                                                    reply_to_message_id,
+                                                )
+                                                .await
+                                            {
+                                                Ok(_res) => {
+                                                    multimedia_sent = true;
+                                                    let mut summary = format!("📄 **Dokumen**: {}\n", args.url);
+                                                    if let Some(file_name) = &args.file_name {
+                                                        summary.push_str(&format!("Nama Berkas: {file_name}\n"));
+                                                    }
+                                                    if let Some(caption) = &args.caption {
+                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                    }
+                                                    if let Some(existing) = &mut media_history_summary {
+                                                        existing.push_str("\n\n---\n\n");
+                                                        existing.push_str(&summary);
+                                                    } else {
+                                                        media_history_summary = Some(summary);
+                                                    }
+                                                    "Dokumen native Telegram berhasil dikirim ke obrolan.".to_string()
+                                                }
+                                                Err(err) => {
+                                                    format!("Gagal mengirim dokumen ke Telegram: {err}")
+                                                }
+                                            }
+                                        } else {
+                                            let mut output = format!("📄 **Dokumen**: {}\n", args.url);
+                                            if let Some(file_name) = &args.file_name {
+                                                output.push_str(&format!("Nama Berkas: {file_name}\n"));
+                                            }
+                                            if let Some(caption) = &args.caption {
+                                                output.push_str(&format!("\n{caption}\n"));
+                                            }
+                                            output
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi dokumen gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen send_document tidak valid: {parse_err}")
+                            }
+                        }
                     } else {
                         format!("Tool '{name}' tidak didukung.")
                     };
@@ -1382,7 +1851,7 @@ impl AIChatService {
                     break;
                 }
 
-                if quiz_sent {
+                if quiz_sent || multimedia_sent {
                     let attachment_refs = persist_runtime_attachments(
                         chat_id,
                         thread_id,
@@ -1416,8 +1885,12 @@ impl AIChatService {
                     )
                     .await;
 
-                    let assistant_content =
-                        quiz_history_summary.unwrap_or_else(|| "[Kuis Interaktif]".to_string());
+                    let assistant_content = match (quiz_history_summary, media_history_summary) {
+                        (Some(quiz), Some(media)) => format!("{quiz}\n\n---\n\n{media}"),
+                        (Some(quiz), None) => quiz,
+                        (None, Some(media)) => media,
+                        (None, None) => "[Media & Kuis Native Telegram]".to_string(),
+                    };
                     save_scoped_message_async(
                         chat_id,
                         thread_id,
@@ -1445,13 +1918,19 @@ impl AIChatService {
                         s.on_complete();
                     }
 
+                    let sentinel = if quiz_sent && !multimedia_sent {
+                        "[QUIZ_SENT]".to_string()
+                    } else {
+                        "[MEDIA_SENT]".to_string()
+                    };
+
                     return (
                         if !accumulated_reasoning.is_empty() {
                             Some(accumulated_reasoning.trim().to_string())
                         } else {
                             None
                         },
-                        "[QUIZ_SENT]".to_string(),
+                        sentinel,
                         false,
                     );
                 }
@@ -1484,11 +1963,18 @@ impl AIChatService {
                     }));
                 }
 
-                let has_quiz = tool_results
-                    .iter()
-                    .any(|(_, name, _, _)| name == "create_quiz");
-                let follow_up_prompt = if has_quiz {
-                    "Berdasarkan hasil eksekusi tool di atas, tanggapi permintaan kuis pengguna secara lengkap dan jelas."
+                let has_quiz_or_media = tool_results.iter().any(|(_, name, _, _)| {
+                    name == "create_quiz"
+                        || name == "send_photo"
+                        || name == "send_collage"
+                        || name == "send_slideshow"
+                        || name == "send_audio"
+                        || name == "send_voice"
+                        || name == "send_location"
+                        || name == "send_document"
+                });
+                let follow_up_prompt = if has_quiz_or_media {
+                    "Berdasarkan hasil eksekusi tool di atas, tanggapi permintaan pengguna secara lengkap dan jelas."
                 } else {
                     "Berdasarkan data dan ringkasan hasil pencarian web di atas, jawab pertanyaan awal pengguna secara lengkap dan jelas."
                 };

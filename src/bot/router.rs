@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, RwLock as StdRwLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -13,7 +13,10 @@ use crate::bot::image_flow::{
     handle_image_generation, plan_image_generation_intent, ImageGenerationIntent,
     UserLastImagePrompt,
 };
-use crate::bot::models::{MessageGenerationStopped, Update};
+use crate::bot::models::{
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputMedia,
+    MessageGenerationStopped, Update,
+};
 use crate::document;
 use crate::parser::build_full_rich_message;
 use crate::timeline::{ExecutionTimeline, GenerationProgressSink, ProgressActivity};
@@ -517,7 +520,7 @@ pub async fn handle_ai_chat(
     if cancelled {
         return;
     }
-    if answer_text == "[QUIZ_SENT]" {
+    if answer_text == "[QUIZ_SENT]" || answer_text == "[MEDIA_SENT]" {
         timeline.delete_placeholder().await;
         return;
     }
@@ -714,16 +717,186 @@ pub async fn handle_stopped_generation(
     }
 }
 
-pub async fn handle_callback_query(bot: &TelegramBotClient, cq: crate::bot::models::CallbackQuery) {
-    let cq_id = cq.id;
+#[allow(dead_code)]
+pub const CAROUSEL_TTL: Duration = Duration::from_secs(3600 * 24);
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct CarouselState {
+    pub id: String,
+    pub slides: Vec<String>,
+    pub caption: Option<String>,
+    pub created_at: std::time::Instant,
+}
+
+#[allow(dead_code)]
+pub static GLOBAL_CAROUSEL_CACHE: LazyLock<StdRwLock<HashMap<String, CarouselState>>> =
+    LazyLock::new(|| StdRwLock::new(HashMap::new()));
+
+#[allow(dead_code)]
+pub fn register_carousel(id: String, slides: Vec<String>, caption: Option<String>) {
+    let state = CarouselState {
+        id: id.clone(),
+        slides,
+        caption,
+        created_at: std::time::Instant::now(),
+    };
+
+    let mut cache = match GLOBAL_CAROUSEL_CACHE.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let now = std::time::Instant::now();
+    cache.retain(|_, item| {
+        now.checked_duration_since(item.created_at)
+            .unwrap_or(Duration::ZERO)
+            < CAROUSEL_TTL
+    });
+    cache.insert(id, state);
+}
+
+pub fn get_carousel(id: &str) -> Option<CarouselState> {
+    let mut cache = match GLOBAL_CAROUSEL_CACHE.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(state) = cache.get(id) {
+        if state.created_at.elapsed() < CAROUSEL_TTL {
+            return Some(state.clone());
+        }
+    }
+    cache.remove(id);
+    None
+}
+
+pub fn build_carousel_keyboard(
+    id: &str,
+    current_index: usize,
+    total_slides: usize,
+) -> InlineKeyboardMarkup {
+    if total_slides <= 1 {
+        return InlineKeyboardMarkup::new(vec![]);
+    }
+
+    let current_index = current_index.min(total_slides.saturating_sub(1));
+    let prev_index = if current_index == 0 {
+        total_slides.saturating_sub(1)
+    } else {
+        current_index - 1
+    };
+    let next_index = if current_index + 1 >= total_slides {
+        0
+    } else {
+        current_index + 1
+    };
+
+    let prev_data = format!("carousel:{id}:{prev_index}:prev");
+    let indicator_data = format!("carousel:{id}:{current_index}:noop");
+    let next_data = format!("carousel:{id}:{next_index}:next");
+
+    if prev_data.len() > 64 || indicator_data.len() > 64 || next_data.len() > 64 {
+        warn!(id, "Carousel callback_data exceeds Telegram 64-byte limit");
+        return InlineKeyboardMarkup::new(vec![]);
+    }
+
+    let indicator_text = format!("{}/{}", current_index + 1, total_slides);
+    let row = vec![
+        InlineKeyboardButton::callback("⬅️", prev_data),
+        InlineKeyboardButton::callback(indicator_text, indicator_data),
+        InlineKeyboardButton::callback("➡️", next_data),
+    ];
+    InlineKeyboardMarkup::new(vec![row])
+}
+
+pub async fn handle_callback_query(bot: &TelegramBotClient, cq: CallbackQuery) {
+    let cq_id = &cq.id;
+    let data = match cq.data.as_deref() {
+        Some(d) => d,
+        None => {
+            let _ = bot.answer_callback_query(cq_id, None, false).await;
+            return;
+        }
+    };
+
+    if let Some(rest) = data.strip_prefix("carousel:") {
+        let parts: Vec<&str> = rest.split(':').collect();
+        if parts.len() != 3 {
+            let _ = bot.answer_callback_query(cq_id, None, false).await;
+            return;
+        }
+
+        let id = parts[0];
+        if id.trim().is_empty() {
+            let _ = bot.answer_callback_query(cq_id, None, false).await;
+            return;
+        }
+
+        let index = parts[1].parse::<usize>().unwrap_or(0);
+        let action = parts[2];
+
+        let state = match get_carousel(id) {
+            Some(s) => s,
+            None => {
+                let _ = bot
+                    .answer_callback_query(
+                        cq_id,
+                        Some("Slide carousel expired."),
+                        false,
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        let total = state.slides.len();
+        if total == 0 {
+            let _ = bot.answer_callback_query(cq_id, None, false).await;
+            return;
+        }
+
+        if action == "noop" {
+            let _ = bot.answer_callback_query(cq_id, None, false).await;
+            return;
+        }
+
+        let target_index = index.min(total.saturating_sub(1));
+
+        if let Some(msg) = &cq.message {
+            let chat_id = msg.chat.id;
+            let message_id = msg.message_id;
+            let new_media_url = &state.slides[target_index];
+            let media = InputMedia::photo(
+                new_media_url,
+                state.caption.clone(),
+                if state.caption.is_some() {
+                    Some("HTML".to_string())
+                } else {
+                    None
+                },
+            );
+            let reply_markup = build_carousel_keyboard(id, target_index, total);
+
+            if let Err(err) = bot
+                .edit_message_media(chat_id, message_id, media, Some(reply_markup))
+                .await
+            {
+                warn!(chat_id, message_id, err, "Failed to edit carousel media");
+            }
+        }
+
+        let _ = bot.answer_callback_query(cq_id, None, false).await;
+        return;
+    }
+
+    // Default fallback for legacy or non-carousel callbacks
     let _ = bot
         .answer_callback_query(
-            &cq_id,
+            cq_id,
             Some("Xiao is now a pure conversational assistant."),
             false,
         )
         .await;
-    if let Some(msg) = cq.message {
+    if let Some(msg) = &cq.message {
         let _ = bot.delete_message(msg.chat.id, msg.message_id).await;
     }
 }
@@ -1901,5 +2074,96 @@ mod tests {
 
         assert!(doc_guard.contains("document_images"));
         assert!(doc_guard.contains("is_none_or(|pages| pages.is_empty())"));
+    }
+
+    #[test]
+    fn test_carousel_state_cache_register_and_get() {
+        let slides = vec![
+            "https://example.com/s1.jpg".to_string(),
+            "https://example.com/s2.jpg".to_string(),
+            "https://example.com/s3.jpg".to_string(),
+        ];
+        register_carousel(
+            "test_c1".to_string(),
+            slides.clone(),
+            Some("Caption 1".to_string()),
+        );
+
+        let retrieved = get_carousel("test_c1").expect("carousel must exist");
+        assert_eq!(retrieved.id, "test_c1");
+        assert_eq!(retrieved.slides, slides);
+        assert_eq!(retrieved.caption.as_deref(), Some("Caption 1"));
+
+        assert!(get_carousel("non_existent_id").is_none());
+    }
+
+    #[test]
+    fn test_carousel_state_cache_ttl_expiry() {
+        let expired_state = CarouselState {
+            id: "expired_c".to_string(),
+            slides: vec!["https://example.com/expired.jpg".to_string()],
+            caption: None,
+            created_at: std::time::Instant::now() - Duration::from_secs(3600 * 25),
+        };
+        {
+            let mut cache = match GLOBAL_CAROUSEL_CACHE.write() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            cache.insert("expired_c".to_string(), expired_state);
+        }
+
+        assert!(get_carousel("expired_c").is_none());
+    }
+
+    #[test]
+    fn test_build_carousel_keyboard_structure_and_limits() {
+        // <= 1 slides returns empty
+        assert!(build_carousel_keyboard("c_test", 0, 0).inline_keyboard.is_empty());
+        assert!(build_carousel_keyboard("c_test", 0, 1).inline_keyboard.is_empty());
+
+        // 3 slides, at index 0 (circular: prev -> 2, next -> 1)
+        let kb_0 = build_carousel_keyboard("c_test", 0, 3);
+        assert_eq!(kb_0.inline_keyboard.len(), 1);
+        let row_0 = &kb_0.inline_keyboard[0];
+        assert_eq!(row_0.len(), 3);
+        assert_eq!(row_0[0].text, "⬅️");
+        assert_eq!(row_0[0].callback_data.as_deref(), Some("carousel:c_test:2:prev"));
+        assert_eq!(row_0[1].text, "1/3");
+        assert_eq!(row_0[1].callback_data.as_deref(), Some("carousel:c_test:0:noop"));
+        assert_eq!(row_0[2].text, "➡️");
+        assert_eq!(row_0[2].callback_data.as_deref(), Some("carousel:c_test:1:next"));
+
+        // 3 slides, at index 2 (circular: prev -> 1, next -> 0)
+        let kb_2 = build_carousel_keyboard("c_test", 2, 3);
+        let row_2 = &kb_2.inline_keyboard[0];
+        assert_eq!(row_2[0].callback_data.as_deref(), Some("carousel:c_test:1:prev"));
+        assert_eq!(row_2[1].text, "3/3");
+        assert_eq!(row_2[1].callback_data.as_deref(), Some("carousel:c_test:2:noop"));
+        assert_eq!(row_2[2].callback_data.as_deref(), Some("carousel:c_test:0:next"));
+
+        // Strict 64-byte validation
+        for btn in row_0 {
+            let data = btn.callback_data.as_deref().expect("callback data");
+            assert!(data.len() <= 64);
+        }
+
+        // Oversized ID exceeding 64 bytes is rejected with empty keyboard
+        let huge_id = "x".repeat(50);
+        let kb_huge = build_carousel_keyboard(&huge_id, 0, 3);
+        assert!(kb_huge.inline_keyboard.is_empty());
+    }
+
+    #[test]
+    fn test_media_sent_sentinel_supported_in_router() {
+        let source = include_str!("router.rs");
+        assert!(
+            source.contains("[MEDIA_SENT]"),
+            "router must support [MEDIA_SENT] sentinel"
+        );
+        assert!(
+            source.contains("if answer_text == \"[QUIZ_SENT]\" || answer_text == \"[MEDIA_SENT]\""),
+            "router must check both [QUIZ_SENT] and [MEDIA_SENT]"
+        );
     }
 }

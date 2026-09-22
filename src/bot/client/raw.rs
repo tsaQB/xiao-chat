@@ -7,8 +7,8 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use super::models::{
-    ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo, InputMedia,
-    InputPollOption, InputRichMessage, ReplyParameters, RichBlock, RichBlockCaption,
+    ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo, InlineKeyboardMarkup,
+    InputMedia, InputPollOption, InputRichMessage, ReplyParameters, RichBlock, RichBlockCaption,
     RichBlockTableCell, Update, User,
 };
 use super::transport_policy::{
@@ -1437,6 +1437,36 @@ impl TelegramBotClient {
             payload["reply_markup"] = rm;
         }
         self.post_json("editEphemeralMessageMedia", payload).await
+    }
+
+    pub async fn edit_message_media(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        media: InputMedia,
+        reply_markup: Option<InlineKeyboardMarkup>,
+    ) -> Result<Value, String> {
+        let media_json = serde_json::to_value(&media).map_err(|e| e.to_string())?;
+        let mut payload = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "media": media_json,
+        });
+        if let Some(rm) = reply_markup {
+            payload["reply_markup"] = serde_json::to_value(rm).map_err(|e| e.to_string())?;
+        }
+
+        match self.post_json("editMessageMedia", payload).await {
+            Ok(res) => Ok(res),
+            Err(e) if e.to_ascii_lowercase().contains("message is not modified") => {
+                Ok(json!({
+                    "ok": true,
+                    "result": true,
+                    "description": "message is not modified"
+                }))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3212,4 +3242,64 @@ mod tests {
             "elapsed timeout must return None via .ok().flatten()"
         );
     }
+
+    #[test]
+    fn edit_message_media_serializes_with_markup_correctly() {
+        let media = InputMedia::photo(
+            "https://example.com/slide1.jpg",
+            Some("Slide 1".to_string()),
+            Some("HTML".to_string()),
+        );
+        let button = crate::bot::models::InlineKeyboardButton::callback("Next", "carousel:id:1:next");
+        let markup = InlineKeyboardMarkup::new(vec![vec![button]]);
+
+        let media_json = match serde_json::to_value(&media) {
+            Ok(v) => v,
+            Err(e) => panic!("serialization failed: {e}"),
+        };
+        let markup_json = match serde_json::to_value(&markup) {
+            Ok(v) => v,
+            Err(e) => panic!("serialization failed: {e}"),
+        };
+
+        let payload = json!({
+            "chat_id": 12345_i64,
+            "message_id": 67890_i64,
+            "media": media_json,
+            "reply_markup": markup_json,
+        });
+
+        assert_eq!(payload["chat_id"], 12345_i64);
+        assert_eq!(payload["message_id"], 67890_i64);
+        assert_eq!(payload["media"]["type"], "photo");
+        assert_eq!(payload["media"]["media"], "https://example.com/slide1.jpg");
+        assert_eq!(payload["media"]["caption"], "Slide 1");
+        assert_eq!(payload["media"]["parse_mode"], "HTML");
+        assert_eq!(
+            payload["reply_markup"]["inline_keyboard"][0][0]["text"],
+            "Next"
+        );
+        assert_eq!(
+            payload["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+            "carousel:id:1:next"
+        );
+    }
+
+    #[test]
+    fn edit_message_media_source_has_not_modified_error_handling() {
+        let source = include_str!("raw.rs");
+        assert!(
+            source.contains("pub async fn edit_message_media("),
+            "raw.rs must expose edit_message_media"
+        );
+        assert!(
+            source.contains("\"editMessageMedia\""),
+            "raw.rs must use editMessageMedia endpoint"
+        );
+        assert!(
+            source.contains("message is not modified"),
+            "raw.rs must handle message is not modified cleanly"
+        );
+    }
 }
+
