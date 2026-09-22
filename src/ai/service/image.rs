@@ -243,6 +243,19 @@ pub fn select_initial_image_protocol(model: &str) -> ImageGenerationProtocol {
     }
 }
 
+pub fn is_dedicated_image_generation_model(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.contains("flash-image")
+        || lower.contains("image-preview")
+        || lower.contains("gpt-image")
+        || lower.contains("imagine-image")
+        || lower.contains("dall-e")
+        || lower.contains("imagen")
+        || lower.contains("flux")
+        || lower.contains("stable-diffusion")
+        || lower.contains("midjourney")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExtractedImageSource {
     Base64(String),

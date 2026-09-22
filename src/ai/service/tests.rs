@@ -942,6 +942,27 @@ fn protocol_selection_heuristic_identifies_chat_models() {
 }
 
 #[test]
+fn dedicated_image_generation_model_classifier_works() {
+    assert!(is_dedicated_image_generation_model("gemini-3.1-flash-image"));
+    assert!(is_dedicated_image_generation_model("gemini-2.5-flash-image-preview"));
+    assert!(is_dedicated_image_generation_model("gpt-image-2"));
+    assert!(is_dedicated_image_generation_model("gpt-image-1.5"));
+    assert!(is_dedicated_image_generation_model("grok-imagine-image"));
+    assert!(is_dedicated_image_generation_model("grok-imagine-image-quality"));
+    assert!(is_dedicated_image_generation_model("dall-e-3"));
+    assert!(is_dedicated_image_generation_model("imagen-3"));
+    assert!(is_dedicated_image_generation_model("flux-pro"));
+    assert!(is_dedicated_image_generation_model("stable-diffusion-xl"));
+
+    assert!(!is_dedicated_image_generation_model("gemini-3.8-flash-high"));
+    assert!(!is_dedicated_image_generation_model("gemini-3-flash"));
+    assert!(!is_dedicated_image_generation_model("claude-sonnet-4-6"));
+    assert!(!is_dedicated_image_generation_model("claude-opus-4-6-thinking"));
+    assert!(!is_dedicated_image_generation_model("gpt-5.5"));
+    assert!(!is_dedicated_image_generation_model("gpt-6-sol"));
+}
+
+#[test]
 fn chat_completions_multimodal_extracts_images_array() {
     let body = json!({
         "choices": [{

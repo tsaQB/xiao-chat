@@ -554,13 +554,18 @@ pub(crate) async fn run_cli_model_picker(ai_service: &AIChatService, initial_fil
             } else {
                 ""
             };
+            let type_tag = if crate::ai::service::is_dedicated_image_generation_model(model_name) {
+                " \x1b[38;5;214m[IMAGE GEN]\x1b[0m"
+            } else {
+                ""
+            };
             if is_multi {
                 format!(
-                    "{} \x1b[38;5;244m({})\x1b[0m{}",
-                    model_name, prov_name, act_tag
+                    "{}{} \x1b[38;5;244m({})\x1b[0m{}",
+                    model_name, type_tag, prov_name, act_tag
                 )
             } else {
-                format!("{}{}", model_name, act_tag)
+                format!("{}{}{}", model_name, type_tag, act_tag)
             }
         })
         .collect();

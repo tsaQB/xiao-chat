@@ -21,8 +21,9 @@ pub use self::generation::{next_draft_id, GenerationGuard, GenerationInput, Pend
 #[allow(unused_imports)]
 pub use self::image::{
     decode_generated_image_base64, download_generated_image, extract_image_from_chat_response,
-    parse_data_uri_or_url, select_initial_image_protocol, ExtractedImageSource, GeneratedImage,
-    ImageGenerationError, ImageGenerationErrorKind, ImageGenerationProtocol,
+    is_dedicated_image_generation_model, parse_data_uri_or_url, select_initial_image_protocol,
+    ExtractedImageSource, GeneratedImage, ImageGenerationError, ImageGenerationErrorKind,
+    ImageGenerationProtocol,
 };
 #[allow(unused_imports)]
 pub use self::multimodal::{resolve_audio_file_and_mime, SpecialistObservationInput};

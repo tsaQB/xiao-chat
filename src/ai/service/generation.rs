@@ -637,7 +637,31 @@ impl AIChatService {
         } = input;
 
         let provider = &main_route.provider;
-        let model = &main_route.model;
+        let mut model = main_route.model.as_str();
+
+        if crate::ai::service::is_dedicated_image_generation_model(model) {
+            let fallback_text_model = provider
+                .models
+                .iter()
+                .find(|m| !crate::ai::service::is_dedicated_image_generation_model(m));
+            if let Some(fallback) = fallback_text_model {
+                warn!(
+                    chat_id,
+                    configured_model = %model,
+                    fallback_model = %fallback,
+                    "Main model is a dedicated image generation model; falling back to conversational text model"
+                );
+                model = fallback.as_str();
+            } else {
+                return (
+                    None,
+                    format!(
+                        "⚠️ Model `{model}` adalah model khusus pembuatan gambar (Image Generation), bukan model percakapan teks.\n\nSilakan gunakan perintah `/image [deskripsi]` untuk membuat gambar, atau alihkan model utama ke model percakapan teks (seperti `gemini-3.8-flash-high`) melalui menu `/model`."
+                    ),
+                    false,
+                );
+            }
+        }
 
         let mut clean_prompt = prompt.trim().to_string();
         if let Some(doc) = doc_text {
@@ -878,7 +902,8 @@ impl AIChatService {
             let mut stream_done = false;
             has_started_answer = false;
 
-            if supports_tools && !has_executed_multimedia_or_quiz {
+            let is_final_turn = turn >= 2;
+            if supports_tools && !has_executed_multimedia_or_quiz && !is_final_turn {
                 payload["tools"] = crate::ai::tools::get_tools_definition();
             } else if let Some(obj) = payload.as_object_mut() {
                 obj.remove("tools");
@@ -1799,8 +1824,10 @@ impl AIChatService {
 
                 let follow_up_prompt = if has_executed_multimedia_or_quiz {
                     "Berdasarkan media yang telah disiapkan di atas, berikan penjelasan naratif yang kaya, informatif, dan lengkap untuk menjawab pertanyaan pengguna."
+                } else if turn >= 1 {
+                    "Berdasarkan seluruh hasil pencarian dan informasi di atas, berikan penjelasan naratif yang lengkap, informatif, dan jelas untuk menjawab pertanyaan pengguna. Jika ada tautan foto/gambar atau sumber terverifikasi, sertakan tautan tersebut."
                 } else {
-                    "Berdasarkan hasil pencarian dan informasi di atas, Anda dapat memanggil tool multimedia resmi yang sesuai (seperti `send_photo`, `send_collage`, `send_slideshow`) jika pengguna meminta media/gambar, atau berikan penjelasan naratif yang lengkap dan jelas."
+                    "Berdasarkan hasil pencarian dan informasi di atas, jika pengguna meminta foto/gambar dan Anda menemukan URL gambar langsung yang valid (akhiran .jpg, .png, .webp) atau tautan media dari Wikimedia/Unsplash, Anda dapat memanggil tool multimedia resmi (seperti send_collage atau send_photo). Jika tidak, berikan penjelasan naratif yang lengkap dan jelas beserta tautan sumber yang relevan."
                 };
                 messages.push(json!({
                     "role": "user",
@@ -1808,7 +1835,8 @@ impl AIChatService {
                 }));
 
                 payload["messages"] = json!(messages);
-                if has_executed_multimedia_or_quiz {
+                let next_is_final = turn >= 1;
+                if has_executed_multimedia_or_quiz || next_is_final {
                     if let Some(obj) = payload.as_object_mut() {
                         obj.remove("tools");
                     }
@@ -1882,7 +1910,13 @@ impl AIChatService {
                     .push_str("\n\n_⚠️ Stream provider terputus; jawaban mungkin tidak lengkap._");
             }
         } else if answer_text.trim().is_empty() {
-            answer_text = "Maaf, Xiao tidak dapat menemukan informasi yang diminta saat ini. Silakan coba ulangi pertanyaan dengan lebih spesifik.".to_string();
+            if !staged_media_tags.is_empty() {
+                answer_text = staged_media_tags.join("\n\n");
+            } else if !accumulated_reasoning.is_empty() {
+                answer_text = "Maaf, Xiao telah memproses permintaan ini namun model tidak menghasilkan teks jawaban. Silakan coba ulangi pertanyaan dengan instruksi yang lebih jelas.".to_string();
+            } else {
+                answer_text = "Maaf, Xiao tidak dapat menemukan informasi yang diminta saat ini. Silakan coba ulangi pertanyaan dengan lebih spesifik.".to_string();
+            }
         }
 
         if let Some(s) = sink {
