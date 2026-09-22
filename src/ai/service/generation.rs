@@ -1366,9 +1366,8 @@ impl AIChatService {
                         if let Some(s) = sink {
                             s.on_action("Photo", Some(ProgressActivity::Drawing));
                         }
-                        match serde_json::from_str::<crate::ai::tools::SendPhotoArgs>(
-                            &tc.arguments,
-                        ) {
+                        match serde_json::from_str::<crate::ai::tools::SendPhotoArgs>(&tc.arguments)
+                        {
                             Ok(mut args) => {
                                 args.sanitize();
                                 match args.validate() {
@@ -1387,11 +1386,16 @@ impl AIChatService {
                                             {
                                                 Ok(_res) => {
                                                     multimedia_sent = true;
-                                                    let mut summary = format!("📷 **Foto**: {}\n", args.url);
+                                                    let mut summary =
+                                                        format!("📷 **Foto**: {}\n", args.url);
                                                     if let Some(caption) = &args.caption {
-                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Keterangan: {caption}\n"
+                                                        ));
                                                     }
-                                                    if let Some(existing) = &mut media_history_summary {
+                                                    if let Some(existing) =
+                                                        &mut media_history_summary
+                                                    {
                                                         existing.push_str("\n\n---\n\n");
                                                         existing.push_str(&summary);
                                                     } else {
@@ -1400,7 +1404,9 @@ impl AIChatService {
                                                     "Foto native Telegram berhasil dikirim ke obrolan.".to_string()
                                                 }
                                                 Err(err) => {
-                                                    format!("Gagal mengirim foto ke Telegram: {err}")
+                                                    format!(
+                                                        "Gagal mengirim foto ke Telegram: {err}"
+                                                    )
                                                 }
                                             }
                                         } else {
@@ -1448,12 +1454,20 @@ impl AIChatService {
                                                         args.urls.len()
                                                     );
                                                     for (i, u) in args.urls.iter().enumerate() {
-                                                        summary.push_str(&format!("{}. {}\n", i + 1, u));
+                                                        summary.push_str(&format!(
+                                                            "{}. {}\n",
+                                                            i + 1,
+                                                            u
+                                                        ));
                                                     }
                                                     if let Some(caption) = &args.caption {
-                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Keterangan: {caption}\n"
+                                                        ));
                                                     }
-                                                    if let Some(existing) = &mut media_history_summary {
+                                                    if let Some(existing) =
+                                                        &mut media_history_summary
+                                                    {
                                                         existing.push_str("\n\n---\n\n");
                                                         existing.push_str(&summary);
                                                     } else {
@@ -1502,21 +1516,22 @@ impl AIChatService {
                                         if let Some(bot_client) = &bot {
                                             let first_url = match args.urls.first() {
                                                 Some(url) => url.clone(),
-                                                None => {
-                                                    "https://example.com/placeholder.jpg".to_string()
-                                                }
+                                                None => "https://example.com/placeholder.jpg"
+                                                    .to_string(),
                                             };
-                                            let carousel_id = format!("{:08x}", rand::random::<u32>());
+                                            let carousel_id =
+                                                format!("{:08x}", rand::random::<u32>());
                                             crate::bot::router::register_carousel(
                                                 carousel_id.clone(),
                                                 args.urls.clone(),
                                                 args.caption.clone(),
                                             );
-                                            let keyboard = crate::bot::router::build_carousel_keyboard(
-                                                &carousel_id,
-                                                0,
-                                                args.urls.len(),
-                                            );
+                                            let keyboard =
+                                                crate::bot::router::build_carousel_keyboard(
+                                                    &carousel_id,
+                                                    0,
+                                                    args.urls.len(),
+                                                );
                                             let reply_markup = serde_json::to_value(&keyboard).ok();
 
                                             match bot_client
@@ -1537,12 +1552,20 @@ impl AIChatService {
                                                         args.urls.len()
                                                     );
                                                     for (i, u) in args.urls.iter().enumerate() {
-                                                        summary.push_str(&format!("{}. {}\n", i + 1, u));
+                                                        summary.push_str(&format!(
+                                                            "{}. {}\n",
+                                                            i + 1,
+                                                            u
+                                                        ));
                                                     }
                                                     if let Some(caption) = &args.caption {
-                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Keterangan: {caption}\n"
+                                                        ));
                                                     }
-                                                    if let Some(existing) = &mut media_history_summary {
+                                                    if let Some(existing) =
+                                                        &mut media_history_summary
+                                                    {
                                                         existing.push_str("\n\n---\n\n");
                                                         existing.push_str(&summary);
                                                     } else {
@@ -1581,9 +1604,8 @@ impl AIChatService {
                         if let Some(s) = sink {
                             s.on_action("Audio", Some(ProgressActivity::Listening));
                         }
-                        match serde_json::from_str::<crate::ai::tools::SendAudioArgs>(
-                            &tc.arguments,
-                        ) {
+                        match serde_json::from_str::<crate::ai::tools::SendAudioArgs>(&tc.arguments)
+                        {
                             Ok(mut args) => {
                                 args.sanitize();
                                 match args.validate() {
@@ -1605,17 +1627,25 @@ impl AIChatService {
                                             {
                                                 Ok(_res) => {
                                                     multimedia_sent = true;
-                                                    let mut summary = format!("🎵 **Audio**: {}\n", args.url);
+                                                    let mut summary =
+                                                        format!("🎵 **Audio**: {}\n", args.url);
                                                     if let Some(title) = &args.title {
-                                                        summary.push_str(&format!("Judul: {title}\n"));
+                                                        summary
+                                                            .push_str(&format!("Judul: {title}\n"));
                                                     }
                                                     if let Some(performer) = &args.performer {
-                                                        summary.push_str(&format!("Artis: {performer}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Artis: {performer}\n"
+                                                        ));
                                                     }
                                                     if let Some(caption) = &args.caption {
-                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Keterangan: {caption}\n"
+                                                        ));
                                                     }
-                                                    if let Some(existing) = &mut media_history_summary {
+                                                    if let Some(existing) =
+                                                        &mut media_history_summary
+                                                    {
                                                         existing.push_str("\n\n---\n\n");
                                                         existing.push_str(&summary);
                                                     } else {
@@ -1624,11 +1654,14 @@ impl AIChatService {
                                                     "Audio native Telegram berhasil dikirim ke obrolan.".to_string()
                                                 }
                                                 Err(err) => {
-                                                    format!("Gagal mengirim audio ke Telegram: {err}")
+                                                    format!(
+                                                        "Gagal mengirim audio ke Telegram: {err}"
+                                                    )
                                                 }
                                             }
                                         } else {
-                                            let mut output = format!("🎵 **Audio**: {}\n", args.url);
+                                            let mut output =
+                                                format!("🎵 **Audio**: {}\n", args.url);
                                             if let Some(title) = &args.title {
                                                 output.push_str(&format!("Judul: {title}\n"));
                                             }
@@ -1654,9 +1687,8 @@ impl AIChatService {
                         if let Some(s) = sink {
                             s.on_action("Voice", Some(ProgressActivity::Listening));
                         }
-                        match serde_json::from_str::<crate::ai::tools::SendVoiceArgs>(
-                            &tc.arguments,
-                        ) {
+                        match serde_json::from_str::<crate::ai::tools::SendVoiceArgs>(&tc.arguments)
+                        {
                             Ok(mut args) => {
                                 args.sanitize();
                                 match args.validate() {
@@ -1676,11 +1708,18 @@ impl AIChatService {
                                             {
                                                 Ok(_res) => {
                                                     multimedia_sent = true;
-                                                    let mut summary = format!("🎙️ **Pesan Suara (Voice Note)**: {}\n", args.url);
+                                                    let mut summary = format!(
+                                                        "🎙️ **Pesan Suara (Voice Note)**: {}\n",
+                                                        args.url
+                                                    );
                                                     if let Some(caption) = &args.caption {
-                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Keterangan: {caption}\n"
+                                                        ));
                                                     }
-                                                    if let Some(existing) = &mut media_history_summary {
+                                                    if let Some(existing) =
+                                                        &mut media_history_summary
+                                                    {
                                                         existing.push_str("\n\n---\n\n");
                                                         existing.push_str(&summary);
                                                     } else {
@@ -1693,7 +1732,10 @@ impl AIChatService {
                                                 }
                                             }
                                         } else {
-                                            let mut output = format!("🎙️ **Pesan Suara (Voice Note)**: {}\n", args.url);
+                                            let mut output = format!(
+                                                "🎙️ **Pesan Suara (Voice Note)**: {}\n",
+                                                args.url
+                                            );
                                             if let Some(caption) = &args.caption {
                                                 output.push_str(&format!("\n{caption}\n"));
                                             }
@@ -1740,9 +1782,13 @@ impl AIChatService {
                                                         args.latitude, args.longitude
                                                     );
                                                     if let Some(title) = &args.title {
-                                                        summary.push_str(&format!("Nama Tempat: {title}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Nama Tempat: {title}\n"
+                                                        ));
                                                     }
-                                                    if let Some(existing) = &mut media_history_summary {
+                                                    if let Some(existing) =
+                                                        &mut media_history_summary
+                                                    {
                                                         existing.push_str("\n\n---\n\n");
                                                         existing.push_str(&summary);
                                                     } else {
@@ -1751,7 +1797,9 @@ impl AIChatService {
                                                     "Lokasi native Telegram berhasil dikirim ke obrolan.".to_string()
                                                 }
                                                 Err(err) => {
-                                                    format!("Gagal mengirim lokasi ke Telegram: {err}")
+                                                    format!(
+                                                        "Gagal mengirim lokasi ke Telegram: {err}"
+                                                    )
                                                 }
                                             }
                                         } else {
@@ -1799,14 +1847,21 @@ impl AIChatService {
                                             {
                                                 Ok(_res) => {
                                                     multimedia_sent = true;
-                                                    let mut summary = format!("📄 **Dokumen**: {}\n", args.url);
+                                                    let mut summary =
+                                                        format!("📄 **Dokumen**: {}\n", args.url);
                                                     if let Some(file_name) = &args.file_name {
-                                                        summary.push_str(&format!("Nama Berkas: {file_name}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Nama Berkas: {file_name}\n"
+                                                        ));
                                                     }
                                                     if let Some(caption) = &args.caption {
-                                                        summary.push_str(&format!("Keterangan: {caption}\n"));
+                                                        summary.push_str(&format!(
+                                                            "Keterangan: {caption}\n"
+                                                        ));
                                                     }
-                                                    if let Some(existing) = &mut media_history_summary {
+                                                    if let Some(existing) =
+                                                        &mut media_history_summary
+                                                    {
                                                         existing.push_str("\n\n---\n\n");
                                                         existing.push_str(&summary);
                                                     } else {
@@ -1815,13 +1870,18 @@ impl AIChatService {
                                                     "Dokumen native Telegram berhasil dikirim ke obrolan.".to_string()
                                                 }
                                                 Err(err) => {
-                                                    format!("Gagal mengirim dokumen ke Telegram: {err}")
+                                                    format!(
+                                                        "Gagal mengirim dokumen ke Telegram: {err}"
+                                                    )
                                                 }
                                             }
                                         } else {
-                                            let mut output = format!("📄 **Dokumen**: {}\n", args.url);
+                                            let mut output =
+                                                format!("📄 **Dokumen**: {}\n", args.url);
                                             if let Some(file_name) = &args.file_name {
-                                                output.push_str(&format!("Nama Berkas: {file_name}\n"));
+                                                output.push_str(&format!(
+                                                    "Nama Berkas: {file_name}\n"
+                                                ));
                                             }
                                             if let Some(caption) = &args.caption {
                                                 output.push_str(&format!("\n{caption}\n"));

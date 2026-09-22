@@ -93,10 +93,7 @@ fn build_carousel_keyboard_contract(
     let indicator_data = format_carousel_callback_data(id, current_index, "noop");
     let next_data = format_carousel_callback_data(id, next_index, "next");
 
-    if prev_data.len() > 64
-        || indicator_data.len() > 64
-        || next_data.len() > 64
-    {
+    if prev_data.len() > 64 || indicator_data.len() > 64 || next_data.len() > 64 {
         return Err("Button callback_data exceeds Telegram 64-byte limit".to_string());
     }
 
@@ -557,11 +554,11 @@ fn test_carousel_keyboard_generation_and_boundary_checks() {
 #[test]
 fn test_send_location_valid_boundary_coordinates() {
     let valid_pairs = vec![
-        (0.0, 0.0),       // Equator / Prime Meridian
-        (90.0, 180.0),    // Top-right corner
-        (90.0, -180.0),   // Top-left corner
-        (-90.0, 180.0),   // Bottom-right corner
-        (-90.0, -180.0),  // Bottom-left corner
+        (0.0, 0.0),          // Equator / Prime Meridian
+        (90.0, 180.0),       // Top-right corner
+        (90.0, -180.0),      // Top-left corner
+        (-90.0, 180.0),      // Bottom-right corner
+        (-90.0, -180.0),     // Bottom-left corner
         (40.7128, -74.0060), // New York
         (-6.2088, 106.8456), // Jakarta
     ];
@@ -692,7 +689,9 @@ fn test_send_location_flexible_deserialization_rejects_garbage() {
 #[test]
 fn test_tools_definition_contains_all_seven_multimedia_tools() {
     let tools_val = tools::get_tools_definition();
-    let tools_array = tools_val.as_array().expect("tools definition must be a json array");
+    let tools_array = tools_val
+        .as_array()
+        .expect("tools definition must be a json array");
 
     // Must have at least 10 tools (3 existing + 7 multimedia)
     assert!(
@@ -1146,7 +1145,11 @@ fn test_tier4_scenario1_single_photo_with_markdown_caption() {
     args.sanitize();
     assert!(args.validate().is_ok());
 
-    let media = InputMedia::photo(&args.url, args.caption.clone(), Some("Markdown".to_string()));
+    let media = InputMedia::photo(
+        &args.url,
+        args.caption.clone(),
+        Some("Markdown".to_string()),
+    );
     let payload = json!({
         "chat_id": 444555_i64,
         "media": media,
@@ -1220,8 +1223,7 @@ fn test_tier4_scenario3_carousel_slideshow_pagination_workflow() {
         .callback_data
         .as_deref()
         .expect("callback data next");
-    let (id, new_index, action) =
-        parse_carousel_callback_data(cb_next).expect("parse next action");
+    let (id, new_index, action) = parse_carousel_callback_data(cb_next).expect("parse next action");
     assert_eq!(id, session_id);
     assert_eq!(new_index, 1);
     assert_eq!(action, "next");
@@ -1346,7 +1348,9 @@ fn test_tier4_scenario6_location_validation_and_dispatch_workflow() {
 fn test_adversarial_collage_item_count_exhaustive_range() {
     // 1. Raw validation: 0, 1 rejected; 2..=10 accepted; 11..=20 rejected
     for count in 0..=20 {
-        let urls: Vec<String> = (0..count).map(|i| format!("https://ex.com/{i}.jpg")).collect();
+        let urls: Vec<String> = (0..count)
+            .map(|i| format!("https://ex.com/{i}.jpg"))
+            .collect();
         let args = SendCollageArgs {
             urls,
             caption: None,
@@ -1506,10 +1510,10 @@ fn test_adversarial_callback_data_byte_size_never_exceeds_64_bytes() {
 
     // 1. All valid generated IDs (e.g. 8-char hex or standard UUID) under various indices & actions
     let valid_ids = [
-        "a1b2c3d4",                                  // 8 hex chars (standard Xiao generator)
-        "f0e1d2c3b4a5",                              // 12 hex chars
-        "550e8400-e29b-41d4-a716-446655440000",       // 36 char UUID v4
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",   // 40 chars
+        "a1b2c3d4",                                 // 8 hex chars (standard Xiao generator)
+        "f0e1d2c3b4a5",                             // 12 hex chars
+        "550e8400-e29b-41d4-a716-446655440000",     // 36 char UUID v4
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // 40 chars
     ];
 
     for id in valid_ids {
@@ -1604,11 +1608,17 @@ fn test_adversarial_caption_1024_char_boundary_all_tools() {
 
     // Collage
     let mut collage = SendCollageArgs {
-        urls: vec!["https://ex.com/1.jpg".to_string(), "https://ex.com/2.jpg".to_string()],
+        urls: vec![
+            "https://ex.com/1.jpg".to_string(),
+            "https://ex.com/2.jpg".to_string(),
+        ],
         caption: Some(cap_huge.clone()),
     };
     collage.sanitize();
-    assert_eq!(collage.caption.as_deref().map(|s| s.chars().count()), Some(1024));
+    assert_eq!(
+        collage.caption.as_deref().map(|s| s.chars().count()),
+        Some(1024)
+    );
 
     // Slideshow
     let mut ss = SendSlideshowArgs {
@@ -1626,7 +1636,10 @@ fn test_adversarial_caption_1024_char_boundary_all_tools() {
         caption: Some(cap_huge.clone()),
     };
     audio.sanitize();
-    assert_eq!(audio.caption.as_deref().map(|s| s.chars().count()), Some(1024));
+    assert_eq!(
+        audio.caption.as_deref().map(|s| s.chars().count()),
+        Some(1024)
+    );
 
     // Voice
     let mut voice = SendVoiceArgs {
@@ -1634,7 +1647,10 @@ fn test_adversarial_caption_1024_char_boundary_all_tools() {
         caption: Some(cap_huge.clone()),
     };
     voice.sanitize();
-    assert_eq!(voice.caption.as_deref().map(|s| s.chars().count()), Some(1024));
+    assert_eq!(
+        voice.caption.as_deref().map(|s| s.chars().count()),
+        Some(1024)
+    );
 
     // Document
     let mut doc = SendDocumentArgs {
@@ -1643,7 +1659,10 @@ fn test_adversarial_caption_1024_char_boundary_all_tools() {
         caption: Some(cap_huge),
     };
     doc.sanitize();
-    assert_eq!(doc.caption.as_deref().map(|s| s.chars().count()), Some(1024));
+    assert_eq!(
+        doc.caption.as_deref().map(|s| s.chars().count()),
+        Some(1024)
+    );
 
     // 5. Multi-byte UTF-8 emoji caption truncation:
     // 1025 crab emojis (4 bytes each). Truncation must NOT slice midway through a codepoint.
@@ -1704,13 +1723,22 @@ fn test_adversarial_circular_navigation_wrap_around_and_invariants() {
             assert_eq!(next_idx, expected_next, "Step {step} next index mismatch");
             curr = next_idx;
         }
-        assert_eq!(curr, 0, "Stepping next {total} times must return to slide 0");
+        assert_eq!(
+            curr, 0,
+            "Stepping next {total} times must return to slide 0"
+        );
     }
 
     // 2-slide special boundary (both prev and next point to the other slide)
     let kb_2 = build_carousel_keyboard_contract("two_slides", 0, 2).expect("two slides kb");
-    let prev_2 = kb_2.inline_keyboard[0][0].callback_data.as_deref().expect("prev");
-    let next_2 = kb_2.inline_keyboard[0][2].callback_data.as_deref().expect("next");
+    let prev_2 = kb_2.inline_keyboard[0][0]
+        .callback_data
+        .as_deref()
+        .expect("prev");
+    let next_2 = kb_2.inline_keyboard[0][2]
+        .callback_data
+        .as_deref()
+        .expect("next");
     let (_, p_idx, _) = parse_carousel_callback_data(prev_2).expect("parse prev");
     let (_, n_idx, _) = parse_carousel_callback_data(next_2).expect("parse next");
     assert_eq!(p_idx, 1);
@@ -1863,8 +1891,14 @@ fn test_adversarial_carousel_ttl_eviction_and_nonexistent_lifecycle() {
         } else {
             None
         };
-        assert!(res.is_none(), "Expired carousel must be evicted and return None");
-        assert!(guard.get("already_expired").is_none(), "Must be purged from map");
+        assert!(
+            res.is_none(),
+            "Expired carousel must be evicted and return None"
+        );
+        assert!(
+            guard.get("already_expired").is_none(),
+            "Must be purged from map"
+        );
     }
 
     // 4. Poisoned lock recovery test
@@ -1879,7 +1913,8 @@ fn test_adversarial_carousel_ttl_eviction_and_nonexistent_lifecycle() {
         Ok(g) => *g,
         Err(poisoned) => *poisoned.into_inner(),
     };
-    assert_eq!(recovered_val, 42, "Poisoned lock recovery pattern succeeds without panic");
+    assert_eq!(
+        recovered_val, 42,
+        "Poisoned lock recovery pattern succeeds without panic"
+    );
 }
-
-

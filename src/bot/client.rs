@@ -8,8 +8,9 @@ use tracing::warn;
 
 use super::client_raw as raw;
 use super::models::{
-    ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo, InlineKeyboardMarkup,
-    InputMedia, InputPollOption, InputRichMessage, ReplyParameters, Update, User,
+    ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo,
+    InlineKeyboardMarkup, InputMedia, InputPollOption, InputRichMessage, ReplyParameters, Update,
+    User,
 };
 use super::transport_policy::{
     fallback_allowed_error, fallback_allowed_response, retry_delay_for_http_status,

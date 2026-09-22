@@ -838,11 +838,7 @@ pub async fn handle_callback_query(bot: &TelegramBotClient, cq: CallbackQuery) {
             Some(s) => s,
             None => {
                 let _ = bot
-                    .answer_callback_query(
-                        cq_id,
-                        Some("Slide carousel expired."),
-                        false,
-                    )
+                    .answer_callback_query(cq_id, Some("Slide carousel expired."), false)
                     .await;
                 return;
             }
@@ -2119,8 +2115,12 @@ mod tests {
     #[test]
     fn test_build_carousel_keyboard_structure_and_limits() {
         // <= 1 slides returns empty
-        assert!(build_carousel_keyboard("c_test", 0, 0).inline_keyboard.is_empty());
-        assert!(build_carousel_keyboard("c_test", 0, 1).inline_keyboard.is_empty());
+        assert!(build_carousel_keyboard("c_test", 0, 0)
+            .inline_keyboard
+            .is_empty());
+        assert!(build_carousel_keyboard("c_test", 0, 1)
+            .inline_keyboard
+            .is_empty());
 
         // 3 slides, at index 0 (circular: prev -> 2, next -> 1)
         let kb_0 = build_carousel_keyboard("c_test", 0, 3);
@@ -2128,19 +2128,37 @@ mod tests {
         let row_0 = &kb_0.inline_keyboard[0];
         assert_eq!(row_0.len(), 3);
         assert_eq!(row_0[0].text, "⬅️");
-        assert_eq!(row_0[0].callback_data.as_deref(), Some("carousel:c_test:2:prev"));
+        assert_eq!(
+            row_0[0].callback_data.as_deref(),
+            Some("carousel:c_test:2:prev")
+        );
         assert_eq!(row_0[1].text, "1/3");
-        assert_eq!(row_0[1].callback_data.as_deref(), Some("carousel:c_test:0:noop"));
+        assert_eq!(
+            row_0[1].callback_data.as_deref(),
+            Some("carousel:c_test:0:noop")
+        );
         assert_eq!(row_0[2].text, "➡️");
-        assert_eq!(row_0[2].callback_data.as_deref(), Some("carousel:c_test:1:next"));
+        assert_eq!(
+            row_0[2].callback_data.as_deref(),
+            Some("carousel:c_test:1:next")
+        );
 
         // 3 slides, at index 2 (circular: prev -> 1, next -> 0)
         let kb_2 = build_carousel_keyboard("c_test", 2, 3);
         let row_2 = &kb_2.inline_keyboard[0];
-        assert_eq!(row_2[0].callback_data.as_deref(), Some("carousel:c_test:1:prev"));
+        assert_eq!(
+            row_2[0].callback_data.as_deref(),
+            Some("carousel:c_test:1:prev")
+        );
         assert_eq!(row_2[1].text, "3/3");
-        assert_eq!(row_2[1].callback_data.as_deref(), Some("carousel:c_test:2:noop"));
-        assert_eq!(row_2[2].callback_data.as_deref(), Some("carousel:c_test:0:next"));
+        assert_eq!(
+            row_2[1].callback_data.as_deref(),
+            Some("carousel:c_test:2:noop")
+        );
+        assert_eq!(
+            row_2[2].callback_data.as_deref(),
+            Some("carousel:c_test:0:next")
+        );
 
         // Strict 64-byte validation
         for btn in row_0 {

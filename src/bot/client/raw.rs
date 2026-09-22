@@ -7,9 +7,9 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use super::models::{
-    ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo, InlineKeyboardMarkup,
-    InputMedia, InputPollOption, InputRichMessage, ReplyParameters, RichBlock, RichBlockCaption,
-    RichBlockTableCell, Update, User,
+    ApiResponse, BotCommand, ChatMember, EphemeralMessageParameters, FileInfo,
+    InlineKeyboardMarkup, InputMedia, InputPollOption, InputRichMessage, ReplyParameters,
+    RichBlock, RichBlockCaption, RichBlockTableCell, Update, User,
 };
 use super::transport_policy::{
     fallback_allowed_error, fallback_allowed_response, retry_delay_for_http_status,
@@ -1458,13 +1458,11 @@ impl TelegramBotClient {
 
         match self.post_json("editMessageMedia", payload).await {
             Ok(res) => Ok(res),
-            Err(e) if e.to_ascii_lowercase().contains("message is not modified") => {
-                Ok(json!({
-                    "ok": true,
-                    "result": true,
-                    "description": "message is not modified"
-                }))
-            }
+            Err(e) if e.to_ascii_lowercase().contains("message is not modified") => Ok(json!({
+                "ok": true,
+                "result": true,
+                "description": "message is not modified"
+            })),
             Err(e) => Err(e),
         }
     }
@@ -3250,7 +3248,8 @@ mod tests {
             Some("Slide 1".to_string()),
             Some("HTML".to_string()),
         );
-        let button = crate::bot::models::InlineKeyboardButton::callback("Next", "carousel:id:1:next");
+        let button =
+            crate::bot::models::InlineKeyboardButton::callback("Next", "carousel:id:1:next");
         let markup = InlineKeyboardMarkup::new(vec![vec![button]]);
 
         let media_json = match serde_json::to_value(&media) {
@@ -3302,4 +3301,3 @@ mod tests {
         );
     }
 }
-

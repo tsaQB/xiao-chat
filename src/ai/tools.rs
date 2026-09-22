@@ -1249,7 +1249,9 @@ where
     if val.is_finite() {
         Ok(val)
     } else {
-        Err(serde::de::Error::custom("coordinate must be a finite number"))
+        Err(serde::de::Error::custom(
+            "coordinate must be a finite number",
+        ))
     }
 }
 
@@ -1270,7 +1272,8 @@ impl SendPhotoArgs {
             if trimmed.is_empty() {
                 self.caption = None;
             } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+                *caption =
+                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
             } else {
                 *caption = trimmed;
             }
@@ -1308,7 +1311,8 @@ impl SendCollageArgs {
             if trimmed.is_empty() {
                 self.caption = None;
             } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+                *caption =
+                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
             } else {
                 *caption = trimmed;
             }
@@ -1374,7 +1378,8 @@ impl SendSlideshowArgs {
             if trimmed.is_empty() {
                 self.caption = None;
             } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+                *caption =
+                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
             } else {
                 *caption = trimmed;
             }
@@ -1412,18 +1417,27 @@ impl SendAudioArgs {
         self.url = self.url.trim().to_string();
         if let Some(title) = &mut self.title {
             let trimmed = title.trim().to_string();
-            self.title = if trimmed.is_empty() { None } else { Some(trimmed) };
+            self.title = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
         }
         if let Some(performer) = &mut self.performer {
             let trimmed = performer.trim().to_string();
-            self.performer = if trimmed.is_empty() { None } else { Some(trimmed) };
+            self.performer = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
         }
         if let Some(caption) = &mut self.caption {
             let trimmed = caption.trim().to_string();
             if trimmed.is_empty() {
                 self.caption = None;
             } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+                *caption =
+                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
             } else {
                 *caption = trimmed;
             }
@@ -1455,7 +1469,8 @@ impl SendVoiceArgs {
             if trimmed.is_empty() {
                 self.caption = None;
             } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+                *caption =
+                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
             } else {
                 *caption = trimmed;
             }
@@ -1486,16 +1501,24 @@ impl SendLocationArgs {
     pub fn sanitize(&mut self) {
         if let Some(title) = &mut self.title {
             let trimmed = title.trim().to_string();
-            self.title = if trimmed.is_empty() { None } else { Some(trimmed) };
+            self.title = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
         if !self.latitude.is_finite() {
-            return Err("Garis lintang (latitude) harus berupa angka berhingga (finite)".to_string());
+            return Err(
+                "Garis lintang (latitude) harus berupa angka berhingga (finite)".to_string(),
+            );
         }
         if !self.longitude.is_finite() {
-            return Err("Garis bujur (longitude) harus berupa angka berhingga (finite)".to_string());
+            return Err(
+                "Garis bujur (longitude) harus berupa angka berhingga (finite)".to_string(),
+            );
         }
         if !(-90.0..=90.0).contains(&self.latitude) {
             return Err(format!(
@@ -1529,14 +1552,19 @@ impl SendDocumentArgs {
         self.url = self.url.trim().to_string();
         if let Some(file_name) = &mut self.file_name {
             let trimmed = file_name.trim().to_string();
-            self.file_name = if trimmed.is_empty() { None } else { Some(trimmed) };
+            self.file_name = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
         }
         if let Some(caption) = &mut self.caption {
             let trimmed = caption.trim().to_string();
             if trimmed.is_empty() {
                 self.caption = None;
             } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption = crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+                *caption =
+                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
             } else {
                 *caption = trimmed;
             }
@@ -1739,8 +1767,8 @@ mod tests {
         assert_eq!(c2.val, 106.0);
 
         // Float string
-        let c3: Coord =
-            serde_json::from_str(r#"{"val": " -6.2088 "}"#).expect("should deserialize float string");
+        let c3: Coord = serde_json::from_str(r#"{"val": " -6.2088 "}"#)
+            .expect("should deserialize float string");
         assert!((c3.val - -6.2088).abs() < 1e-6);
 
         // Integer string
@@ -1887,10 +1915,7 @@ mod tests {
 
         // Empty URL string fails validation
         let empty_url = SendCollageArgs {
-            urls: vec![
-                "https://example.com/1.jpg".to_string(),
-                "   ".to_string(),
-            ],
+            urls: vec!["https://example.com/1.jpg".to_string(), "   ".to_string()],
             caption: None,
         };
         assert!(empty_url.validate().is_err());
