@@ -1786,8 +1786,8 @@ impl AIChatService {
                                         ));
 
                                         format!(
-                                            "Dokumen '{}' telah berhasil disiapkan di memori. Tag media Telegram: {}\nAnda DAPAT menyematkan tag media ini langsung di tengah atau di bawah penjelasan narasi Anda pada posisi yang paling relevan. Berikan penjelasan naratif yang lengkap dan jelas mengenai dokumen ini kepada pengguna.",
-                                            final_filename, doc_tag
+                                            "Dokumen '{}' telah berhasil disiapkan di memori. Tag media Telegram: {}\nWAJIB sematkan tag media {} ini langsung di dalam teks jawaban/penjelasan Anda pada posisi yang paling relevan. Berikan penjelasan naratif yang lengkap dan jelas mengenai dokumen ini kepada pengguna.",
+                                            final_filename, doc_tag, doc_tag
                                         )
                                     }
                                     Err(validation_err) => {
@@ -1970,6 +1970,27 @@ impl AIChatService {
         } else {
             extracted_thinking
         };
+
+        if !staged_documents.is_empty() {
+            let mut missing_tags = Vec::new();
+            for (key, _, _, filename) in &staged_documents {
+                let tag_needle = format!("attach://{}", key);
+                if !answer_text.contains(&tag_needle) {
+                    missing_tags.push(format!("[document: {}](attach://{})", filename, key));
+                }
+            }
+            if !missing_tags.is_empty() {
+                if answer_text.trim().is_empty() {
+                    answer_text = format!(
+                        "Berikut adalah dokumen yang Anda minta:\n\n{}",
+                        missing_tags.join("\n\n")
+                    );
+                } else {
+                    answer_text.push_str("\n\n");
+                    answer_text.push_str(&missing_tags.join("\n\n"));
+                }
+            }
+        }
 
         if !staged_media_tags.is_empty() {
             let media_header = staged_media_tags.join("\n\n");

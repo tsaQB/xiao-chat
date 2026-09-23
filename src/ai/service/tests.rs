@@ -2206,3 +2206,122 @@ async fn test_create_quiz_aborts_if_preamble_fails_and_does_not_send_poll() {
 
     ai_server.await.expect("ai server join");
 }
+#[tokio::test]
+async fn test_create_document_staging_and_auto_append() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let ai_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ai listener succeeds");
+    let ai_address = ai_listener.local_addr().expect("ai addr succeeds");
+
+    let ai_server = tokio::spawn(async move {
+        let mut conn_count = 0;
+        while let Ok((mut socket, _)) = ai_listener.accept().await {
+            conn_count += 1;
+            let mut bytes = Vec::new();
+            loop {
+                let mut buf = [0u8; 4096];
+                let n = socket.read(&mut buf).await.expect("read ai request");
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+
+            let sse = if conn_count == 1 {
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_doc123\",\"type\":\"function\",\"function\":{\"name\":\"create_document\",\"arguments\":\"{\\\"filename\\\":\\\"laporan.pdf\\\",\\\"content\\\":\\\"Ini adalah konten pdf palsu\\\"}\"}}]}}]}\n\ndata: [DONE]\n\n"
+            } else {
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Ini penjelasannya.\"}}]}\n\ndata: [DONE]\n\n"
+            };
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                sse.len(), sse
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write sse");
+            let _ = socket.shutdown().await;
+            if conn_count == 2 {
+                break;
+            }
+        }
+    });
+
+    let provider = ProviderConfig {
+        id: "main-doc-test".into(),
+        name: "Main Doc Test".into(),
+        endpoint: format!("http://{ai_address}/v1"),
+        api_key: String::new(),
+        api_key_ref: None,
+        models: vec!["doc-model".into()],
+        active_model: "doc-model".into(),
+    };
+    let service = isolated_service(provider.clone());
+    let snapshot = service.generation_model_snapshot().await;
+
+    struct TestProgressSink;
+    impl crate::timeline::GenerationProgressSink for TestProgressSink {
+        fn on_action(&self, _label: &str, _activity: Option<crate::timeline::ProgressActivity>) {}
+        fn on_partial_answer(&self, _text: &str) {}
+        fn on_failure(&self, _error: &str, _force_sync: bool) {}
+        fn on_complete(&self) {}
+    }
+    let sink = TestProgressSink;
+    let (_cancel, mut receiver) = tokio::sync::watch::channel(false);
+
+    let gen_input = GenerationInput {
+        prompt: "Buatkan dokumen laporan",
+        canonical_prompt: None,
+        media_to_main: true,
+        sink: Some(&sink),
+        image_bytes: None,
+        document_images: None,
+        mime_type: None,
+        doc_text: None,
+        doc_name: None,
+        audio_bytes: None,
+        audio_mime: None,
+        video_bytes: None,
+        video_mime: None,
+        video_duration: None,
+        bot: None,
+        reply_to_message_id: None,
+    };
+
+    let (_thinking, answer, staged_docs, cancelled) = service
+        .generate_response_with_snapshot(5555, 0, 5555, gen_input, &snapshot, &mut receiver)
+        .await;
+
+    assert!(!cancelled);
+    ai_server.await.expect("ai server join");
+
+    // 1. Verify staged doc 4-tuple
+    assert_eq!(staged_docs.len(), 1);
+    let (key, bytes, mime, filename) = &staged_docs[0];
+    assert_eq!(key, "doc_0");
+    assert_eq!(filename, "laporan.pdf");
+    assert_eq!(mime, "application/pdf");
+    assert!(!bytes.is_empty());
+
+    // 2. Verify auto-append logic
+    assert!(answer.contains("[document: laporan.pdf](attach://doc_0)"));
+    assert!(answer.contains("Ini penjelasannya."));
+}
