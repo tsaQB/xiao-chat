@@ -1600,7 +1600,8 @@ impl AIChatService {
                                         } else {
                                             format!(" {}", attrs.join(" "))
                                         };
-                                        let audio_tag = format!(r#"<audio src="{}"{extra}/>"#, args.url);
+                                        let audio_tag =
+                                            format!(r#"<audio src="{}"{extra}/>"#, args.url);
                                         staged_media_tags.push(audio_tag.clone());
                                         format!("Audio telah disiapkan. Tag media: {audio_tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah penjelasan teks pada posisi yang relevan. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
@@ -1683,7 +1684,8 @@ impl AIChatService {
                                     Ok(()) => {
                                         let file_name =
                                             args.file_name.as_deref().unwrap_or("Dokumen");
-                                        let doc_tag = format!("[document: {file_name}]({})", args.url);
+                                        let doc_tag =
+                                            format!("[document: {file_name}]({})", args.url);
                                         staged_media_tags.push(doc_tag.clone());
                                         format!("Dokumen telah disiapkan. Tag media: {doc_tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah penjelasan teks pada posisi yang relevan. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
@@ -1877,9 +1879,15 @@ impl AIChatService {
                         answer_text.contains("<tg-collage") || answer_text.contains("kolase")
                     } else if tag.starts_with("<tg-slideshow") {
                         answer_text.contains("<tg-slideshow") || answer_text.contains("carousel")
-                    } else if let Some(src) = tag.split(r#"src=""#).nth(1).and_then(|s| s.split('"').next()) {
+                    } else if let Some(src) = tag
+                        .split(r#"src=""#)
+                        .nth(1)
+                        .and_then(|s| s.split('"').next())
+                    {
                         !src.is_empty() && answer_text.contains(src)
-                    } else if let Some(url) = tag.split("](").nth(1).and_then(|s| s.split(')').next()) {
+                    } else if let Some(url) =
+                        tag.split("](").nth(1).and_then(|s| s.split(')').next())
+                    {
                         !url.is_empty() && answer_text.contains(url)
                     } else if tag.starts_with("<tg-map") {
                         answer_text.contains("<tg-map")

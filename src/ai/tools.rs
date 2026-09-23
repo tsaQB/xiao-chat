@@ -1711,7 +1711,8 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
                 for page in page_list.iter().take(3) {
                     if let Some(title) = page.get("title").and_then(Value::as_str) {
                         if let Ok(gallery_images) =
-                            fetch_wikipedia_article_images(client, lang, title, is_logo_search).await
+                            fetch_wikipedia_article_images(client, lang, title, is_logo_search)
+                                .await
                         {
                             for img in gallery_images {
                                 if !verified_images.contains(&img) {
@@ -1729,7 +1730,9 @@ async fn search_wikipedia(client: &reqwest::Client, query: &str) -> Result<Strin
                 }
 
                 if verified_images.len() < 3 || is_logo_search {
-                    if let Ok(commons_images) = search_wikimedia_commons_files(client, attempt).await {
+                    if let Ok(commons_images) =
+                        search_wikimedia_commons_files(client, attempt).await
+                    {
                         for img in commons_images {
                             if !verified_images.contains(&img) {
                                 verified_images.push(img);
