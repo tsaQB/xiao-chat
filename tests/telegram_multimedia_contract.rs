@@ -3849,8 +3849,20 @@ fn test_create_document_tool_args_and_wire_format() {
     assert_eq!(&zip_bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
 
     // Test mime detection
-    assert_eq!(crate::document::detect_mime_from_filename("script.py"), "text/plain");
-    assert_eq!(crate::document::detect_mime_from_filename("data.csv"), "text/csv");
-    assert_eq!(crate::document::detect_mime_from_filename("image.svg"), "image/svg+xml");
-    assert_eq!(crate::document::detect_mime_from_filename("bundle.zip"), "application/zip");
+    assert_eq!(
+        crate::document::detect_mime_from_filename("script.py"),
+        "text/plain"
+    );
+    assert_eq!(
+        crate::document::detect_mime_from_filename("data.csv"),
+        "text/csv"
+    );
+    assert_eq!(
+        crate::document::detect_mime_from_filename("image.svg"),
+        "image/svg+xml"
+    );
+    assert_eq!(
+        crate::document::detect_mime_from_filename("bundle.zip"),
+        "application/zip"
+    );
 }

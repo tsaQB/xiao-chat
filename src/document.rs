@@ -574,10 +574,14 @@ pub fn create_in_memory_zip(filename: &str, content: &[u8]) -> Result<Vec<u8>, S
         let mut writer = zip::ZipWriter::new(&mut cursor);
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
-        writer.start_file(filename, options).map_err(|e| format!("Gagal zip start_file: {e}"))?;
+        writer
+            .start_file(filename, options)
+            .map_err(|e| format!("Gagal zip start_file: {e}"))?;
         std::io::Write::write_all(&mut writer, content)
             .map_err(|e| format!("Gagal write ke zip: {e}"))?;
-        writer.finish().map_err(|e| format!("Gagal finish zip: {e}"))?;
+        writer
+            .finish()
+            .map_err(|e| format!("Gagal finish zip: {e}"))?;
     }
     Ok(cursor.into_inner())
 }

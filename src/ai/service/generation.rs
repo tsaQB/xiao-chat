@@ -1710,34 +1710,62 @@ impl AIChatService {
                                 match args.validate() {
                                     Ok(()) => {
                                         if let Some(bot_client) = &bot {
-                                            let (final_bytes, final_filename, mime_type) = if args.as_zip {
-                                                let zip_name = if !args.filename.to_ascii_lowercase().ends_with(".zip") {
+                                            let (final_bytes, final_filename, mime_type) = if args
+                                                .as_zip
+                                            {
+                                                let zip_name = if !args
+                                                    .filename
+                                                    .to_ascii_lowercase()
+                                                    .ends_with(".zip")
+                                                {
                                                     format!("{}.zip", args.filename)
                                                 } else {
                                                     args.filename.clone()
                                                 };
-                                                match crate::document::create_in_memory_zip(&args.filename, args.content.as_bytes()) {
+                                                match crate::document::create_in_memory_zip(
+                                                    &args.filename,
+                                                    args.content.as_bytes(),
+                                                ) {
                                                     Ok(z) => (z, zip_name, Some("application/zip")),
-                                                    Err(_) => (args.content.into_bytes(), args.filename.clone(), Some(crate::document::detect_mime_from_filename(&args.filename))),
+                                                    Err(_) => (
+                                                        args.content.into_bytes(),
+                                                        args.filename.clone(),
+                                                        Some(
+                                                            crate::document::detect_mime_from_filename(
+                                                                &args.filename,
+                                                            ),
+                                                        ),
+                                                    ),
                                                 }
                                             } else {
-                                                (args.content.into_bytes(), args.filename.clone(), Some(crate::document::detect_mime_from_filename(&args.filename)))
+                                                (
+                                                    args.content.into_bytes(),
+                                                    args.filename.clone(),
+                                                    Some(
+                                                        crate::document::detect_mime_from_filename(
+                                                            &args.filename,
+                                                        ),
+                                                    ),
+                                                )
                                             };
-                                            
-                                            match bot_client.send_document_bytes(
-                                                chat_id,
-                                                &final_filename,
-                                                final_bytes,
-                                                mime_type,
-                                                args.caption.as_deref(),
-                                                None,
-                                                None,
-                                                reply_to_message_id,
-                                            ).await {
+
+                                            match bot_client
+                                                .send_document_bytes(
+                                                    chat_id,
+                                                    &final_filename,
+                                                    final_bytes,
+                                                    mime_type,
+                                                    args.caption.as_deref(),
+                                                    None,
+                                                    None,
+                                                    reply_to_message_id,
+                                                )
+                                                .await
+                                            {
                                                 Ok(_) => {
                                                     format!("Dokumen '{}' berhasil dibuat dan telah dikirim langsung ke obrolan Telegram pengguna. Selesaikan narasi Anda dengan mengonfirmasi bahwa dokumen sudah dikirim.", final_filename)
                                                 }
-                                                Err(e) => format!("Gagal mengirim dokumen: {e}")
+                                                Err(e) => format!("Gagal mengirim dokumen: {e}"),
                                             }
                                         } else {
                                             "Bot client tidak tersedia untuk mengirim dokumen langsung.".to_string()

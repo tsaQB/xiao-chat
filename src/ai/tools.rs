@@ -2563,7 +2563,8 @@ pub struct CreateDocumentArgs {
 #[allow(dead_code)]
 impl CreateDocumentArgs {
     pub fn sanitize(&mut self) {
-        let mut clean_name = self.filename
+        let mut clean_name = self
+            .filename
             .replace("../", "")
             .replace("..\\", "")
             .replace('/', "")
