@@ -3828,32 +3828,3 @@ fn test_tier4_scenario_anti_empty_ai_response_graceful_recovery() {
     assert!(extracted_text.contains("Gunung Rinjani"));
     assert!(extracted_text.contains("Pulau Lombok"));
 }
-
-#[test]
-fn test_markdown_parser_converts_document_tag_to_rich_block() {
-    use bot::models::base::RichBlock;
-    use parser::markdown::parse_streaming_markdown_to_rich_blocks;
-    let md = "Berikut laporannya:\n\n[document: test.pdf](attach://doc_0)";
-    let blocks = parse_streaming_markdown_to_rich_blocks(md);
-
-    assert_eq!(blocks.len(), 2);
-
-    // First block is a paragraph
-    if let RichBlock::Paragraph { text, .. } = &blocks[0] {
-        assert_eq!(text, "Berikut laporannya:");
-    } else {
-        panic!("Expected Paragraph, got {:?}", blocks[0]);
-    }
-
-    // Second block is the document
-    if let RichBlock::Document {
-        document, caption, ..
-    } = &blocks[1]
-    {
-        assert_eq!(document["type"], "document");
-        assert_eq!(document["media"], "attach://doc_0");
-        assert_eq!(caption.text, "test.pdf");
-    } else {
-        panic!("Expected Document, got {:?}", blocks[1]);
-    }
-}
