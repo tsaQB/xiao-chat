@@ -132,7 +132,7 @@ fn extract_leaked_tool_calls(raw: &str) -> Vec<PendingToolCall> {
                                 args_str.to_string()
                             } else if let Some(args_val) = v.get("arguments") {
                                 args_val.to_string()
-                        } else {
+                            } else {
                                 String::new()
                             };
                         let id = v
@@ -298,7 +298,14 @@ impl AIChatService {
 
         let main = match Self::resolve_model_route_from_snapshot(snapshot, ModelRole::Main) {
             Ok(route) => route,
-            Err(error) => return (None, format!("Main Model is unavailable: {error}"), Vec::new(), false),
+            Err(error) => {
+                return (
+                    None,
+                    format!("Main Model is unavailable: {error}"),
+                    Vec::new(),
+                    false,
+                )
+            }
         };
 
         let has_vision = image_bytes.is_some()
@@ -405,7 +412,12 @@ impl AIChatService {
             }
 
             let Some(bytes) = audio_bytes.clone() else {
-                return (None, "Audio input is missing.".to_string(), Vec::new(), false);
+                return (
+                    None,
+                    "Audio input is missing.".to_string(),
+                    Vec::new(),
+                    false,
+                );
             };
             let transcript_result = tokio::select! {
                 changed = cancel_rx.changed() => {
@@ -1033,7 +1045,7 @@ impl AIChatService {
                                 "Error sending AI completion request: {}",
                                 if e.is_timeout() {
                                     "timeout"
-                            } else {
+                                } else {
                                     "transport failure"
                                 }
                             );
@@ -1055,7 +1067,8 @@ impl AIChatService {
                     } else {
                         "⚠️ Provider tidak merespons setelah beberapa percobaan.".to_string()
                     },
-                    Vec::new(), false,
+                    Vec::new(),
+                    false,
                 );
             };
 
@@ -1069,7 +1082,8 @@ impl AIChatService {
                 return (
                     None,
                     format!("⚠️ Gagal menghubungi AI proxy: {status_code}"),
-                    Vec::new(), false,
+                    Vec::new(),
+                    false,
                 );
             }
 
@@ -1363,13 +1377,13 @@ impl AIChatService {
                                                         (None, Some(format!("Gagal mengirim pesan pengantar kuis ke Telegram: {err}")))
                                                     }
                                                 }
-                                        } else {
+                                            } else {
                                                 (None, None)
                                             };
 
                                             if let Some(err) = preamble_err {
                                                 err
-                                        } else {
+                                            } else {
                                                 let poll_reply_to =
                                                     preamble_msg_id.or(reply_to_message_id);
                                                 let input_options: Vec<
@@ -1394,7 +1408,7 @@ impl AIChatService {
                                                         Some("quiz"),
                                                         Some(correct_id),
                                                         args.explanation.as_deref(),
-                                                    None,
+                                                        None,
                                                         poll_reply_to,
                                                     )
                                                     .await
@@ -1415,7 +1429,7 @@ impl AIChatService {
                                                         {
                                                             let mark = if i as i32 == correct_id {
                                                                 " (Benar)"
-                                                        } else {
+                                                            } else {
                                                                 ""
                                                             };
                                                             summary.push_str(&format!(
@@ -1433,7 +1447,7 @@ impl AIChatService {
                                                         {
                                                             existing.push_str("\n\n---\n\n");
                                                             existing.push_str(&summary);
-                                                    } else {
+                                                        } else {
                                                             quiz_history_summary = Some(summary);
                                                         }
                                                         "Kuis native Telegram berhasil dikirim ke obrolan.".to_string()
@@ -1448,7 +1462,7 @@ impl AIChatService {
                                                     }
                                                 }
                                             }
-                                    } else {
+                                        } else {
                                             let mut output = String::new();
                                             if let Some(pre) = &args.preamble {
                                                 output.push_str(pre);
@@ -1461,7 +1475,7 @@ impl AIChatService {
                                             for (i, opt) in args.options.iter().enumerate() {
                                                 let marker = if i as i32 == correct_id {
                                                     "✅"
-                                            } else {
+                                                } else {
                                                     "⚪"
                                                 };
                                                 output.push_str(&format!(
@@ -1501,7 +1515,7 @@ impl AIChatService {
                                                 args.url,
                                                 caption.replace('"', "&quot;")
                                             )
-                                    } else {
+                                        } else {
                                             format!(r#"<img src="{}"/>"#, args.url)
                                         };
                                         staged_media_tags.push(tag.clone());
@@ -1532,7 +1546,7 @@ impl AIChatService {
                                                 r#" caption="{}""#,
                                                 caption.replace('"', "&quot;")
                                             )
-                                    } else {
+                                        } else {
                                             String::new()
                                         };
                                         let img_tags = args
@@ -1572,7 +1586,7 @@ impl AIChatService {
                                                 r#" caption="{}""#,
                                                 caption.replace('"', "&quot;")
                                             )
-                                    } else {
+                                        } else {
                                             String::new()
                                         };
                                         let img_tags = args
@@ -1627,7 +1641,7 @@ impl AIChatService {
                                         }
                                         let extra = if attrs.is_empty() {
                                             String::new()
-                                    } else {
+                                        } else {
                                             format!(" {}", attrs.join(" "))
                                         };
                                         let audio_tag =
@@ -1682,7 +1696,7 @@ impl AIChatService {
                                     Ok(()) => {
                                         let title_attr = if let Some(title) = &args.title {
                                             format!(r#" title="{}""#, title.replace('"', "&quot;"))
-                                    } else {
+                                        } else {
                                             String::new()
                                         };
                                         let map_tag = format!(
@@ -1747,7 +1761,7 @@ impl AIChatService {
                                                     .ends_with(".zip")
                                                 {
                                                     format!("{}.zip", args.filename)
-                                            } else {
+                                                } else {
                                                     args.filename.clone()
                                                 };
                                                 match crate::document::create_in_memory_zip(
@@ -1766,7 +1780,7 @@ impl AIChatService {
                                                         .to_string(),
                                                     ),
                                                 }
-                                        } else {
+                                            } else {
                                                 (
                                                     args.content.into_bytes(),
                                                     args.filename.clone(),
@@ -1889,7 +1903,7 @@ impl AIChatService {
                         "[QUIZ_SENT]".to_string(),
                         Vec::new(),
                         false,
-                        );
+                    );
                 }
 
                 let tool_calls_json = tool_results
