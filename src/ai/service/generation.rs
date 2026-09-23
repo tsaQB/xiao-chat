@@ -68,13 +68,19 @@ pub(crate) fn max_output_tokens_for_model(model: &str) -> usize {
 
 pub(crate) fn cancelled_chat_result(
     sink: Option<&dyn GenerationProgressSink>,
-) -> (Option<String>, String, bool) {
+) -> (
+    Option<String>,
+    String,
+    Vec<(String, Vec<u8>, String, String)>,
+    bool,
+) {
     if let Some(sink) = sink {
         sink.on_failure("Stopped by user", false);
     }
     (
         None,
         "⏹️ Generasi dihentikan oleh pengguna.".to_string(),
+        Vec::new(),
         true,
     )
 }
@@ -126,7 +132,7 @@ fn extract_leaked_tool_calls(raw: &str) -> Vec<PendingToolCall> {
                                 args_str.to_string()
                             } else if let Some(args_val) = v.get("arguments") {
                                 args_val.to_string()
-                            } else {
+                        } else {
                                 String::new()
                             };
                         let id = v
@@ -292,7 +298,7 @@ impl AIChatService {
 
         let main = match Self::resolve_model_route_from_snapshot(snapshot, ModelRole::Main) {
             Ok(route) => route,
-            Err(error) => return (None, format!("Main Model is unavailable: {error}"), false),
+            Err(error) => return (None, format!("Main Model is unavailable: {error}"), Vec::new(), false),
         };
 
         let has_vision = image_bytes.is_some()
@@ -346,6 +352,7 @@ impl AIChatService {
                 return (
                     None,
                     format!("{} unavailable: {error}", role.display_name()),
+                    Vec::new(),
                     false,
                 )
             }
@@ -363,7 +370,7 @@ impl AIChatService {
                 doc_name,
             ) {
                 Ok(mode) => mode,
-                Err(error) => return (None, error, false),
+                Err(error) => return (None, error, Vec::new(), false),
             };
 
             if audio_mode == AudioExecutionMode::Native {
@@ -398,7 +405,7 @@ impl AIChatService {
             }
 
             let Some(bytes) = audio_bytes.clone() else {
-                return (None, "Audio input is missing.".to_string(), false);
+                return (None, "Audio input is missing.".to_string(), Vec::new(), false);
             };
             let transcript_result = tokio::select! {
                 changed = cancel_rx.changed() => {
@@ -416,7 +423,7 @@ impl AIChatService {
             };
             let transcript = match transcript_result {
                 Ok(transcript) => transcript,
-                Err(error) => return (None, error, false),
+                Err(error) => return (None, error, Vec::new(), false),
             };
             let synthesis_prompt = if prompt.trim().is_empty() {
                 format!("Transcript from Audio STT specialist:\n\n{transcript}\n\nRespond to the user based on this transcript.")
@@ -507,7 +514,7 @@ impl AIChatService {
         };
         let observation = match observation_result {
             Ok(observation) => observation,
-            Err(error) => return (None, error, false),
+            Err(error) => return (None, error, Vec::new(), false),
         };
         let synthesis_prompt = format!(
             "User request:\n{}\n\nBounded {} observation from {} / {}:\n{}\n\nUse the observation as an execution artifact. Do not claim access to media beyond it.",
@@ -678,6 +685,7 @@ impl AIChatService {
                     format!(
                         "⚠️ Model `{model}` adalah model khusus pembuatan gambar (Image Generation), bukan model percakapan teks.\n\nSilakan gunakan perintah `/image [deskripsi]` untuk membuat gambar, atau alihkan model utama ke model percakapan teks (seperti `gemini-3.8-flash-high`) melalui menu `/model`."
                     ),
+                    Vec::new(),
                     false,
                 );
             }
@@ -828,7 +836,7 @@ impl AIChatService {
             } else if let Some(v_bytes) = video_bytes.as_ref() {
                 let data_url = match media_data_url(v_bytes, video_mime, "video/", "video") {
                     Ok(data_url) => data_url,
-                    Err(error) => return (None, error, false),
+                    Err(error) => return (None, error, Vec::new(), false),
                 };
                 messages.push(json!({
                     "role": "user",
@@ -840,7 +848,7 @@ impl AIChatService {
             } else if let Some(i_bytes) = image_bytes.as_ref() {
                 let data_url = match media_data_url(i_bytes, mime_type, "image/", "image") {
                     Ok(data_url) => data_url,
-                    Err(error) => return (None, error, false),
+                    Err(error) => return (None, error, Vec::new(), false),
                 };
                 messages.push(json!({
                     "role": "user",
@@ -858,7 +866,8 @@ impl AIChatService {
                             format!(
                                 "Native audio payload was blocked because its format cannot be represented safely: {error}."
                             ),
-                            false,
+                        Vec::new(),
+                        false,
                         )
                     }
                 };
@@ -950,7 +959,7 @@ impl AIChatService {
                             if let Some(s) = sink {
                                 s.on_failure("Stopped by user", false);
                             }
-                            return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), true);
+                            return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), Vec::new(), true);
                         }
                         send_future.as_mut().await
                     }
@@ -978,7 +987,7 @@ impl AIChatService {
                                     if let Some(s) = sink {
                                         s.on_failure("Stopped by user", false);
                                     }
-                                    return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), true);
+                                    return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), Vec::new(), true);
                                 }
                             }
                         }
@@ -1015,7 +1024,7 @@ impl AIChatService {
                                         if let Some(s) = sink {
                                             s.on_failure("Stopped by user", false);
                                         }
-                                        return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), true);
+                                        return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), Vec::new(), true);
                                     }
                                 }
                             }
@@ -1024,7 +1033,7 @@ impl AIChatService {
                                 "Error sending AI completion request: {}",
                                 if e.is_timeout() {
                                     "timeout"
-                                } else {
+                            } else {
                                     "transport failure"
                                 }
                             );
@@ -1046,7 +1055,7 @@ impl AIChatService {
                     } else {
                         "⚠️ Provider tidak merespons setelah beberapa percobaan.".to_string()
                     },
-                    false,
+                    Vec::new(), false,
                 );
             };
 
@@ -1060,7 +1069,7 @@ impl AIChatService {
                 return (
                     None,
                     format!("⚠️ Gagal menghubungi AI proxy: {status_code}"),
-                    false,
+                    Vec::new(), false,
                 );
             }
 
@@ -1329,8 +1338,8 @@ impl AIChatService {
                                                     .send_rich_message(
                                                         chat_id,
                                                         &rich_preamble,
-                                                        None,
-                                                        None,
+                                                    None,
+                                                    None,
                                                         reply_to_message_id,
                                                     )
                                                     .await
@@ -1346,7 +1355,7 @@ impl AIChatService {
                                                             });
                                                         if let Some(pid) = pid {
                                                             (Some(pid), None)
-                                                        } else {
+                                                    } else {
                                                             (None, Some(format!("Gagal mendapatkan ID pesan pengantar kuis dari Telegram: {res}")))
                                                         }
                                                     }
@@ -1354,13 +1363,13 @@ impl AIChatService {
                                                         (None, Some(format!("Gagal mengirim pesan pengantar kuis ke Telegram: {err}")))
                                                     }
                                                 }
-                                            } else {
+                                        } else {
                                                 (None, None)
                                             };
 
                                             if let Some(err) = preamble_err {
                                                 err
-                                            } else {
+                                        } else {
                                                 let poll_reply_to =
                                                     preamble_msg_id.or(reply_to_message_id);
                                                 let input_options: Vec<
@@ -1385,7 +1394,7 @@ impl AIChatService {
                                                         Some("quiz"),
                                                         Some(correct_id),
                                                         args.explanation.as_deref(),
-                                                        None,
+                                                    None,
                                                         poll_reply_to,
                                                     )
                                                     .await
@@ -1406,7 +1415,7 @@ impl AIChatService {
                                                         {
                                                             let mark = if i as i32 == correct_id {
                                                                 " (Benar)"
-                                                            } else {
+                                                        } else {
                                                                 ""
                                                             };
                                                             summary.push_str(&format!(
@@ -1424,7 +1433,7 @@ impl AIChatService {
                                                         {
                                                             existing.push_str("\n\n---\n\n");
                                                             existing.push_str(&summary);
-                                                        } else {
+                                                    } else {
                                                             quiz_history_summary = Some(summary);
                                                         }
                                                         "Kuis native Telegram berhasil dikirim ke obrolan.".to_string()
@@ -1439,7 +1448,7 @@ impl AIChatService {
                                                     }
                                                 }
                                             }
-                                        } else {
+                                    } else {
                                             let mut output = String::new();
                                             if let Some(pre) = &args.preamble {
                                                 output.push_str(pre);
@@ -1452,7 +1461,7 @@ impl AIChatService {
                                             for (i, opt) in args.options.iter().enumerate() {
                                                 let marker = if i as i32 == correct_id {
                                                     "✅"
-                                                } else {
+                                            } else {
                                                     "⚪"
                                                 };
                                                 output.push_str(&format!(
@@ -1492,7 +1501,7 @@ impl AIChatService {
                                                 args.url,
                                                 caption.replace('"', "&quot;")
                                             )
-                                        } else {
+                                    } else {
                                             format!(r#"<img src="{}"/>"#, args.url)
                                         };
                                         staged_media_tags.push(tag.clone());
@@ -1523,7 +1532,7 @@ impl AIChatService {
                                                 r#" caption="{}""#,
                                                 caption.replace('"', "&quot;")
                                             )
-                                        } else {
+                                    } else {
                                             String::new()
                                         };
                                         let img_tags = args
@@ -1563,7 +1572,7 @@ impl AIChatService {
                                                 r#" caption="{}""#,
                                                 caption.replace('"', "&quot;")
                                             )
-                                        } else {
+                                    } else {
                                             String::new()
                                         };
                                         let img_tags = args
@@ -1618,7 +1627,7 @@ impl AIChatService {
                                         }
                                         let extra = if attrs.is_empty() {
                                             String::new()
-                                        } else {
+                                    } else {
                                             format!(" {}", attrs.join(" "))
                                         };
                                         let audio_tag =
@@ -1673,7 +1682,7 @@ impl AIChatService {
                                     Ok(()) => {
                                         let title_attr = if let Some(title) = &args.title {
                                             format!(r#" title="{}""#, title.replace('"', "&quot;"))
-                                        } else {
+                                    } else {
                                             String::new()
                                         };
                                         let map_tag = format!(
@@ -1738,7 +1747,7 @@ impl AIChatService {
                                                     .ends_with(".zip")
                                                 {
                                                     format!("{}.zip", args.filename)
-                                                } else {
+                                            } else {
                                                     args.filename.clone()
                                                 };
                                                 match crate::document::create_in_memory_zip(
@@ -1757,7 +1766,7 @@ impl AIChatService {
                                                         .to_string(),
                                                     ),
                                                 }
-                                            } else {
+                                        } else {
                                                 (
                                                     args.content.into_bytes(),
                                                     args.filename.clone(),
@@ -1878,8 +1887,9 @@ impl AIChatService {
                             None
                         },
                         "[QUIZ_SENT]".to_string(),
+                        Vec::new(),
                         false,
-                    );
+                        );
                 }
 
                 let tool_calls_json = tool_results
@@ -2098,7 +2108,7 @@ impl AIChatService {
         );
         let user_content_str = serde_json::to_string(&user_message_content).unwrap_or_default();
         if cancelled {
-            return (thinking_text, answer_text, true);
+            return (thinking_text, answer_text, staged_documents, true);
         }
         let assistant_content_str = answer_text.clone();
 

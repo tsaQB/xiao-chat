@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 use crate::bot::client::{TelegramBotClient, TelegramDeliveryContext};
 use crate::bot::models::{InputRichMessage, RichBlock};
 use crate::parser::parse_streaming_markdown_to_rich_blocks;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressState {
