@@ -1269,7 +1269,9 @@ impl TelegramBotClient {
     ) -> Result<Value, String> {
         let mut part = Part::bytes(bytes).file_name(filename.to_string());
         if let Some(mime) = mime_type {
-            part = part.mime_str(mime).expect("invalid mime type string");
+            if let Ok(p) = part.mime_str(mime) {
+                part = p;
+            }
         }
         let form = Form::new()
             .text("chat_id", chat_id.to_string())
@@ -1283,9 +1285,10 @@ impl TelegramBotClient {
             form = form.text("parse_mode", pm.to_string());
         }
         if let Some(rm) = reply_markup {
-            let rm_str = serde_json::to_string(&rm).expect("failed to serialize reply_markup");
-            if !rm_str.is_empty() {
-                form = form.text("reply_markup", rm_str);
+            if let Ok(rm_str) = serde_json::to_string(&rm) {
+                if !rm_str.is_empty() {
+                    form = form.text("reply_markup", rm_str);
+                }
             }
         }
 

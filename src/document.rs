@@ -800,4 +800,14 @@ mod tests {
         // Verify it contains standard zip headers (PK..)
         assert_eq!(&zip_bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
     }
+
+    #[test]
+    fn test_detect_mime_from_filename() {
+        assert_eq!(detect_mime_from_filename("code.py"), "text/plain");
+        assert_eq!(detect_mime_from_filename("data.csv"), "text/csv");
+        assert_eq!(detect_mime_from_filename("doc.pdf"), "application/pdf");
+        assert_eq!(detect_mime_from_filename("archive.zip"), "application/zip");
+        assert_eq!(detect_mime_from_filename("vector.svg"), "image/svg+xml");
+        assert_eq!(detect_mime_from_filename("unknown.xyz"), "application/octet-stream");
+    }
 }
