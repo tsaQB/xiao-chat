@@ -30,6 +30,12 @@ pub(crate) const MAX_STREAM_VISIBLE_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_STREAM_REASONING_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_STREAM_WIRE_BYTES: usize = 32 * 1024 * 1024;
 
+/// (attach_key, bytes, mime, filename)
+pub(crate) type StagedDocument = (String, Vec<u8>, String, String);
+
+/// (thinking_text, answer_text, staged_documents, cancelled)
+pub(crate) type ChatGenerationResult = (Option<String>, String, Vec<StagedDocument>, bool);
+
 static NEXT_DRAFT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(100_000);
 
 pub fn next_draft_id() -> i64 {
@@ -68,12 +74,7 @@ pub(crate) fn max_output_tokens_for_model(model: &str) -> usize {
 
 pub(crate) fn cancelled_chat_result(
     sink: Option<&dyn GenerationProgressSink>,
-) -> (
-    Option<String>,
-    String,
-    Vec<(String, Vec<u8>, String, String)>,
-    bool,
-) {
+) -> ChatGenerationResult {
     if let Some(sink) = sink {
         sink.on_failure("Stopped by user", false);
     }
@@ -210,12 +211,7 @@ impl AIChatService {
         user_id: i64,
         input: GenerationInput<'_>,
         cancel_rx: &mut watch::Receiver<bool>,
-    ) -> (
-        Option<String>,
-        String,
-        Vec<(String, Vec<u8>, String, String)>,
-        bool,
-    ) {
+    ) -> ChatGenerationResult {
         let snapshot = self.generation_model_snapshot().await;
         self.generate_response_with_snapshot(
             chat_id, thread_id, user_id, input, &snapshot, cancel_rx,
@@ -231,12 +227,7 @@ impl AIChatService {
         input: GenerationInput<'_>,
         snapshot: &GenerationModelSnapshot,
         cancel_rx: &mut watch::Receiver<bool>,
-    ) -> (
-        Option<String>,
-        String,
-        Vec<(String, Vec<u8>, String, String)>,
-        bool,
-    ) {
+    ) -> ChatGenerationResult {
         if thread_id > 0
             && crate::bot::client::TelegramBotClient::current_delivery_context()
                 .message_thread_id
@@ -267,12 +258,7 @@ impl AIChatService {
         input: GenerationInput<'_>,
         snapshot: &GenerationModelSnapshot,
         cancel_rx: &mut watch::Receiver<bool>,
-    ) -> (
-        Option<String>,
-        String,
-        Vec<(String, Vec<u8>, String, String)>,
-        bool,
-    ) {
+    ) -> ChatGenerationResult {
         let GenerationInput {
             prompt,
             canonical_prompt: _,
@@ -650,12 +636,7 @@ impl AIChatService {
         snapshot: &GenerationModelSnapshot,
         input: GenerationInput<'_>,
         cancel_rx: &mut watch::Receiver<bool>,
-    ) -> (
-        Option<String>,
-        String,
-        Vec<(String, Vec<u8>, String, String)>,
-        bool,
-    ) {
+    ) -> ChatGenerationResult {
         let GenerationInput {
             prompt,
             canonical_prompt,
@@ -933,7 +914,7 @@ impl AIChatService {
         let mut stream_interrupted = false;
         let mut has_started_answer = false;
         let mut staged_media_tags: Vec<String> = Vec::new();
-        let mut staged_documents: Vec<(String, Vec<u8>, String, String)> = Vec::new();
+        let mut staged_documents: Vec<StagedDocument> = Vec::new();
         let mut has_executed_multimedia_or_quiz = false;
 
         for turn in 0..3 {
