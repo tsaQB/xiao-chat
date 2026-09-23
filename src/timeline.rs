@@ -551,26 +551,7 @@ impl ExecutionTimeline {
         }
 
         let reply_to_msg_id = self.inner.reply_to_message_id;
-
-        let mut reply_markup: Option<Value> = None;
-        for block in &full_rich_msg.blocks {
-            if matches!(block, RichBlock::Slideshow { .. }) {
-                let slides = block.get_media_urls();
-                if slides.len() >= 2 {
-                    let carousel_id = format!("{:08x}", rand::random::<u32>());
-                    let cap = block.caption_text();
-                    crate::bot::router::register_carousel(carousel_id.clone(), slides.clone(), cap);
-                    let kb =
-                        crate::bot::router::build_carousel_keyboard(&carousel_id, 0, slides.len());
-                    if !kb.inline_keyboard.is_empty() {
-                        if let Ok(rm_val) = serde_json::to_value(kb) {
-                            reply_markup = Some(rm_val);
-                        }
-                    }
-                }
-                break;
-            }
-        }
+        let reply_markup: Option<Value> = None;
 
         if let Some(msg_id) = placeholder_msg_id {
             match self

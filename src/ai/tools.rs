@@ -540,7 +540,7 @@ pub fn get_tools_definition() -> Value {
             "type": "function",
             "function": {
                 "name": "send_slideshow",
-                "description": "Kirim tayangan slide foto interaktif (carousel) ke obrolan Telegram dengan tombol navigasi pagination inline keyboard (⬅️, 1/N, ➡️).",
+                "description": "Kirim tayangan slide foto interaktif (native carousel <tg-slideshow>) ke obrolan Telegram yang dapat digeser atau dibolak-balik fotonya langsung melalui kontrol navigasi bawaan Telegram pada gambar.",
                 "parameters": {
                     "type": "object",
                     "properties": {
