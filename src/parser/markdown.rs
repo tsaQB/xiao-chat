@@ -4561,7 +4561,8 @@ Berikut adalah uraian I'rab:
         {
             assert_eq!(document["type"], "document");
             assert_eq!(document["media"], "attach://doc_0");
-            assert_eq!(caption.text, "test.pdf");
+            let cap = caption.as_ref().expect("caption must be present");
+            assert_eq!(cap.text, serde_json::json!("test.pdf"));
         } else {
             panic!("Expected Document, got {:?}", blocks[1]);
         }
