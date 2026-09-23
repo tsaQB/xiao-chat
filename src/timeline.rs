@@ -557,16 +557,16 @@ impl ExecutionTimeline {
         let reply_to_msg_id = self.inner.reply_to_message_id;
         let reply_markup: Option<serde_json::Value> = None;
 
-        // If there's an existing placeholder message (in groups or streaming drafts), delete it first because editMessageMedia/editMessageText does not support full sendRichMessage multipart upload
-        if let Some(msg_id) = placeholder_msg_id {
-            let _ = self
-                .inner
-                .bot
-                .delete_message(self.inner.chat_id, msg_id)
-                .await;
-        }
-
         if !attached_files.is_empty() {
+            // If there's an existing placeholder message (in groups or streaming drafts), delete it first because editMessageMedia/editMessageText does not support full sendRichMessage multipart upload
+            if let Some(msg_id) = placeholder_msg_id {
+                let _ = self
+                    .inner
+                    .bot
+                    .delete_message(self.inner.chat_id, msg_id)
+                    .await;
+            }
+
             self.inner
                 .bot
                 .send_rich_message_with_media_params(
@@ -578,6 +578,40 @@ impl ExecutionTimeline {
                     reply_to_msg_id,
                 )
                 .await
+        } else if let Some(msg_id) = placeholder_msg_id {
+            match self
+                .inner
+                .bot
+                .edit_rich_message(
+                    self.inner.chat_id,
+                    msg_id,
+                    full_rich_msg,
+                    reply_markup.clone(),
+                )
+                .await
+            {
+                Ok(val) => Ok(val),
+                Err(e) => {
+                    warn!(
+                        "Failed to edit group placeholder into final answer ({e}), falling back to send_rich_message"
+                    );
+                    let _ = self
+                        .inner
+                        .bot
+                        .delete_message(self.inner.chat_id, msg_id)
+                        .await;
+                    self.inner
+                        .bot
+                        .send_rich_message(
+                            self.inner.chat_id,
+                            full_rich_msg,
+                            reply_markup,
+                            None,
+                            reply_to_msg_id,
+                        )
+                        .await
+                }
+            }
         } else {
             self.inner
                 .bot
