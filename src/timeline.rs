@@ -538,7 +538,11 @@ impl ExecutionTimeline {
         }
     }
 
-    pub async fn finalize_answer(&self, full_rich_msg: &InputRichMessage) -> Result<Value, String> {
+    pub async fn finalize_answer_with_media(
+        &self,
+        full_rich_msg: &crate::bot::models::InputRichMessage,
+        attached_files: Vec<(String, Vec<u8>, String, String)>,
+    ) -> Result<serde_json::Value, String> {
         let _sync_guard = self.inner.sync_lock.lock().await;
         let (placeholder_msg_id, is_failed) = {
             let mut state = self.lock_state();
@@ -547,46 +551,33 @@ impl ExecutionTimeline {
         };
 
         if is_failed {
-            return Ok(json!({"ok": true, "failed": true}));
+            return Ok(serde_json::json!({"ok": true, "failed": true}));
         }
 
         let reply_to_msg_id = self.inner.reply_to_message_id;
-        let reply_markup: Option<Value> = None;
+        let reply_markup: Option<serde_json::Value> = None;
 
+        // If there's an existing placeholder message (in groups or streaming drafts), delete it first because editMessageMedia/editMessageText does not support full sendRichMessage multipart upload
         if let Some(msg_id) = placeholder_msg_id {
-            match self
+            let _ = self
                 .inner
                 .bot
-                .edit_rich_message(
+                .delete_message(self.inner.chat_id, msg_id)
+                .await;
+        }
+
+        if !attached_files.is_empty() {
+            self.inner
+                .bot
+                .send_rich_message_with_media_params(
                     self.inner.chat_id,
-                    msg_id,
                     full_rich_msg,
-                    reply_markup.clone(),
+                    attached_files,
+                    reply_markup,
+                    None,
+                    reply_to_msg_id,
                 )
                 .await
-            {
-                Ok(val) => Ok(val),
-                Err(e) => {
-                    warn!(
-                        "Failed to edit group placeholder into final answer ({e}), falling back to send_rich_message"
-                    );
-                    let _ = self
-                        .inner
-                        .bot
-                        .delete_message(self.inner.chat_id, msg_id)
-                        .await;
-                    self.inner
-                        .bot
-                        .send_rich_message(
-                            self.inner.chat_id,
-                            full_rich_msg,
-                            reply_markup,
-                            None,
-                            reply_to_msg_id,
-                        )
-                        .await
-                }
-            }
         } else {
             self.inner
                 .bot
@@ -599,6 +590,14 @@ impl ExecutionTimeline {
                 )
                 .await
         }
+    }
+
+    pub async fn finalize_answer(
+        &self,
+        full_rich_msg: &crate::bot::models::InputRichMessage,
+    ) -> Result<serde_json::Value, String> {
+        self.finalize_answer_with_media(full_rich_msg, Vec::new())
+            .await
     }
 
     pub async fn delete_placeholder(&self) {

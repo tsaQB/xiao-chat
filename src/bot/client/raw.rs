@@ -1595,7 +1595,7 @@ impl TelegramBotClient {
         &self,
         chat_id: i64,
         rich_message: &InputRichMessage,
-        attached_files: Vec<(String, Vec<u8>, String)>,
+        attached_files: Vec<(String, Vec<u8>, String, String)>,
         reply_markup: Option<Value>,
         receiver_user_id: Option<i64>,
     ) -> Result<Value, String> {
@@ -1614,7 +1614,7 @@ impl TelegramBotClient {
         &self,
         chat_id: i64,
         rich_message: &InputRichMessage,
-        attached_files: Vec<(String, Vec<u8>, String)>,
+        attached_files: Vec<(String, Vec<u8>, String, String)>,
         reply_markup: Option<Value>,
         receiver_user_id: Option<i64>,
         reply_to_message_id: Option<i64>,
@@ -1636,13 +1636,7 @@ impl TelegramBotClient {
         rich_message.validate()?;
 
         let mut resolved_msg = rich_message.clone();
-        let mut all_attachments: Vec<(String, Vec<u8>, String, String)> = attached_files
-            .into_iter()
-            .map(|(name, bytes, mime)| {
-                let fname = name.clone();
-                (name, bytes, mime, fname)
-            })
-            .collect();
+        let mut all_attachments: Vec<(String, Vec<u8>, String, String)> = attached_files;
 
         if let Some(ref mut media_items) = resolved_msg.media {
             for item in media_items.iter_mut() {

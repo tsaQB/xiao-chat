@@ -492,28 +492,29 @@ pub async fn handle_ai_chat(
         reply_to_message_id,
     };
     let generation_start = std::time::Instant::now();
-    let (_thinking, mut answer_text, cancelled) = if let Some(snapshot) = model_snapshot {
-        ai_service
-            .generate_response_with_snapshot(
-                chat_id,
-                thread_id,
-                user_id,
-                generation_input,
-                snapshot,
-                &mut cancel_rx,
-            )
-            .await
-    } else {
-        ai_service
-            .generate_response(
-                chat_id,
-                thread_id,
-                user_id,
-                generation_input,
-                &mut cancel_rx,
-            )
-            .await
-    };
+    let (_thinking, mut answer_text, staged_documents, cancelled) =
+        if let Some(snapshot) = model_snapshot {
+            ai_service
+                .generate_response_with_snapshot(
+                    chat_id,
+                    thread_id,
+                    user_id,
+                    generation_input,
+                    snapshot,
+                    &mut cancel_rx,
+                )
+                .await
+        } else {
+            ai_service
+                .generate_response(
+                    chat_id,
+                    thread_id,
+                    user_id,
+                    generation_input,
+                    &mut cancel_rx,
+                )
+                .await
+        };
 
     ai_service.end_generation(chat_id, draft_id).await;
     timeline.stop_ticker();
@@ -539,7 +540,9 @@ pub async fn handle_ai_chat(
     }
 
     let full_rich_msg = build_full_rich_message(&answer_text, Some(&elapsed));
-    let res = timeline.finalize_answer(&full_rich_msg).await;
+    let res = timeline
+        .finalize_answer_with_media(&full_rich_msg, staged_documents)
+        .await;
 
     if let Err(error) = res {
         // send_rich_message already exhausts canonical Rich -> safe HTML ->

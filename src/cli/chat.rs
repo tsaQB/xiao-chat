@@ -520,7 +520,7 @@ pub(crate) async fn execute_cli_chat_turn(
                 let _ = handle.await;
             }
 
-            let (thinking, answer, cancelled) = res;
+            let (thinking, answer, _staged_docs, cancelled) = res;
             let elapsed = start.elapsed().as_secs_f64();
 
             if cancelled {

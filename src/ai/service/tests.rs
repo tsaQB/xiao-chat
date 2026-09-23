@@ -1354,7 +1354,7 @@ async fn test_create_quiz_without_preamble_sends_single_bubble_and_emits_sink() 
         reply_to_message_id: Some(100),
     };
 
-    let (_thinking, answer, cancelled) = service
+    let (_thinking, answer, _staged_docs, cancelled) = service
         .generate_response_with_snapshot(1234, 0, 1234, gen_input, &snapshot, &mut receiver)
         .await;
 
@@ -1547,7 +1547,7 @@ async fn test_create_quiz_with_preamble_sends_two_connected_messages() {
         reply_to_message_id: Some(100),
     };
 
-    let (_thinking, answer, cancelled) = service
+    let (_thinking, answer, _staged_docs, cancelled) = service
         .generate_response_with_snapshot(1234, 0, 1234, gen_input, &snapshot, &mut receiver)
         .await;
 
@@ -1743,7 +1743,7 @@ async fn test_create_quiz_in_forum_topic_preserves_thread_id() {
     };
 
     // thread_id = 9988 represents a Telegram forum topic
-    let (_thinking, answer, cancelled) = service
+    let (_thinking, answer, _staged_docs, cancelled) = service
         .generate_response_with_snapshot(1234, 9988, 1234, gen_input, &snapshot, &mut receiver)
         .await;
 
@@ -1979,7 +1979,7 @@ async fn test_create_quiz_deletes_orphan_preamble_if_poll_fails() {
         reply_to_message_id: None,
     };
 
-    let (_thinking, answer, cancelled) = service
+    let (_thinking, answer, _staged_docs, cancelled) = service
         .generate_response_with_snapshot(1234, 0, 1234, gen_input, &snapshot, &mut receiver)
         .await;
 
@@ -2189,7 +2189,7 @@ async fn test_create_quiz_aborts_if_preamble_fails_and_does_not_send_poll() {
         reply_to_message_id: None,
     };
 
-    let (_thinking, answer, cancelled) = service
+    let (_thinking, answer, _staged_docs, cancelled) = service
         .generate_response_with_snapshot(1234, 0, 1234, gen_input, &snapshot, &mut receiver)
         .await;
 

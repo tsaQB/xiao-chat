@@ -204,7 +204,12 @@ impl AIChatService {
         user_id: i64,
         input: GenerationInput<'_>,
         cancel_rx: &mut watch::Receiver<bool>,
-    ) -> (Option<String>, String, bool) {
+    ) -> (
+        Option<String>,
+        String,
+        Vec<(String, Vec<u8>, String, String)>,
+        bool,
+    ) {
         let snapshot = self.generation_model_snapshot().await;
         self.generate_response_with_snapshot(
             chat_id, thread_id, user_id, input, &snapshot, cancel_rx,
@@ -220,7 +225,12 @@ impl AIChatService {
         input: GenerationInput<'_>,
         snapshot: &GenerationModelSnapshot,
         cancel_rx: &mut watch::Receiver<bool>,
-    ) -> (Option<String>, String, bool) {
+    ) -> (
+        Option<String>,
+        String,
+        Vec<(String, Vec<u8>, String, String)>,
+        bool,
+    ) {
         if thread_id > 0
             && crate::bot::client::TelegramBotClient::current_delivery_context()
                 .message_thread_id
@@ -251,7 +261,12 @@ impl AIChatService {
         input: GenerationInput<'_>,
         snapshot: &GenerationModelSnapshot,
         cancel_rx: &mut watch::Receiver<bool>,
-    ) -> (Option<String>, String, bool) {
+    ) -> (
+        Option<String>,
+        String,
+        Vec<(String, Vec<u8>, String, String)>,
+        bool,
+    ) {
         let GenerationInput {
             prompt,
             canonical_prompt: _,
@@ -616,7 +631,12 @@ impl AIChatService {
         snapshot: &GenerationModelSnapshot,
         input: GenerationInput<'_>,
         cancel_rx: &mut watch::Receiver<bool>,
-    ) -> (Option<String>, String, bool) {
+    ) -> (
+        Option<String>,
+        String,
+        Vec<(String, Vec<u8>, String, String)>,
+        bool,
+    ) {
         let GenerationInput {
             prompt,
             canonical_prompt,
@@ -892,6 +912,7 @@ impl AIChatService {
         let mut stream_interrupted = false;
         let mut has_started_answer = false;
         let mut staged_media_tags: Vec<String> = Vec::new();
+        let mut staged_documents: Vec<(String, Vec<u8>, String, String)> = Vec::new();
         let mut has_executed_multimedia_or_quiz = false;
 
         for turn in 0..3 {
@@ -1709,10 +1730,8 @@ impl AIChatService {
                                 args.sanitize();
                                 match args.validate() {
                                     Ok(()) => {
-                                        if let Some(bot_client) = &bot {
-                                            let (final_bytes, final_filename, mime_type) = if args
-                                                .as_zip
-                                            {
+                                        let (final_bytes, final_filename, mime_type) =
+                                            if args.as_zip {
                                                 let zip_name = if !args
                                                     .filename
                                                     .to_ascii_lowercase()
@@ -1726,50 +1745,46 @@ impl AIChatService {
                                                     &args.filename,
                                                     args.content.as_bytes(),
                                                 ) {
-                                                    Ok(z) => (z, zip_name, Some("application/zip")),
+                                                    Ok(z) => {
+                                                        (z, zip_name, "application/zip".to_string())
+                                                    }
                                                     Err(_) => (
                                                         args.content.into_bytes(),
                                                         args.filename.clone(),
-                                                        Some(
-                                                            crate::document::detect_mime_from_filename(
-                                                                &args.filename,
-                                                            ),
-                                                        ),
+                                                        crate::document::detect_mime_from_filename(
+                                                            &args.filename,
+                                                        )
+                                                        .to_string(),
                                                     ),
                                                 }
                                             } else {
                                                 (
                                                     args.content.into_bytes(),
                                                     args.filename.clone(),
-                                                    Some(
-                                                        crate::document::detect_mime_from_filename(
-                                                            &args.filename,
-                                                        ),
-                                                    ),
+                                                    crate::document::detect_mime_from_filename(
+                                                        &args.filename,
+                                                    )
+                                                    .to_string(),
                                                 )
                                             };
 
-                                            match bot_client
-                                                .send_document_bytes(
-                                                    chat_id,
-                                                    &final_filename,
-                                                    final_bytes,
-                                                    mime_type,
-                                                    args.caption.as_deref(),
-                                                    None,
-                                                    None,
-                                                    reply_to_message_id,
-                                                )
-                                                .await
-                                            {
-                                                Ok(_) => {
-                                                    format!("Dokumen '{}' berhasil dibuat dan telah dikirim langsung ke obrolan Telegram pengguna. Selesaikan narasi Anda dengan mengonfirmasi bahwa dokumen sudah dikirim.", final_filename)
-                                                }
-                                                Err(e) => format!("Gagal mengirim dokumen: {e}"),
-                                            }
-                                        } else {
-                                            "Bot client tidak tersedia untuk mengirim dokumen langsung.".to_string()
-                                        }
+                                        let attach_key = format!("doc_{}", staged_documents.len());
+                                        let doc_tag = format!(
+                                            "[document: {}](attach://{})",
+                                            final_filename, attach_key
+                                        );
+                                        staged_media_tags.push(doc_tag.clone());
+                                        staged_documents.push((
+                                            attach_key,
+                                            final_bytes,
+                                            mime_type,
+                                            final_filename.clone(),
+                                        ));
+
+                                        format!(
+                                            "Dokumen '{}' telah berhasil disiapkan di memori. Tag media Telegram: {}\nAnda DAPAT menyematkan tag media ini langsung di tengah atau di bawah penjelasan narasi Anda pada posisi yang paling relevan. Berikan penjelasan naratif yang lengkap dan jelas mengenai dokumen ini kepada pengguna.",
+                                            final_filename, doc_tag
+                                        )
                                     }
                                     Err(validation_err) => {
                                         format!("Validasi dokumen gagal: {validation_err}")
@@ -2023,6 +2038,9 @@ impl AIChatService {
         } else if answer_text.trim().is_empty() {
             if !staged_media_tags.is_empty() {
                 answer_text = staged_media_tags.join("\n\n");
+            } else if !staged_documents.is_empty() {
+                answer_text =
+                    "Dokumen yang diminta telah berhasil dibuat dan dilampirkan.".to_string();
             } else if !accumulated_reasoning.is_empty() {
                 answer_text = "Maaf, Xiao telah memproses permintaan ini namun model tidak menghasilkan teks jawaban. Silakan coba ulangi pertanyaan dengan instruksi yang lebih jelas.".to_string();
             } else {
@@ -2056,7 +2074,7 @@ impl AIChatService {
         // partial answer canonical history: retry/follow-up context must only
         // see completed assistant turns.
         if cancelled || stream_interrupted {
-            return (thinking_text, answer_text, cancelled);
+            return (thinking_text, answer_text, staged_documents, cancelled);
         }
 
         // Persist runtime attachments to storage
@@ -2116,7 +2134,7 @@ impl AIChatService {
                 .await;
         });
 
-        (thinking_text, answer_text, cancelled)
+        (thinking_text, answer_text, staged_documents, cancelled)
     }
 
     async fn process_background_memory_turn(
