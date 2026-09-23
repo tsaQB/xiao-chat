@@ -1269,9 +1269,9 @@ impl TelegramBotClient {
     ) -> Result<Value, String> {
         let mut part = Part::bytes(bytes).file_name(filename.to_string());
         if let Some(mime) = mime_type {
-            if let Ok(p) = part.mime_str(mime) {
-                part = p;
-            }
+            part = part
+                .mime_str(mime)
+                .map_err(|e| format!("MIME type tidak valid: {e}"))?;
         }
         let form = Form::new()
             .text("chat_id", chat_id.to_string())
