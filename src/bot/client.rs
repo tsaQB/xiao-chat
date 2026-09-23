@@ -805,6 +805,31 @@ impl TelegramBotClient {
         .await
     }
 
+    pub async fn send_document_bytes(
+        &self,
+        chat_id: i64,
+        filename: &str,
+        bytes: Vec<u8>,
+        mime_type: Option<&str>,
+        caption: Option<&str>,
+        parse_mode: Option<&str>,
+        reply_markup: Option<Value>,
+        reply_to_message_id: Option<i64>,
+    ) -> Result<Value, String> {
+        self.raw
+            .send_document_bytes(
+                chat_id,
+                filename,
+                bytes,
+                mime_type,
+                caption,
+                parse_mode,
+                reply_markup,
+                reply_to_message_id,
+            )
+            .await
+    }
+
     pub async fn send_document(
         &self,
         chat_id: i64,

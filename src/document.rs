@@ -568,6 +568,52 @@ async fn render_scanned_pdf_pages(data: &[u8], page_count: usize) -> Result<Vec<
     render_result
 }
 
+pub fn create_in_memory_zip(filename: &str, content: &[u8]) -> Result<Vec<u8>, String> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file(filename, options).map_err(|e| format!("Gagal zip start_file: {e}"))?;
+        std::io::Write::write_all(&mut writer, content)
+            .map_err(|e| format!("Gagal write ke zip: {e}"))?;
+        writer.finish().map_err(|e| format!("Gagal finish zip: {e}"))?;
+    }
+    Ok(cursor.into_inner())
+}
+
+pub fn detect_mime_from_filename(filename: &str) -> &'static str {
+    let lower = filename.to_ascii_lowercase();
+    if lower.ends_with(".zip") {
+        "application/zip"
+    } else if lower.ends_with(".pdf") {
+        "application/pdf"
+    } else if lower.ends_with(".csv") {
+        "text/csv"
+    } else if lower.ends_with(".json") {
+        "application/json"
+    } else if lower.ends_with(".yaml") || lower.ends_with(".yml") {
+        "application/x-yaml"
+    } else if lower.ends_with(".svg") {
+        "image/svg+xml"
+    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
+        "text/html"
+    } else if lower.ends_with(".md") {
+        "text/markdown"
+    } else if lower.ends_with(".xml") {
+        "application/xml"
+    } else if lower.ends_with(".txt")
+        || lower.ends_with(".py")
+        || lower.ends_with(".rs")
+        || lower.ends_with(".js")
+        || lower.ends_with(".ts")
+    {
+        "text/plain"
+    } else {
+        "application/octet-stream"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,5 +786,14 @@ mod tests {
             .await
             .expect("should decode lossy non-utf8");
         assert!(doc2.text.expect("text present").contains("Hi "));
+    }
+
+    #[test]
+    fn test_create_in_memory_zip() {
+        let text = b"test code";
+        let zip_bytes = create_in_memory_zip("hello.txt", text).expect("zip created");
+        assert!(zip_bytes.len() > 0);
+        // Verify it contains standard zip headers (PK..)
+        assert_eq!(&zip_bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
     }
 }

@@ -1255,6 +1255,42 @@ impl TelegramBotClient {
         self.post_json("sendLocation", payload).await
     }
 
+    pub async fn send_document_bytes(
+        &self,
+        chat_id: i64,
+        filename: &str,
+        bytes: Vec<u8>,
+        mime_type: Option<&str>,
+        caption: Option<&str>,
+        parse_mode: Option<&str>,
+        reply_markup: Option<Value>,
+        reply_to_message_id: Option<i64>,
+    ) -> Result<Value, String> {
+        let mut part = Part::bytes(bytes).file_name(filename.to_string());
+        if let Some(mime) = mime_type {
+            part = part.mime_str(mime).expect("invalid mime type string");
+        }
+        let form = Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("document", part);
+        let mut form = Self::apply_form_delivery_context(form, reply_to_message_id, true);
+
+        if let Some(cap) = caption {
+            form = form.text("caption", cap.to_string());
+        }
+        if let Some(pm) = parse_mode {
+            form = form.text("parse_mode", pm.to_string());
+        }
+        if let Some(rm) = reply_markup {
+            let rm_str = serde_json::to_string(&rm).expect("failed to serialize reply_markup");
+            if !rm_str.is_empty() {
+                form = form.text("reply_markup", rm_str);
+            }
+        }
+
+        self.post_multipart("sendDocument", form).await
+    }
+
     pub async fn send_document(
         &self,
         chat_id: i64,

@@ -659,6 +659,35 @@ pub fn get_tools_definition() -> Value {
                     "required": ["url"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_document",
+                "description": "Buat berkas/dokumen teks, source code, data CSV/JSON/YAML, vektor SVG, atau arsip ZIP langsung dan kirimkan ke chat Telegram.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filename": {
+                            "type": "string",
+                            "description": "Nama file berkas beserta ekstensinya (contoh: script.py, data.csv)"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Isi/teks dari dokumen yang akan dibuat"
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Keterangan ringkas dokumen (opsional)"
+                        },
+                        "as_zip": {
+                            "type": "boolean",
+                            "description": "True jika berkas harus dikompresi ke dalam ZIP"
+                        }
+                    },
+                    "required": ["filename", "content"]
+                }
+            }
         }
     ])
 }
@@ -2521,6 +2550,55 @@ impl SendDocumentArgs {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct CreateDocumentArgs {
+    pub filename: String,
+    pub content: String,
+    #[serde(default)]
+    pub caption: Option<String>,
+    #[serde(default)]
+    pub as_zip: bool,
+}
+
+#[allow(dead_code)]
+impl CreateDocumentArgs {
+    pub fn sanitize(&mut self) {
+        let mut clean_name = self.filename
+            .replace("../", "")
+            .replace("..\\", "")
+            .replace('/', "")
+            .replace('\\', "")
+            .trim()
+            .to_string();
+        if clean_name.is_empty() {
+            clean_name = "document.txt".to_string();
+        }
+        self.filename = clean_name;
+
+        if let Some(caption) = &mut self.caption {
+            let trimmed = caption.trim().to_string();
+            if trimmed.is_empty() {
+                self.caption = None;
+            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
+                *caption =
+                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
+            } else {
+                *caption = trimmed;
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.content.is_empty() {
+            return Err("Konten dokumen tidak boleh kosong".to_string());
+        }
+        if self.content.len() > 20 * 1024 * 1024 {
+            return Err("Ukuran konten melebihi batas 20MB".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2529,7 +2607,7 @@ mod tests {
     fn test_tools_definition_contains_expected_tools() {
         let tools = get_tools_definition();
         let array = tools.as_array().expect("tools should be an array");
-        assert_eq!(array.len(), 10);
+        assert_eq!(array.len(), 11);
 
         let names: Vec<_> = array
             .iter()
@@ -2545,6 +2623,7 @@ mod tests {
         assert!(names.contains(&"send_voice"));
         assert!(names.contains(&"send_location"));
         assert!(names.contains(&"send_document"));
+        assert!(names.contains(&"create_document"));
     }
 
     #[test]
@@ -3264,5 +3343,29 @@ mod tests {
         let whitespace_res = execute_web_search("   \t\n  ").await;
         assert!(!whitespace_res.trim().is_empty());
         assert!(whitespace_res.contains("tidak boleh kosong"));
+    }
+
+    #[test]
+    fn test_create_document_args_sanitization() {
+        let mut args = CreateDocumentArgs {
+            filename: "../../etc/passwd".to_string(),
+            content: "secret".to_string(),
+            caption: Some("   Test caption...   ".to_string()),
+            as_zip: false,
+        };
+        args.sanitize();
+        assert_eq!(args.filename, "etcpasswd");
+        assert_eq!(args.caption, Some("Test caption...".to_string()));
+        assert!(args.validate().is_ok());
+
+        let mut emp = CreateDocumentArgs {
+            filename: "    ".to_string(),
+            content: "".to_string(),
+            caption: None,
+            as_zip: false,
+        };
+        emp.sanitize();
+        assert_eq!(emp.filename, "document.txt");
+        assert!(emp.validate().is_err());
     }
 }

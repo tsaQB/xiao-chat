@@ -762,7 +762,7 @@ impl AIChatService {
                     Lakukan penalaran secara internal dan berikan hanya jawaban yang berguna bagi pengguna; jangan menampilkan chain-of-thought tersembunyi. \
                     Gunakan gaya bahasa yang alami dan format teks yang elegan. \
                     Jika membuat tabel atau data berkolom, gunakan Markdown Table standar agar Xiao dapat merendernya secara rapi. \
-                    Jika pengguna meminta atau membutuhkan konten visual, foto, gambar, logo, lambang/ikon, album kolase, tayangan slide, berkas audio/musik, rekaman suara, lokasi peta, dokumen berkas, atau kuis interaktif, SELALU panggil tool resmi yang sesuai (`send_photo`, `send_collage`, `send_slideshow`, `send_audio`, `send_voice`, `send_location`, `send_document`, `create_quiz`). Jika Anda membutuhkan URL gambar untuk memanggil tool foto/kolase, gunakan tool `web_search` terlebih dahulu untuk memperoleh URL gambar raster terverifikasi (.jpg, .png, .webp). \
+                    Jika pengguna meminta atau membutuhkan konten visual, foto, gambar, logo, lambang/ikon, album kolase, tayangan slide, berkas audio/musik, rekaman suara, lokasi peta, dokumen berkas, pembuatan file/arsip langsung, atau kuis interaktif, SELALU panggil tool resmi yang sesuai (`send_photo`, `send_collage`, `send_slideshow`, `send_audio`, `send_voice`, `send_location`, `send_document`, `create_document`, `create_quiz`). Jika Anda membutuhkan URL gambar untuk memanggil tool foto/kolase, gunakan tool `web_search` terlebih dahulu untuk memperoleh URL gambar raster terverifikasi (.jpg, .png, .webp). \
                     Ketika Anda memanggil tool multimedia, tool akan menyiapkan media dan mengembalikan tag media yang siap disematkan. Anda DAPAT menyematkan tag media tersebut langsung di tengah-tengah penjelasan teks pada posisi yang paling relevan (misalnya di bawah heading pembuka atau di antara paragraf narasi) agar tampil elegan di dalam gelembung pesan utama Xiao. Jangan mengarang URL atau tag media fiktif tanpa memanggil tool terlebih dahulu. \
                     Untuk tautan video streaming eksternal (seperti YouTube, Vimeo, Twitch), sertakan tautan teks Markdown standar [Judul Video](https://...) agar Telegram otomatis memunculkan rich link preview interaktif. \
                     Jika pengguna meminta kuis interaktif, latihan soal, atau tebak-tebakan, selalu panggil tool `create_quiz` (gunakan parameter `preamble` terformat Markdown jika ada materi pengantar, studi kasus, atau potongan kode sebelum kuis).\n\
@@ -1698,6 +1698,60 @@ impl AIChatService {
                                 format!("Format argumen send_document tidak valid: {parse_err}")
                             }
                         }
+                    } else if name == "create_document" {
+                        if let Some(s) = sink {
+                            s.on_action("Document", Some(ProgressActivity::Reading));
+                        }
+                        match serde_json::from_str::<crate::ai::tools::CreateDocumentArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        if let Some(bot_client) = &bot {
+                                            let (final_bytes, final_filename, mime_type) = if args.as_zip {
+                                                let zip_name = if !args.filename.to_ascii_lowercase().ends_with(".zip") {
+                                                    format!("{}.zip", args.filename)
+                                                } else {
+                                                    args.filename.clone()
+                                                };
+                                                match crate::document::create_in_memory_zip(&args.filename, args.content.as_bytes()) {
+                                                    Ok(z) => (z, zip_name, Some("application/zip")),
+                                                    Err(_) => (args.content.into_bytes(), args.filename.clone(), Some(crate::document::detect_mime_from_filename(&args.filename))),
+                                                }
+                                            } else {
+                                                (args.content.into_bytes(), args.filename.clone(), Some(crate::document::detect_mime_from_filename(&args.filename)))
+                                            };
+                                            
+                                            match bot_client.send_document_bytes(
+                                                chat_id,
+                                                &final_filename,
+                                                final_bytes,
+                                                mime_type,
+                                                args.caption.as_deref(),
+                                                None,
+                                                None,
+                                                reply_to_message_id,
+                                            ).await {
+                                                Ok(_) => {
+                                                    format!("Dokumen '{}' berhasil dibuat dan telah dikirim langsung ke obrolan Telegram pengguna. Selesaikan narasi Anda dengan mengonfirmasi bahwa dokumen sudah dikirim.", final_filename)
+                                                }
+                                                Err(e) => format!("Gagal mengirim dokumen: {e}")
+                                            }
+                                        } else {
+                                            "Bot client tidak tersedia untuk mengirim dokumen langsung.".to_string()
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi dokumen gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen create_document tidak valid: {parse_err}")
+                            }
+                        }
                     } else {
                         format!("Tool '{name}' tidak didukung.")
                     };
@@ -1822,6 +1876,7 @@ impl AIChatService {
                         || name == "send_voice"
                         || name == "send_location"
                         || name == "send_document"
+                        || name == "create_document"
                 });
                 if has_quiz_or_media {
                     has_executed_multimedia_or_quiz = true;

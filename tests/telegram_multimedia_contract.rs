@@ -3828,3 +3828,29 @@ fn test_tier4_scenario_anti_empty_ai_response_graceful_recovery() {
     assert!(extracted_text.contains("Gunung Rinjani"));
     assert!(extracted_text.contains("Pulau Lombok"));
 }
+
+#[test]
+fn test_create_document_tool_args_and_wire_format() {
+    let mut args = crate::ai::tools::CreateDocumentArgs {
+        filename: "../../../malicious/script.py".to_string(),
+        content: "print('hello world')".to_string(),
+        caption: Some("   Test file generation   ".to_string()),
+        as_zip: false,
+    };
+    args.sanitize();
+    assert_eq!(args.filename, "maliciousscript.py");
+    assert_eq!(args.caption, Some("Test file generation".to_string()));
+    assert!(args.validate().is_ok());
+
+    // Test in-memory zip creation
+    let zip_bytes = crate::document::create_in_memory_zip(&args.filename, args.content.as_bytes())
+        .expect("zip creation succeeds");
+    assert!(!zip_bytes.is_empty());
+    assert_eq!(&zip_bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
+
+    // Test mime detection
+    assert_eq!(crate::document::detect_mime_from_filename("script.py"), "text/plain");
+    assert_eq!(crate::document::detect_mime_from_filename("data.csv"), "text/csv");
+    assert_eq!(crate::document::detect_mime_from_filename("image.svg"), "image/svg+xml");
+    assert_eq!(crate::document::detect_mime_from_filename("bundle.zip"), "application/zip");
+}
