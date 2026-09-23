@@ -655,3 +655,37 @@ fn quiz_send_poll_payload_wire_format_conforms_to_bot_api() {
     assert_eq!(payload["explanation"], "Because it is.");
     assert_eq!(payload["reply_parameters"]["message_id"], 999);
 }
+
+#[test]
+fn test_inline_interleaved_rich_media_placement_order() {
+    // Tests Telegram Bot API in-line interleaved rich media placement (matching @richtextdemobot demo)
+    // where media elements are interwoven between headings and paragraphs.
+    let text = "# Media Demo\n\n\
+                Paragraf pembuka observasi satwa liar.\n\n\
+                <img src=\"https://example.com/tiger.jpg\" caption=\"Harimau Sumatera\"/>\n\n\
+                Paragraf penjelasan lanjutan setelah foto harimau.\n\n\
+                <audio src=\"https://example.com/roar.mp3\" title=\"Suara Auman\" performer=\"Satwa\"/>\n\n\
+                Paragraf penutup berisi kesimpulan observasi.";
+
+    let blocks = parser::parse_markdown_to_rich_blocks(text);
+    assert_eq!(blocks.len(), 6);
+    assert!(matches!(blocks[0], RichBlock::SectionHeading { .. }));
+    assert!(matches!(blocks[1], RichBlock::Paragraph { .. }));
+    assert!(matches!(blocks[2], RichBlock::Photo { .. }));
+    assert!(matches!(blocks[3], RichBlock::Paragraph { .. }));
+    assert!(matches!(blocks[4], RichBlock::Audio { .. }));
+    assert!(matches!(blocks[5], RichBlock::Paragraph { .. }));
+
+    // Verify wire format serialization retains order
+    let rich_msg = models::InputRichMessage::new(blocks);
+    assert!(rich_msg.validate().is_ok());
+    let serialized = serde_json::to_value(&rich_msg).expect("serialize rich message");
+    let json_blocks = serialized["blocks"].as_array().expect("blocks array");
+    assert_eq!(json_blocks.len(), 6);
+    assert_eq!(json_blocks[0]["type"], "heading");
+    assert_eq!(json_blocks[1]["type"], "paragraph");
+    assert_eq!(json_blocks[2]["type"], "photo");
+    assert_eq!(json_blocks[3]["type"], "paragraph");
+    assert_eq!(json_blocks[4]["type"], "audio");
+    assert_eq!(json_blocks[5]["type"], "paragraph");
+}

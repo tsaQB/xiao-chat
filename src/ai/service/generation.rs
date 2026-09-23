@@ -763,7 +763,7 @@ impl AIChatService {
                     Gunakan gaya bahasa yang alami dan format teks yang elegan. \
                     Jika membuat tabel atau data berkolom, gunakan Markdown Table standar agar Xiao dapat merendernya secara rapi. \
                     Jika pengguna meminta atau membutuhkan konten visual, foto, gambar, logo, lambang/ikon, album kolase, tayangan slide, berkas audio/musik, rekaman suara, lokasi peta, dokumen berkas, atau kuis interaktif, SELALU panggil tool resmi yang sesuai (`send_photo`, `send_collage`, `send_slideshow`, `send_audio`, `send_voice`, `send_location`, `send_document`, `create_quiz`). Jika Anda membutuhkan URL gambar untuk memanggil tool foto/kolase, gunakan tool `web_search` terlebih dahulu untuk memperoleh URL gambar raster terverifikasi (.jpg, .png, .webp). \
-                    JANGAN PERNAH menyematkan pseudo-tag atau format teks fiktif untuk media di dalam teks jawaban. Teks jawaban harus murni teks berformat Markdown standar. \
+                    Ketika Anda memanggil tool multimedia, tool akan menyiapkan media dan mengembalikan tag media yang siap disematkan. Anda DAPAT menyematkan tag media tersebut langsung di tengah-tengah penjelasan teks pada posisi yang paling relevan (misalnya di bawah heading pembuka atau di antara paragraf narasi) agar tampil elegan di dalam gelembung pesan utama Xiao. Jangan mengarang URL atau tag media fiktif tanpa memanggil tool terlebih dahulu. \
                     Untuk tautan video streaming eksternal (seperti YouTube, Vimeo, Twitch), sertakan tautan teks Markdown standar [Judul Video](https://...) agar Telegram otomatis memunculkan rich link preview interaktif. \
                     Jika pengguna meminta kuis interaktif, latihan soal, atau tebak-tebakan, selalu panggil tool `create_quiz` (gunakan parameter `preamble` terformat Markdown jika ada materi pengantar, studi kasus, atau potongan kode sebelum kuis).\n\
                     Jangan pernah menampilkan tag internal seperti <think>, <thought>, <tool_call>, atau blok JSON raw ke pengguna.\n\
@@ -1474,8 +1474,8 @@ impl AIChatService {
                                         } else {
                                             format!(r#"<img src="{}"/>"#, args.url)
                                         };
-                                        staged_media_tags.push(tag);
-                                        "Foto telah disiapkan untuk ditampilkan di dalam gelembung pesan utama Xiao. Sekarang berikan penjelasan naratif yang lengkap dan jelas untuk menjawab pertanyaan pengguna.".to_string()
+                                        staged_media_tags.push(tag.clone());
+                                        format!("Foto telah disiapkan. Tag media: {tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah-tengah teks penjelasan pada posisi yang paling relevan (misal di bawah heading atau di antara paragraf), atau biarkan Xiao menampilkannya secara otomatis. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
                                     Err(validation_err) => {
                                         format!("Validasi foto gagal: {validation_err}")
@@ -1511,10 +1511,11 @@ impl AIChatService {
                                             .map(|u| format!(r#"<img src="{u}"/>"#))
                                             .collect::<Vec<_>>()
                                             .join("");
-                                        staged_media_tags.push(format!(
+                                        let collage_tag = format!(
                                             r#"<tg-collage{caption_attr}>{img_tags}</tg-collage>"#
-                                        ));
-                                        "Kolase foto telah disiapkan untuk ditampilkan di dalam gelembung pesan utama Xiao. Sekarang berikan penjelasan naratif yang lengkap dan jelas untuk menjawab pertanyaan pengguna.".to_string()
+                                        );
+                                        staged_media_tags.push(collage_tag.clone());
+                                        format!("Album kolase foto telah disiapkan. Tag media: {collage_tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah-tengah penjelasan pada bagian yang paling sesuai. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
                                     Err(validation_err) => {
                                         format!("Validasi kolase foto gagal: {validation_err}")
@@ -1550,10 +1551,11 @@ impl AIChatService {
                                             .map(|u| format!(r#"<img src="{u}"/>"#))
                                             .collect::<Vec<_>>()
                                             .join("");
-                                        staged_media_tags.push(format!(
+                                        let slideshow_tag = format!(
                                             r#"<tg-slideshow{caption_attr}>{img_tags}</tg-slideshow>"#
-                                        ));
-                                        "Tayangan slide interaktif telah disiapkan untuk ditampilkan di dalam gelembung pesan utama Xiao. Sekarang berikan penjelasan naratif yang lengkap dan jelas untuk menjawab pertanyaan pengguna.".to_string()
+                                        );
+                                        staged_media_tags.push(slideshow_tag.clone());
+                                        format!("Tayangan slide interaktif telah disiapkan. Tag media: {slideshow_tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah-tengah penjelasan pada bagian yang paling sesuai. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
                                     Err(validation_err) => {
                                         format!("Validasi tayangan slide gagal: {validation_err}")
@@ -1598,9 +1600,9 @@ impl AIChatService {
                                         } else {
                                             format!(" {}", attrs.join(" "))
                                         };
-                                        staged_media_tags
-                                            .push(format!(r#"<audio src="{}"{extra}/>"#, args.url));
-                                        "Audio telah disiapkan untuk diputar di dalam gelembung pesan utama Xiao. Sekarang berikan penjelasan naratif yang lengkap dan jelas untuk menjawab pertanyaan pengguna.".to_string()
+                                        let audio_tag = format!(r#"<audio src="{}"{extra}/>"#, args.url);
+                                        staged_media_tags.push(audio_tag.clone());
+                                        format!("Audio telah disiapkan. Tag media: {audio_tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah penjelasan teks pada posisi yang relevan. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
                                     Err(validation_err) => {
                                         format!("Validasi audio gagal: {validation_err}")
@@ -1623,9 +1625,9 @@ impl AIChatService {
                                     Ok(()) => {
                                         let title =
                                             args.caption.as_deref().unwrap_or("Pesan Suara");
-                                        staged_media_tags
-                                            .push(format!("[rekaman: {title}]({})", args.url));
-                                        "Pesan suara telah disiapkan untuk didengarkan di dalam gelembung pesan utama Xiao. Sekarang berikan penjelasan naratif yang lengkap dan jelas untuk menjawab pertanyaan pengguna.".to_string()
+                                        let voice_tag = format!("[rekaman: {title}]({})", args.url);
+                                        staged_media_tags.push(voice_tag.clone());
+                                        format!("Pesan suara telah disiapkan. Tag media: {voice_tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah penjelasan teks pada posisi yang relevan. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
                                     Err(validation_err) => {
                                         format!("Validasi pesan suara gagal: {validation_err}")
@@ -1652,11 +1654,12 @@ impl AIChatService {
                                         } else {
                                             String::new()
                                         };
-                                        staged_media_tags.push(format!(
+                                        let map_tag = format!(
                                             r#"<tg-map lat="{}" lon="{}" zoom="13"{title_attr}/>"#,
                                             args.latitude, args.longitude
-                                        ));
-                                        "Peta lokasi telah disiapkan untuk ditampilkan di dalam gelembung pesan utama Xiao. Sekarang berikan penjelasan naratif yang lengkap dan jelas untuk menjawab pertanyaan pengguna.".to_string()
+                                        );
+                                        staged_media_tags.push(map_tag.clone());
+                                        format!("Peta lokasi telah disiapkan. Tag media: {map_tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah penjelasan teks pada posisi yang relevan. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
                                     Err(validation_err) => {
                                         format!("Validasi lokasi gagal: {validation_err}")
@@ -1680,9 +1683,9 @@ impl AIChatService {
                                     Ok(()) => {
                                         let file_name =
                                             args.file_name.as_deref().unwrap_or("Dokumen");
-                                        staged_media_tags
-                                            .push(format!("[document: {file_name}]({})", args.url));
-                                        "Dokumen telah disiapkan untuk diunduh di dalam gelembung pesan utama Xiao. Sekarang berikan penjelasan naratif yang lengkap dan jelas untuk menjawab pertanyaan pengguna.".to_string()
+                                        let doc_tag = format!("[document: {file_name}]({})", args.url);
+                                        staged_media_tags.push(doc_tag.clone());
+                                        format!("Dokumen telah disiapkan. Tag media: {doc_tag}\nAnda DAPAT menyematkan tag media ini langsung di tengah penjelasan teks pada posisi yang relevan. Sekarang berikan penjelasan naratif yang lengkap dan jelas.")
                                     }
                                     Err(validation_err) => {
                                         format!("Validasi dokumen gagal: {validation_err}")
@@ -1870,12 +1873,29 @@ impl AIChatService {
             } else {
                 let mut missing_tags = Vec::new();
                 for tag in &staged_media_tags {
-                    let src_snippet = tag
-                        .split(r#"src=""#)
-                        .nth(1)
-                        .and_then(|s| s.split('"').next())
-                        .unwrap_or("");
-                    if src_snippet.is_empty() || !answer_text.contains(src_snippet) {
+                    let is_already_present = if tag.starts_with("<tg-collage") {
+                        answer_text.contains("<tg-collage") || answer_text.contains("kolase")
+                    } else if tag.starts_with("<tg-slideshow") {
+                        answer_text.contains("<tg-slideshow") || answer_text.contains("carousel")
+                    } else if let Some(src) = tag.split(r#"src=""#).nth(1).and_then(|s| s.split('"').next()) {
+                        !src.is_empty() && answer_text.contains(src)
+                    } else if let Some(url) = tag.split("](").nth(1).and_then(|s| s.split(')').next()) {
+                        !url.is_empty() && answer_text.contains(url)
+                    } else if tag.starts_with("<tg-map") {
+                        answer_text.contains("<tg-map")
+                            || (tag.contains(r#"lat=""#) && {
+                                let lat = tag
+                                    .split(r#"lat=""#)
+                                    .nth(1)
+                                    .and_then(|s| s.split('"').next())
+                                    .unwrap_or("");
+                                !lat.is_empty() && answer_text.contains(lat)
+                            })
+                    } else {
+                        answer_text.contains(tag)
+                    };
+
+                    if !is_already_present {
                         missing_tags.push(tag.as_str());
                     }
                 }

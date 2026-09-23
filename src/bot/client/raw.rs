@@ -1418,10 +1418,15 @@ impl TelegramBotClient {
 
         // Fallback to editMessageText with HTML rendering
         let html_content = self.render_blocks_to_html(&rich_message.blocks);
+        let safe_html = if html_content.len() > 4000 {
+            crate::util::truncate_chars(&html_content, 4000)
+        } else {
+            html_content
+        };
         self.edit_message_text(
             Some(chat_id),
             Some(message_id),
-            &html_content,
+            &safe_html,
             Some("HTML"),
             reply_markup,
         )
