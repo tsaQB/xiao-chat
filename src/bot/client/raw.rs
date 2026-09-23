@@ -1288,7 +1288,26 @@ impl TelegramBotClient {
             }
         }
 
-        self.post_multipart("sendDocument", form).await
+        let url = format!("{}/sendDocument", self.base_url);
+        match self.client.post(&url).multipart(form).send().await {
+            Ok(resp) => {
+                let response = resp.json::<Value>().await.map_err(|e| {
+                    format!(
+                        "sendDocument response decode error: {}",
+                        reqwest_error_kind(&e)
+                    )
+                })?;
+                if response.get("ok").and_then(Value::as_bool) == Some(true) {
+                    Ok(response)
+                } else {
+                    Err(Self::telegram_api_error("sendDocument", &response))
+                }
+            }
+            Err(e) => Err(format!(
+                "sendDocument multipart error: {}",
+                reqwest_error_kind(&e)
+            )),
+        }
     }
 
     pub async fn send_document(

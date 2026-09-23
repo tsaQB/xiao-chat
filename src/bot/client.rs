@@ -816,7 +816,7 @@ impl TelegramBotClient {
         reply_markup: Option<Value>,
         reply_to_message_id: Option<i64>,
     ) -> Result<Value, String> {
-        self.raw
+        self.raw()
             .send_document_bytes(
                 chat_id,
                 filename,
