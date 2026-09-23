@@ -1255,6 +1255,7 @@ impl TelegramBotClient {
         self.post_json("sendLocation", payload).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_document_bytes(
         &self,
         chat_id: i64,

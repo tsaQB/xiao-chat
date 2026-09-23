@@ -796,7 +796,7 @@ mod tests {
     fn test_create_in_memory_zip() {
         let text = b"test code";
         let zip_bytes = create_in_memory_zip("hello.txt", text).expect("zip created");
-        assert!(zip_bytes.len() > 0);
+        assert!(!zip_bytes.is_empty());
         // Verify it contains standard zip headers (PK..)
         assert_eq!(&zip_bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
     }

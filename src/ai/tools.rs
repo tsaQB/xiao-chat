@@ -2567,8 +2567,7 @@ impl CreateDocumentArgs {
             .filename
             .replace("../", "")
             .replace("..\\", "")
-            .replace('/', "")
-            .replace('\\', "")
+            .replace(['/', '\\'], "")
             .trim()
             .to_string();
         if clean_name.is_empty() {

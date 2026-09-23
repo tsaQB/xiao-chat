@@ -805,6 +805,7 @@ impl TelegramBotClient {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_document_bytes(
         &self,
         chat_id: i64,
