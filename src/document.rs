@@ -808,6 +808,9 @@ mod tests {
         assert_eq!(detect_mime_from_filename("doc.pdf"), "application/pdf");
         assert_eq!(detect_mime_from_filename("archive.zip"), "application/zip");
         assert_eq!(detect_mime_from_filename("vector.svg"), "image/svg+xml");
-        assert_eq!(detect_mime_from_filename("unknown.xyz"), "application/octet-stream");
+        assert_eq!(
+            detect_mime_from_filename("unknown.xyz"),
+            "application/octet-stream"
+        );
     }
 }
