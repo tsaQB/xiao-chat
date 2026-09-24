@@ -2227,6 +2227,8 @@ static RE_BLOCK_DIVIDER: LazyLock<Regex> = LazyLock::new(|| {
 });
 static RE_BLOCK_BULLET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[-*•]\s+").expect("valid static regex"));
+static RE_BLOCK_CHECKBOX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[-*•]\s+\[([ xX])\]\s+").expect("valid static regex"));
 static RE_BLOCK_NUMBERED: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d+|[\u0660-\u0669]+)[\.)]\s+").expect("valid static regex"));
 
@@ -2808,13 +2810,15 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
             continue;
         }
 
-        // 8. List Items (- item, * item, 1. item)
-        let is_bullet = RE_BLOCK_BULLET.is_match(stripped);
+        // 8. List Items (- item, * item, - [ ] checkbox, 1. item)
+        let is_checkbox = RE_BLOCK_CHECKBOX.is_match(stripped);
+        let is_bullet = !is_checkbox && RE_BLOCK_BULLET.is_match(stripped);
         let is_numbered = RE_BLOCK_NUMBERED.is_match(stripped);
 
-        if is_bullet || is_numbered {
+        if is_checkbox || is_bullet || is_numbered {
             let mut list_items = Vec::new();
             let is_ordered = is_numbered;
+            let is_task_list = is_checkbox;
 
             while i < n {
                 let curr = lines[i].trim();
@@ -2840,7 +2844,27 @@ pub fn parse_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
                         value,
                     ));
                     i += 1;
-                } else if !is_ordered && RE_BLOCK_BULLET.is_match(curr) {
+                } else if is_task_list && RE_BLOCK_CHECKBOX.is_match(curr) {
+                    let is_checked = RE_BLOCK_CHECKBOX
+                        .captures(curr)
+                        .and_then(|caps| caps.get(1))
+                        .map(|m| m.as_str().eq_ignore_ascii_case("x"))
+                        .unwrap_or(false);
+                    let item_text = RE_BLOCK_CHECKBOX.replace(curr, "").trim().to_string();
+                    let lrm_text = rtl::ensure_lrm_if_needed(&item_text, is_message_rtl);
+                    list_items.push(RichBlockListItem::checkbox(
+                        vec![json!({
+                            "type": "paragraph",
+                            "text": parse_inline(&lrm_text)
+                        })],
+                        is_checked,
+                    ));
+                    i += 1;
+                } else if !is_ordered
+                    && !is_task_list
+                    && RE_BLOCK_BULLET.is_match(curr)
+                    && !RE_BLOCK_CHECKBOX.is_match(curr)
+                {
                     let item_text = RE_BLOCK_BULLET.replace(curr, "").trim().to_string();
                     let lrm_text = rtl::ensure_lrm_if_needed(&item_text, is_message_rtl);
                     list_items.push(RichBlockListItem::bullet(vec![json!({
@@ -4571,5 +4595,23 @@ Berikut adalah uraian I'rab:
         } else {
             panic!("Expected Document, got {:?}", blocks[1]);
         }
+    }
+
+    #[test]
+    fn test_markdown_parser_converts_task_list_to_checklist_rich_block() {
+        let md =
+            "- [ ] Task belum selesai\n- [x] Task sudah selesai\n- [X] Task selesai huruf besar";
+        let blocks = parse_markdown_to_rich_blocks(md);
+        assert_eq!(blocks.len(), 1);
+        let RichBlock::List { items } = &blocks[0] else {
+            panic!("Expected List block, got {:?}", blocks[0]);
+        };
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].has_checkbox, Some(true));
+        assert_eq!(items[0].is_checked, Some(false));
+        assert_eq!(items[1].has_checkbox, Some(true));
+        assert_eq!(items[1].is_checked, Some(true));
+        assert_eq!(items[2].has_checkbox, Some(true));
+        assert_eq!(items[2].is_checked, Some(true));
     }
 }

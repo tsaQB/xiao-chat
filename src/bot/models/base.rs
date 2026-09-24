@@ -615,6 +615,66 @@ impl ReplyKeyboardRemove {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InputChecklistTask {
+    pub id: i64,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_mode: Option<String>,
+}
+
+impl InputChecklistTask {
+    pub fn new(id: i64, text: impl Into<String>) -> Self {
+        Self {
+            id,
+            text: text.into(),
+            parse_mode: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InputChecklist {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_mode: Option<String>,
+    pub tasks: Vec<InputChecklistTask>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub others_can_add_tasks: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub others_can_mark_tasks_as_done: Option<bool>,
+}
+
+impl InputChecklist {
+    pub fn new(title: impl Into<String>, tasks: Vec<InputChecklistTask>) -> Self {
+        Self {
+            title: title.into(),
+            parse_mode: None,
+            tasks,
+            others_can_add_tasks: None,
+            others_can_mark_tasks_as_done: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChecklistTask {
+    pub id: i64,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_date: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Checklist {
+    pub title: String,
+    pub tasks: Vec<ChecklistTask>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub others_can_add_tasks: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub others_can_mark_tasks_as_done: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BotCommand {
     pub command: String,
@@ -865,6 +925,16 @@ impl RichBlockListItem {
             value,
             has_checkbox: None,
             is_checked: None,
+        }
+    }
+
+    pub fn checkbox(blocks: Vec<Value>, is_checked: bool) -> Self {
+        Self {
+            blocks,
+            kind: None,
+            value: None,
+            has_checkbox: Some(true),
+            is_checked: Some(is_checked),
         }
     }
 }
@@ -2974,5 +3044,42 @@ mod tests {
                 "hello.txt".to_string()
             )
         );
+    }
+
+    #[test]
+    fn test_rich_block_list_item_checkbox_serialization() {
+        let checked_item = RichBlockListItem::checkbox(
+            vec![serde_json::json!({"type": "paragraph", "text": "Task selesai"})],
+            true,
+        );
+        let unchecked_item = RichBlockListItem::checkbox(
+            vec![serde_json::json!({"type": "paragraph", "text": "Task tertunda"})],
+            false,
+        );
+
+        let v_checked = serde_json::to_value(&checked_item).expect("serialize checked");
+        assert_eq!(v_checked["has_checkbox"], true);
+        assert_eq!(v_checked["is_checked"], true);
+
+        let v_unchecked = serde_json::to_value(&unchecked_item).expect("serialize unchecked");
+        assert_eq!(v_unchecked["has_checkbox"], true);
+        assert_eq!(v_unchecked["is_checked"], false);
+    }
+
+    #[test]
+    fn test_input_checklist_models_serialization() {
+        let tasks = vec![
+            InputChecklistTask::new(1, "Task satu"),
+            InputChecklistTask::new(2, "Task dua"),
+        ];
+        let checklist = InputChecklist::new("Daftar Belanja", tasks);
+
+        let value = serde_json::to_value(&checklist).expect("serialize checklist");
+        assert_eq!(value["title"], "Daftar Belanja");
+        assert_eq!(value["tasks"].as_array().expect("array").len(), 2);
+        assert_eq!(value["tasks"][0]["id"], 1);
+        assert_eq!(value["tasks"][0]["text"], "Task satu");
+        assert_eq!(value["tasks"][1]["id"], 2);
+        assert_eq!(value["tasks"][1]["text"], "Task dua");
     }
 }
