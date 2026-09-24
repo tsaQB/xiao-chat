@@ -2224,6 +2224,62 @@ pub fn validate_quiz(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StagedDocument {
+    pub attach_key: String,
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+    pub filename: String,
+}
+
+impl StagedDocument {
+    pub fn new(
+        attach_key: impl Into<String>,
+        bytes: Vec<u8>,
+        mime_type: impl Into<String>,
+        filename: impl Into<String>,
+    ) -> Self {
+        Self {
+            attach_key: attach_key.into(),
+            bytes,
+            mime_type: mime_type.into(),
+            filename: filename.into(),
+        }
+    }
+
+    pub fn markdown_tag(&self) -> String {
+        format!(
+            "[document: {}](attach://{})",
+            self.filename, self.attach_key
+        )
+    }
+
+    pub fn attach_uri(&self) -> String {
+        format!("attach://{}", self.attach_key)
+    }
+
+    pub fn into_raw_tuple(self) -> (String, Vec<u8>, String, String) {
+        (self.attach_key, self.bytes, self.mime_type, self.filename)
+    }
+}
+
+impl From<(String, Vec<u8>, String, String)> for StagedDocument {
+    fn from((attach_key, bytes, mime_type, filename): (String, Vec<u8>, String, String)) -> Self {
+        Self {
+            attach_key,
+            bytes,
+            mime_type,
+            filename,
+        }
+    }
+}
+
+impl From<StagedDocument> for (String, Vec<u8>, String, String) {
+    fn from(doc: StagedDocument) -> Self {
+        (doc.attach_key, doc.bytes, doc.mime_type, doc.filename)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

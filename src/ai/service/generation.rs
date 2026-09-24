@@ -30,8 +30,7 @@ pub(crate) const MAX_STREAM_VISIBLE_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_STREAM_REASONING_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_STREAM_WIRE_BYTES: usize = 32 * 1024 * 1024;
 
-/// (attach_key, bytes, mime, filename)
-pub(crate) type StagedDocument = (String, Vec<u8>, String, String);
+pub(crate) use crate::bot::models::StagedDocument;
 
 /// (thinking_text, answer_text, staged_documents, cancelled)
 pub(crate) type ChatGenerationResult = (Option<String>, String, Vec<StagedDocument>, bool);
@@ -950,10 +949,7 @@ impl AIChatService {
                 let send_result = tokio::select! {
                     changed = cancel_rx.changed() => {
                         if changed.is_ok() && *cancel_rx.borrow() {
-                            if let Some(s) = sink {
-                                s.on_failure("Stopped by user", false);
-                            }
-                            return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), Vec::new(), true);
+                            return cancelled_chat_result(sink);
                         }
                         send_future.as_mut().await
                     }
@@ -978,10 +974,7 @@ impl AIChatService {
                             _ = tokio::time::sleep(delay) => {}
                             changed = cancel_rx.changed() => {
                                 if changed.is_ok() && *cancel_rx.borrow() {
-                                    if let Some(s) = sink {
-                                        s.on_failure("Stopped by user", false);
-                                    }
-                                    return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), Vec::new(), true);
+                                    return cancelled_chat_result(sink);
                                 }
                             }
                         }
@@ -1015,10 +1008,7 @@ impl AIChatService {
                                 _ = tokio::time::sleep(delay) => {}
                                 changed = cancel_rx.changed() => {
                                     if changed.is_ok() && *cancel_rx.borrow() {
-                                        if let Some(s) = sink {
-                                            s.on_failure("Stopped by user", false);
-                                        }
-                                        return (None, "⏹️ Generasi dihentikan oleh pengguna.".to_string(), Vec::new(), true);
+                                        return cancelled_chat_result(sink);
                                     }
                                 }
                             }
@@ -1736,59 +1726,23 @@ impl AIChatService {
                                 match args.validate() {
                                     Ok(()) => {
                                         let (final_bytes, final_filename, mime_type) =
-                                            if args.as_zip {
-                                                let zip_name = if !args
-                                                    .filename
-                                                    .to_ascii_lowercase()
-                                                    .ends_with(".zip")
-                                                {
-                                                    format!("{}.zip", args.filename)
-                                                } else {
-                                                    args.filename.clone()
-                                                };
-                                                match crate::document::create_in_memory_zip(
-                                                    &args.filename,
-                                                    args.content.as_bytes(),
-                                                ) {
-                                                    Ok(z) => {
-                                                        (z, zip_name, "application/zip".to_string())
-                                                    }
-                                                    Err(_) => (
-                                                        args.content.into_bytes(),
-                                                        args.filename.clone(),
-                                                        crate::document::detect_mime_from_filename(
-                                                            &args.filename,
-                                                        )
-                                                        .to_string(),
-                                                    ),
-                                                }
-                                            } else {
-                                                (
-                                                    args.content.into_bytes(),
-                                                    args.filename.clone(),
-                                                    crate::document::detect_mime_from_filename(
-                                                        &args.filename,
-                                                    )
-                                                    .to_string(),
-                                                )
-                                            };
+                                            args.into_payload();
 
                                         let attach_key = format!("doc_{}", staged_documents.len());
-                                        let doc_tag = format!(
-                                            "[document: {}](attach://{})",
-                                            final_filename, attach_key
-                                        );
-                                        staged_media_tags.push(doc_tag.clone());
-                                        staged_documents.push((
+                                        let staged_doc = StagedDocument::new(
                                             attach_key,
                                             final_bytes,
                                             mime_type,
-                                            final_filename.clone(),
-                                        ));
+                                            final_filename,
+                                        );
+                                        let doc_tag = staged_doc.markdown_tag();
+                                        staged_documents.push(staged_doc);
 
                                         format!(
                                             "Dokumen '{}' telah berhasil disiapkan di memori. Tag media Telegram: {}\nWAJIB sematkan tag media {} ini langsung di dalam teks jawaban/penjelasan Anda pada posisi yang paling relevan. Berikan penjelasan naratif yang lengkap dan jelas mengenai dokumen ini kepada pengguna.",
-                                            final_filename, doc_tag, doc_tag
+                                            staged_documents.last().map(|d| d.filename.as_str()).unwrap_or(""),
+                                            doc_tag,
+                                            doc_tag
                                         )
                                     }
                                     Err(validation_err) => {
@@ -1974,10 +1928,10 @@ impl AIChatService {
 
         if !staged_documents.is_empty() {
             let mut missing_tags = Vec::new();
-            for (key, _, _, filename) in &staged_documents {
-                let tag_needle = format!("attach://{}", key);
+            for doc in &staged_documents {
+                let tag_needle = doc.attach_uri();
                 if !answer_text.contains(&tag_needle) {
-                    missing_tags.push(format!("[document: {}](attach://{})", filename, key));
+                    missing_tags.push(doc.markdown_tag());
                 }
             }
             if !missing_tags.is_empty() {
@@ -1994,9 +1948,8 @@ impl AIChatService {
         }
 
         if !staged_media_tags.is_empty() {
-            let media_header = staged_media_tags.join("\n\n");
             if answer_text.trim().is_empty() {
-                answer_text = media_header;
+                answer_text = staged_media_tags.join("\n\n");
             } else {
                 let mut missing_tags = Vec::new();
                 for tag in &staged_media_tags {
@@ -2065,9 +2018,6 @@ impl AIChatService {
         } else if answer_text.trim().is_empty() {
             if !staged_media_tags.is_empty() {
                 answer_text = staged_media_tags.join("\n\n");
-            } else if !staged_documents.is_empty() {
-                answer_text =
-                    "Dokumen yang diminta telah berhasil dibuat dan dilampirkan.".to_string();
             } else if !accumulated_reasoning.is_empty() {
                 answer_text = "Maaf, Xiao telah memproses permintaan ini namun model tidak menghasilkan teks jawaban. Silakan coba ulangi pertanyaan dengan instruksi yang lebih jelas.".to_string();
             } else {

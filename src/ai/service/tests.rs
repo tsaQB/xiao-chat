@@ -2277,21 +2277,13 @@ async fn test_create_document_staging_and_auto_append() {
     let service = isolated_service(provider.clone());
     let snapshot = service.generation_model_snapshot().await;
 
-    struct TestProgressSink;
-    impl crate::timeline::GenerationProgressSink for TestProgressSink {
-        fn on_action(&self, _label: &str, _activity: Option<crate::timeline::ProgressActivity>) {}
-        fn on_partial_answer(&self, _text: &str) {}
-        fn on_failure(&self, _error: &str, _force_sync: bool) {}
-        fn on_complete(&self) {}
-    }
-    let sink = TestProgressSink;
     let (_cancel, mut receiver) = tokio::sync::watch::channel(false);
 
     let gen_input = GenerationInput {
         prompt: "Buatkan dokumen laporan",
         canonical_prompt: None,
         media_to_main: true,
-        sink: Some(&sink),
+        sink: None,
         image_bytes: None,
         document_images: None,
         mime_type: None,
@@ -2313,13 +2305,14 @@ async fn test_create_document_staging_and_auto_append() {
     assert!(!cancelled);
     ai_server.await.expect("ai server join");
 
-    // 1. Verify staged doc 4-tuple
+    // 1. Verify staged doc
     assert_eq!(staged_docs.len(), 1);
-    let (key, bytes, mime, filename) = &staged_docs[0];
-    assert_eq!(key, "doc_0");
-    assert_eq!(filename, "laporan.pdf");
-    assert_eq!(mime, "application/pdf");
-    assert!(!bytes.is_empty());
+    let doc = &staged_docs[0];
+    assert_eq!(doc.attach_key, "doc_0");
+    assert_eq!(doc.filename, "laporan.pdf");
+    assert_eq!(doc.mime_type, "application/pdf");
+    assert!(!doc.bytes.is_empty());
+    assert!(doc.bytes.starts_with(b"%PDF-1.4"));
 
     // 2. Verify auto-append logic
     assert!(answer.contains("[document: laporan.pdf](attach://doc_0)"));

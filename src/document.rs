@@ -586,6 +586,140 @@ pub fn create_in_memory_zip(filename: &str, content: &[u8]) -> Result<Vec<u8>, S
     Ok(cursor.into_inner())
 }
 
+pub fn create_in_memory_pdf(title: &str, content: &str) -> Result<Vec<u8>, String> {
+    let mut lines = Vec::new();
+    for raw_line in content.lines() {
+        let trimmed = raw_line.trim_end();
+        if trimmed.trim().is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        let mut cur = String::new();
+        for w in words {
+            if !cur.is_empty() && cur.len() + w.len() + 1 > 75 {
+                lines.push(cur);
+                cur = w.to_string();
+            } else if cur.is_empty() {
+                cur = w.to_string();
+            } else {
+                cur.push(' ');
+                cur.push_str(w);
+            }
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+    }
+
+    let lines_per_page = 45;
+    let mut pages: Vec<Vec<String>> = Vec::new();
+    if lines.is_empty() {
+        pages.push(vec![String::new()]);
+    } else {
+        for chunk in lines.chunks(lines_per_page) {
+            pages.push(chunk.to_vec());
+        }
+    }
+
+    let num_pages = pages.len();
+    let mut objects = Vec::new();
+    // obj 1: Catalog
+    objects.push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_string());
+
+    // obj 2: Pages
+    let mut kids = String::new();
+    for i in 0..num_pages {
+        if !kids.is_empty() {
+            kids.push(' ');
+        }
+        kids.push_str(&format!("{} 0 R", 3 + i * 2));
+    }
+    objects.push(format!(
+        "2 0 obj\n<< /Type /Pages /Kids [{kids}] /Count {num_pages} >>\nendobj\n"
+    ));
+
+    for (i, page_lines) in pages.iter().enumerate() {
+        let page_obj_num = 3 + i * 2;
+        let content_obj_num = 4 + i * 2;
+
+        let page_str = format!(
+            "{page_obj_num} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Contents {content_obj_num} 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >> >>\nendobj\n"
+        );
+        objects.push(page_str);
+
+        let mut stream_cmds = Vec::new();
+        stream_cmds.push("BT".to_string());
+
+        if i == 0 && !title.is_empty() {
+            let clean_title = title
+                .replace('\\', "\\\\")
+                .replace('(', "\\(")
+                .replace(')', "\\)");
+            stream_cmds.push("/F2 16 Tf".to_string());
+            stream_cmds.push("50 790 Td".to_string());
+            stream_cmds.push(format!("({clean_title}) Tj"));
+            stream_cmds.push("/F1 10 Tf".to_string());
+            stream_cmds.push("0 -24 Td".to_string());
+            stream_cmds.push("14 TL".to_string());
+        } else {
+            stream_cmds.push("/F1 10 Tf".to_string());
+            stream_cmds.push("50 790 Td".to_string());
+            stream_cmds.push("14 TL".to_string());
+        }
+
+        for line in page_lines {
+            let escaped = line
+                .replace('\\', "\\\\")
+                .replace('(', "\\(")
+                .replace(')', "\\)");
+            let safe_line: String = escaped
+                .chars()
+                .map(|c| if (c as u32) < 256 { c } else { '?' })
+                .collect();
+            stream_cmds.push(format!("({safe_line}) '"));
+        }
+        stream_cmds.push("ET\n".to_string());
+
+        let stream_content = stream_cmds.join("\n");
+        let stream_len = stream_content.len();
+
+        let content_str = format!(
+            "{content_obj_num} 0 obj\n<< /Length {stream_len} >>\nstream\n{stream_content}endstream\nendobj\n"
+        );
+        objects.push(content_str);
+    }
+
+    let header: &[u8] = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+    let mut offsets = Vec::new();
+    let mut current_offset = header.len();
+    let mut body = String::new();
+
+    for obj in &objects {
+        offsets.push(current_offset);
+        current_offset += obj.len();
+        body.push_str(obj);
+    }
+
+    let xref_offset = current_offset;
+    let total_objs = objects.len() + 1;
+    let mut xref = format!("xref\n0 {total_objs}\n0000000000 65535 f \n");
+    for off in offsets {
+        xref.push_str(&format!("{off:010} 00000 n \n"));
+    }
+
+    let trailer =
+        format!("trailer\n<< /Size {total_objs} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n");
+
+    let mut result = Vec::with_capacity(header.len() + body.len() + xref.len() + trailer.len());
+    result.extend_from_slice(header);
+    result.extend_from_slice(body.as_bytes());
+    result.extend_from_slice(xref.as_bytes());
+    result.extend_from_slice(trailer.as_bytes());
+
+    Ok(result)
+}
+
 pub fn detect_mime_from_filename(filename: &str) -> &'static str {
     let lower = filename.to_ascii_lowercase();
     if lower.ends_with(".zip") {
@@ -799,6 +933,17 @@ mod tests {
         assert!(!zip_bytes.is_empty());
         // Verify it contains standard zip headers (PK..)
         assert_eq!(&zip_bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
+    }
+
+    #[test]
+    fn test_create_in_memory_pdf() {
+        let title = "Laporan Uji";
+        let content = "Paragraf 1 dari dokumen uji PDF.\nBaris kedua yang cukup panjang untuk memastikan word wrapping dan stream content bekerja dengan benar.";
+        let pdf_bytes = create_in_memory_pdf(title, content).expect("pdf created");
+        assert!(pdf_bytes.starts_with(b"%PDF-1.4"));
+        assert!(pdf_bytes.ends_with(b"%%EOF\n") || pdf_bytes.ends_with(b"%%EOF"));
+        let doc = lopdf::Document::load_mem(&pdf_bytes).expect("lopdf parses generated pdf");
+        assert_eq!(doc.get_pages().len(), 1);
     }
 
     #[test]

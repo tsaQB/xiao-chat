@@ -541,7 +541,7 @@ impl ExecutionTimeline {
     pub async fn finalize_answer_with_media(
         &self,
         full_rich_msg: &crate::bot::models::InputRichMessage,
-        attached_files: Vec<(String, Vec<u8>, String, String)>,
+        attached_files: Vec<crate::bot::models::StagedDocument>,
     ) -> Result<serde_json::Value, String> {
         let _sync_guard = self.inner.sync_lock.lock().await;
         let (placeholder_msg_id, is_failed) = {
@@ -560,11 +560,14 @@ impl ExecutionTimeline {
         if !attached_files.is_empty() {
             // If there's an existing placeholder message (in groups or streaming drafts), delete it first because editMessageMedia/editMessageText does not support full sendRichMessage multipart upload
             if let Some(msg_id) = placeholder_msg_id {
-                let _ = self
+                if let Err(e) = self
                     .inner
                     .bot
                     .delete_message(self.inner.chat_id, msg_id)
-                    .await;
+                    .await
+                {
+                    warn!("Failed to delete timeline placeholder before sending media answer: {e}");
+                }
             }
 
             self.inner

@@ -1205,7 +1205,7 @@ impl TelegramBotClient {
         &self,
         chat_id: i64,
         rich_message: &InputRichMessage,
-        attached_files: Vec<(String, Vec<u8>, String, String)>,
+        attached_files: Vec<crate::bot::models::StagedDocument>,
         reply_markup: Option<Value>,
         receiver_user_id: Option<i64>,
         reply_to_message_id: Option<i64>,
@@ -1227,7 +1227,7 @@ impl TelegramBotClient {
         rich_message.validate()?;
 
         let mut resolved_msg = rich_message.clone();
-        let mut all_attachments: Vec<(String, Vec<u8>, String, String)> = attached_files;
+        let mut all_attachments: Vec<crate::bot::models::StagedDocument> = attached_files;
 
         if let Some(ref mut media_items) = resolved_msg.media {
             for item in media_items.iter_mut() {
@@ -1239,7 +1239,9 @@ impl TelegramBotClient {
                     {
                         let attach_key = format!("file_{}", all_attachments.len());
                         item.media.set_media_url(format!("attach://{attach_key}"));
-                        all_attachments.push((attach_key, bytes, mime, fname));
+                        all_attachments.push(crate::bot::models::StagedDocument::new(
+                            attach_key, bytes, mime, fname,
+                        ));
                     }
                 }
             }
@@ -1257,7 +1259,12 @@ impl TelegramBotClient {
                         .await
                     {
                         let attach_key = format!("file_{}", all_attachments.len());
-                        all_attachments.push((attach_key.clone(), bytes, mime, fname));
+                        all_attachments.push(crate::bot::models::StagedDocument::new(
+                            attach_key.clone(),
+                            bytes,
+                            mime,
+                            fname,
+                        ));
                         block_replacements.insert(url, format!("attach://{attach_key}"));
                     }
                 }
@@ -1302,12 +1309,12 @@ impl TelegramBotClient {
                 receiver_user_id,
                 reply_to_message_id,
             )?;
-            for (attach_name, bytes, mime, fname) in &all_attachments {
-                let part = Part::bytes(bytes.clone())
-                    .file_name(fname.clone())
-                    .mime_str(mime)
+            for doc in &all_attachments {
+                let part = Part::bytes(doc.bytes.clone())
+                    .file_name(doc.filename.clone())
+                    .mime_str(&doc.mime_type)
                     .map_err(|error| error.to_string())?;
-                form = form.part(attach_name.clone(), part);
+                form = form.part(doc.attach_key.clone(), part);
             }
             Ok(form)
         })
