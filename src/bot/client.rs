@@ -1186,7 +1186,7 @@ impl TelegramBotClient {
         &self,
         chat_id: i64,
         rich_message: &InputRichMessage,
-        attached_files: Vec<(String, Vec<u8>, String, String)>,
+        attached_files: Vec<crate::bot::models::StagedDocument>,
         reply_markup: Option<Value>,
         receiver_user_id: Option<i64>,
     ) -> Result<Value, String> {
