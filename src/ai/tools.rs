@@ -2226,6 +2226,21 @@ where
     }
 }
 
+pub fn sanitize_multimedia_caption(caption: &mut Option<String>) {
+    if let Some(c) = caption {
+        let trimmed = c.trim().to_string();
+        if trimmed.is_empty() {
+            *caption = None;
+        } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
+            *caption = Some(
+                crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string(),
+            );
+        } else {
+            *caption = Some(trimmed);
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct SendPhotoArgs {
@@ -2238,17 +2253,7 @@ pub struct SendPhotoArgs {
 impl SendPhotoArgs {
     pub fn sanitize(&mut self) {
         self.url = self.url.trim().to_string();
-        if let Some(caption) = &mut self.caption {
-            let trimmed = caption.trim().to_string();
-            if trimmed.is_empty() {
-                self.caption = None;
-            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption =
-                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
-            } else {
-                *caption = trimmed;
-            }
-        }
+        sanitize_multimedia_caption(&mut self.caption);
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -2277,17 +2282,7 @@ impl SendCollageArgs {
         if self.urls.len() > 10 {
             self.urls.truncate(10);
         }
-        if let Some(caption) = &mut self.caption {
-            let trimmed = caption.trim().to_string();
-            if trimmed.is_empty() {
-                self.caption = None;
-            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption =
-                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
-            } else {
-                *caption = trimmed;
-            }
-        }
+        sanitize_multimedia_caption(&mut self.caption);
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -2344,17 +2339,7 @@ impl SendSlideshowArgs {
         for u in &mut self.urls {
             *u = u.trim().to_string();
         }
-        if let Some(caption) = &mut self.caption {
-            let trimmed = caption.trim().to_string();
-            if trimmed.is_empty() {
-                self.caption = None;
-            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption =
-                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
-            } else {
-                *caption = trimmed;
-            }
-        }
+        sanitize_multimedia_caption(&mut self.caption);
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -2402,17 +2387,7 @@ impl SendAudioArgs {
                 Some(trimmed)
             };
         }
-        if let Some(caption) = &mut self.caption {
-            let trimmed = caption.trim().to_string();
-            if trimmed.is_empty() {
-                self.caption = None;
-            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption =
-                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
-            } else {
-                *caption = trimmed;
-            }
-        }
+        sanitize_multimedia_caption(&mut self.caption);
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -2435,17 +2410,7 @@ pub struct SendVoiceArgs {
 impl SendVoiceArgs {
     pub fn sanitize(&mut self) {
         self.url = self.url.trim().to_string();
-        if let Some(caption) = &mut self.caption {
-            let trimmed = caption.trim().to_string();
-            if trimmed.is_empty() {
-                self.caption = None;
-            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption =
-                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
-            } else {
-                *caption = trimmed;
-            }
-        }
+        sanitize_multimedia_caption(&mut self.caption);
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -2529,17 +2494,7 @@ impl SendDocumentArgs {
                 Some(trimmed)
             };
         }
-        if let Some(caption) = &mut self.caption {
-            let trimmed = caption.trim().to_string();
-            if trimmed.is_empty() {
-                self.caption = None;
-            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption =
-                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
-            } else {
-                *caption = trimmed;
-            }
-        }
+        sanitize_multimedia_caption(&mut self.caption);
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -2574,18 +2529,7 @@ impl CreateDocumentArgs {
             clean_name = "document.txt".to_string();
         }
         self.filename = clean_name;
-
-        if let Some(caption) = &mut self.caption {
-            let trimmed = caption.trim().to_string();
-            if trimmed.is_empty() {
-                self.caption = None;
-            } else if trimmed.chars().count() > MULTIMEDIA_CAPTION_MAX_CHARS {
-                *caption =
-                    crate::util::truncate_chars(&trimmed, MULTIMEDIA_CAPTION_MAX_CHARS).to_string();
-            } else {
-                *caption = trimmed;
-            }
-        }
+        sanitize_multimedia_caption(&mut self.caption);
     }
 
     pub fn validate(&self) -> Result<(), String> {

@@ -1482,6 +1482,11 @@ static RE_LEAKED_CONTROL_TAGS: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 pub fn sanitize_leaked_llm_artifacts(text: &str) -> String {
+    // Fast-path: if text contains no opening tag indicators, return text directly
+    if !text.contains('<') && !text.contains('[') {
+        return text.to_string();
+    }
+
     // 1. Strip closed thinking / reflection / tool blocks
     let step1 = RE_THINK_BLOCK.replace_all(text, "");
     let step2 = RE_TOOL_CALL_BLOCK.replace_all(&step1, "");

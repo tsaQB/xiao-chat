@@ -343,7 +343,8 @@ impl TelegramBotClient {
             Ok(resp) if resp.status().is_success() => {
                 use futures_util::StreamExt;
                 let mut stream = resp.bytes_stream();
-                let mut bytes_buf = Vec::new();
+                let initial_capacity = size.min(MAX_TELEGRAM_DOWNLOAD_BYTES);
+                let mut bytes_buf = Vec::with_capacity(initial_capacity);
                 while let Some(chunk_res) = stream.next().await {
                     match chunk_res {
                         Ok(chunk) => {

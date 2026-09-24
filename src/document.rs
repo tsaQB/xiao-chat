@@ -49,6 +49,57 @@ pub struct ExtractedDocument {
     pub warning: Option<String>,
 }
 
+pub const SUPPORTED_TEXT_EXTENSIONS: &[&str] = &[
+    ".txt",
+    ".md",
+    ".markdown",
+    ".json",
+    ".csv",
+    ".log",
+    ".rs",
+    ".go",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+    ".css",
+    ".sh",
+    ".sql",
+];
+
+pub const SUPPORTED_DOC_EXTENSIONS: &[&str] = &[
+    ".txt",
+    ".md",
+    ".markdown",
+    ".json",
+    ".csv",
+    ".log",
+    ".rs",
+    ".go",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+    ".css",
+    ".sh",
+    ".sql",
+    ".pdf",
+    ".docx",
+    ".xlsx",
+];
+
 pub fn is_extractable_document(mime: &str, name: &str) -> bool {
     let mime = mime.to_ascii_lowercase();
     let name = name.to_ascii_lowercase();
@@ -58,34 +109,9 @@ pub fn is_extractable_document(mime: &str, name: &str) -> bool {
         || mime == "application/pdf"
         || mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         || mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        || [
-            ".txt",
-            ".md",
-            ".markdown",
-            ".json",
-            ".csv",
-            ".log",
-            ".rs",
-            ".go",
-            ".py",
-            ".js",
-            ".ts",
-            ".tsx",
-            ".jsx",
-            ".toml",
-            ".yaml",
-            ".yml",
-            ".xml",
-            ".html",
-            ".css",
-            ".sh",
-            ".sql",
-            ".pdf",
-            ".docx",
-            ".xlsx",
-        ]
-        .iter()
-        .any(|suffix| name.ends_with(suffix))
+        || SUPPORTED_DOC_EXTENSIONS
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
 }
 
 pub async fn extract_document(
@@ -98,31 +124,9 @@ pub async fn extract_document(
 
     if mime.starts_with("text/")
         || mime == "application/json"
-        || [
-            ".txt",
-            ".md",
-            ".markdown",
-            ".json",
-            ".csv",
-            ".log",
-            ".rs",
-            ".go",
-            ".py",
-            ".js",
-            ".ts",
-            ".tsx",
-            ".jsx",
-            ".toml",
-            ".yaml",
-            ".yml",
-            ".xml",
-            ".html",
-            ".css",
-            ".sh",
-            ".sql",
-        ]
-        .iter()
-        .any(|suffix| name_lower.ends_with(suffix))
+        || SUPPORTED_TEXT_EXTENSIONS
+            .iter()
+            .any(|suffix| name_lower.ends_with(suffix))
     {
         let slice = if data.starts_with(b"\xef\xbb\xbf") {
             &data[3..]
@@ -569,7 +573,7 @@ async fn render_scanned_pdf_pages(data: &[u8], page_count: usize) -> Result<Vec<
 }
 
 pub fn create_in_memory_zip(filename: &str, content: &[u8]) -> Result<Vec<u8>, String> {
-    let mut cursor = std::io::Cursor::new(Vec::new());
+    let mut cursor = std::io::Cursor::new(Vec::with_capacity(content.len() / 2 + 512));
     {
         let mut writer = zip::ZipWriter::new(&mut cursor);
         let options = zip::write::SimpleFileOptions::default()
@@ -584,6 +588,17 @@ pub fn create_in_memory_zip(filename: &str, content: &[u8]) -> Result<Vec<u8>, S
             .map_err(|e| format!("Gagal finish zip: {e}"))?;
     }
     Ok(cursor.into_inner())
+}
+
+pub fn escape_pdf_text(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)");
+    escaped
+        .chars()
+        .map(|c| if (c as u32) < 256 { c } else { '?' })
+        .collect()
 }
 
 pub fn create_in_memory_pdf(title: &str, content: &str) -> Result<Vec<u8>, String> {
@@ -652,10 +667,7 @@ pub fn create_in_memory_pdf(title: &str, content: &str) -> Result<Vec<u8>, Strin
         stream_cmds.push("BT".to_string());
 
         if i == 0 && !title.is_empty() {
-            let clean_title = title
-                .replace('\\', "\\\\")
-                .replace('(', "\\(")
-                .replace(')', "\\)");
+            let clean_title = escape_pdf_text(title);
             stream_cmds.push("/F2 16 Tf".to_string());
             stream_cmds.push("50 790 Td".to_string());
             stream_cmds.push(format!("({clean_title}) Tj"));
@@ -669,14 +681,7 @@ pub fn create_in_memory_pdf(title: &str, content: &str) -> Result<Vec<u8>, Strin
         }
 
         for line in page_lines {
-            let escaped = line
-                .replace('\\', "\\\\")
-                .replace('(', "\\(")
-                .replace(')', "\\)");
-            let safe_line: String = escaped
-                .chars()
-                .map(|c| if (c as u32) < 256 { c } else { '?' })
-                .collect();
+            let safe_line = escape_pdf_text(line);
             stream_cmds.push(format!("({safe_line}) '"));
         }
         stream_cmds.push("ET\n".to_string());

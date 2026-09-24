@@ -492,29 +492,20 @@ pub async fn handle_ai_chat(
         reply_to_message_id,
     };
     let generation_start = std::time::Instant::now();
-    let (_thinking, mut answer_text, staged_documents, cancelled) =
-        if let Some(snapshot) = model_snapshot {
-            ai_service
-                .generate_response_with_snapshot(
-                    chat_id,
-                    thread_id,
-                    user_id,
-                    generation_input,
-                    snapshot,
-                    &mut cancel_rx,
-                )
-                .await
-        } else {
-            ai_service
-                .generate_response(
-                    chat_id,
-                    thread_id,
-                    user_id,
-                    generation_input,
-                    &mut cancel_rx,
-                )
-                .await
-        };
+    let snapshot = match model_snapshot {
+        Some(s) => s,
+        None => ai_service.generation_model_snapshot().await,
+    };
+    let (_thinking, mut answer_text, staged_documents, cancelled) = ai_service
+        .generate_response_with_snapshot(
+            chat_id,
+            thread_id,
+            user_id,
+            generation_input,
+            snapshot,
+            &mut cancel_rx,
+        )
+        .await;
 
     ai_service.end_generation(chat_id, draft_id).await;
     timeline.stop_ticker();
