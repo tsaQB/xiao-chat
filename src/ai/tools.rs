@@ -664,17 +664,17 @@ pub fn get_tools_definition() -> Value {
             "type": "function",
             "function": {
                 "name": "create_document",
-                "description": "Buat berkas/dokumen teks, source code, data CSV/JSON/YAML, vektor SVG, atau arsip ZIP langsung dan kirimkan ke chat Telegram.",
+                "description": "Buat berkas/dokumen teks, dokumen PDF (.pdf), berkas HTML, source code, data CSV/JSON/YAML, vektor SVG, atau arsip ZIP langsung dan kirimkan ke chat Telegram.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "filename": {
                             "type": "string",
-                            "description": "Nama file berkas beserta ekstensinya (contoh: script.py, data.csv)"
+                            "description": "Nama file berkas beserta ekstensinya (contoh: laporan.pdf, script.py, index.html, data.csv)"
                         },
                         "content": {
                             "type": "string",
-                            "description": "Isi/teks dari dokumen yang akan dibuat"
+                            "description": "Isi/teks atau konten dokumen yang akan dibuat (untuk berkas teks/code/markdown/HTML, atau representasi konten PDF/SVG)"
                         },
                         "caption": {
                             "type": "string",
