@@ -2946,4 +2946,33 @@ mod tests {
             "Empty media URL must be rejected"
         );
     }
+
+    #[test]
+    fn test_staged_document_domain_methods_and_conversions() {
+        let doc = StagedDocument::new("doc_0", b"hello world".to_vec(), "text/plain", "hello.txt");
+        assert_eq!(doc.attach_key, "doc_0");
+        assert_eq!(doc.bytes, b"hello world");
+        assert_eq!(doc.mime_type, "text/plain");
+        assert_eq!(doc.filename, "hello.txt");
+        assert_eq!(doc.attach_uri(), "attach://doc_0");
+        assert_eq!(doc.markdown_tag(), "[document: hello.txt](attach://doc_0)");
+
+        let tuple: (String, Vec<u8>, String, String) = doc.clone().into();
+        assert_eq!(tuple.0, "doc_0");
+        assert_eq!(tuple.1, b"hello world");
+        assert_eq!(tuple.2, "text/plain");
+        assert_eq!(tuple.3, "hello.txt");
+
+        let from_tuple: StagedDocument = tuple.into();
+        assert_eq!(from_tuple, doc);
+        assert_eq!(
+            from_tuple.into_raw_tuple(),
+            (
+                "doc_0".to_string(),
+                b"hello world".to_vec(),
+                "text/plain".to_string(),
+                "hello.txt".to_string()
+            )
+        );
+    }
 }

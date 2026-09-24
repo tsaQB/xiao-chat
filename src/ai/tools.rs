@@ -2548,6 +2548,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_sanitize_multimedia_caption_behavior() {
+        let mut none_caption: Option<String> = None;
+        sanitize_multimedia_caption(&mut none_caption);
+        assert!(none_caption.is_none());
+
+        let mut empty_caption = Some("   \n\t  ".to_string());
+        sanitize_multimedia_caption(&mut empty_caption);
+        assert!(empty_caption.is_none());
+
+        let mut normal_caption = Some("  Gambar Pemandangan  ".to_string());
+        sanitize_multimedia_caption(&mut normal_caption);
+        assert_eq!(normal_caption.as_deref(), Some("Gambar Pemandangan"));
+
+        let long_str: String = "a".repeat(MULTIMEDIA_CAPTION_MAX_CHARS + 50);
+        let mut long_caption = Some(long_str);
+        sanitize_multimedia_caption(&mut long_caption);
+        assert_eq!(
+            long_caption.as_ref().map(|s| s.chars().count()),
+            Some(MULTIMEDIA_CAPTION_MAX_CHARS)
+        );
+    }
+
+    #[test]
     fn test_tools_definition_contains_expected_tools() {
         let tools = get_tools_definition();
         let array = tools.as_array().expect("tools should be an array");

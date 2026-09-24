@@ -591,14 +591,22 @@ pub fn create_in_memory_zip(filename: &str, content: &[u8]) -> Result<Vec<u8>, S
 }
 
 pub fn escape_pdf_text(s: &str) -> String {
-    let escaped = s
-        .replace('\\', "\\\\")
-        .replace('(', "\\(")
-        .replace(')', "\\)");
-    escaped
-        .chars()
-        .map(|c| if (c as u32) < 256 { c } else { '?' })
-        .collect()
+    let mut normalized = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => normalized.push_str("\\\\"),
+            '(' => normalized.push_str("\\("),
+            ')' => normalized.push_str("\\)"),
+            '\u{2014}' | '\u{2013}' => normalized.push('-'), // em-dash / en-dash
+            '\u{201C}' | '\u{201D}' => normalized.push('"'), // smart double quotes
+            '\u{2018}' | '\u{2019}' => normalized.push('\''), // smart single quotes
+            '\u{2026}' => normalized.push_str("..."),        // ellipsis
+            c if (c as u32) < 128 => normalized.push(c),
+            c if (c as u32) <= 255 => normalized.push(c),
+            _ => normalized.push('?'),
+        }
+    }
+    normalized
 }
 
 pub fn create_in_memory_pdf(title: &str, content: &str) -> Result<Vec<u8>, String> {
@@ -627,13 +635,24 @@ pub fn create_in_memory_pdf(title: &str, content: &str) -> Result<Vec<u8>, Strin
         }
     }
 
-    let lines_per_page = 45;
+    let lines_page_0 = if !title.is_empty() { 40 } else { 45 };
+    let lines_subsequent = 45;
     let mut pages: Vec<Vec<String>> = Vec::new();
     if lines.is_empty() {
         pages.push(vec![String::new()]);
     } else {
-        for chunk in lines.chunks(lines_per_page) {
-            pages.push(chunk.to_vec());
+        let mut remaining = &lines[..];
+        let mut is_first = true;
+        while !remaining.is_empty() {
+            let cap = if is_first {
+                lines_page_0
+            } else {
+                lines_subsequent
+            };
+            let take = cap.min(remaining.len());
+            pages.push(remaining[..take].to_vec());
+            remaining = &remaining[take..];
+            is_first = false;
         }
     }
 
@@ -750,10 +769,16 @@ pub fn create_document_payload(
                 "application/pdf".to_string(),
             )
         } else {
+            let mime = detect_mime_from_filename(filename);
+            let truthful_mime = if mime == "application/pdf" {
+                "text/plain".to_string()
+            } else {
+                mime.to_string()
+            };
             (
                 content.as_bytes().to_vec(),
                 filename.to_string(),
-                "application/pdf".to_string(),
+                truthful_mime,
             )
         }
     } else {
