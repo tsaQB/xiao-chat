@@ -492,9 +492,13 @@ pub async fn handle_ai_chat(
         reply_to_message_id,
     };
     let generation_start = std::time::Instant::now();
+    let owned_snapshot;
     let snapshot = match model_snapshot {
         Some(s) => s,
-        None => ai_service.generation_model_snapshot().await,
+        None => {
+            owned_snapshot = ai_service.generation_model_snapshot().await;
+            &owned_snapshot
+        }
     };
     let (_thinking, mut answer_text, staged_documents, cancelled) = ai_service
         .generate_response_with_snapshot(

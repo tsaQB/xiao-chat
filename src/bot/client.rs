@@ -420,7 +420,11 @@ impl TelegramBotClient {
             return None;
         }
         let mut stream = response.bytes_stream();
-        let initial_capacity = size.min(MAX_TELEGRAM_DOWNLOAD_BYTES);
+        let initial_capacity = info
+            .file_size
+            .and_then(|s| usize::try_from(s).ok())
+            .unwrap_or(8192)
+            .min(MAX_TELEGRAM_DOWNLOAD_BYTES);
         let mut bytes = Vec::with_capacity(initial_capacity);
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.ok()?;
