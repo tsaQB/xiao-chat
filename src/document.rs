@@ -720,6 +720,43 @@ pub fn create_in_memory_pdf(title: &str, content: &str) -> Result<Vec<u8>, Strin
     Ok(result)
 }
 
+pub fn create_document_payload(
+    filename: &str,
+    content: &str,
+    as_zip: bool,
+) -> (Vec<u8>, String, String) {
+    if as_zip {
+        let zip_name = if !filename.to_ascii_lowercase().ends_with(".zip") {
+            format!("{}.zip", filename)
+        } else {
+            filename.to_string()
+        };
+        if let Ok(z) = create_in_memory_zip(filename, content.as_bytes()) {
+            (z, zip_name, "application/zip".to_string())
+        } else {
+            let mime = detect_mime_from_filename(filename).to_string();
+            (content.as_bytes().to_vec(), filename.to_string(), mime)
+        }
+    } else if filename.to_ascii_lowercase().ends_with(".pdf") && !content.starts_with("%PDF-") {
+        if let Ok(pdf_bytes) = create_in_memory_pdf(filename, content) {
+            (
+                pdf_bytes,
+                filename.to_string(),
+                "application/pdf".to_string(),
+            )
+        } else {
+            (
+                content.as_bytes().to_vec(),
+                filename.to_string(),
+                "application/pdf".to_string(),
+            )
+        }
+    } else {
+        let mime = detect_mime_from_filename(filename).to_string();
+        (content.as_bytes().to_vec(), filename.to_string(), mime)
+    }
+}
+
 pub fn detect_mime_from_filename(filename: &str) -> &'static str {
     let lower = filename.to_ascii_lowercase();
     if lower.ends_with(".zip") {

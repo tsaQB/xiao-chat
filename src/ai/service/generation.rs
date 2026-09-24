@@ -1726,7 +1726,11 @@ impl AIChatService {
                                 match args.validate() {
                                     Ok(()) => {
                                         let (final_bytes, final_filename, mime_type) =
-                                            args.into_payload();
+                                            crate::document::create_document_payload(
+                                                &args.filename,
+                                                &args.content,
+                                                args.as_zip,
+                                            );
 
                                         let attach_key = format!("doc_{}", staged_documents.len());
                                         let staged_doc = StagedDocument::new(

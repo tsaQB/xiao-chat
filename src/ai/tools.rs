@@ -2597,41 +2597,6 @@ impl CreateDocumentArgs {
         }
         Ok(())
     }
-
-    pub fn into_payload(self) -> (Vec<u8>, String, String) {
-        if self.as_zip {
-            let zip_name = if !self.filename.to_ascii_lowercase().ends_with(".zip") {
-                format!("{}.zip", self.filename)
-            } else {
-                self.filename.clone()
-            };
-            if let Ok(z) =
-                crate::document::create_in_memory_zip(&self.filename, self.content.as_bytes())
-            {
-                (z, zip_name, "application/zip".to_string())
-            } else {
-                let mime = crate::document::detect_mime_from_filename(&self.filename).to_string();
-                (self.content.into_bytes(), self.filename, mime)
-            }
-        } else if self.filename.to_ascii_lowercase().ends_with(".pdf")
-            && !self.content.starts_with("%PDF-")
-        {
-            if let Ok(pdf_bytes) =
-                crate::document::create_in_memory_pdf(&self.filename, &self.content)
-            {
-                (pdf_bytes, self.filename, "application/pdf".to_string())
-            } else {
-                (
-                    self.content.into_bytes(),
-                    self.filename,
-                    "application/pdf".to_string(),
-                )
-            }
-        } else {
-            let mime = crate::document::detect_mime_from_filename(&self.filename).to_string();
-            (self.content.into_bytes(), self.filename, mime)
-        }
-    }
 }
 
 #[cfg(test)]
