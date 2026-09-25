@@ -2583,9 +2583,15 @@ impl CreateDocumentArgs {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ArchiveFileEntry {
+    pub filename: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct CreateArchiveArgs {
     pub filename: String,
-    pub files: Vec<crate::document::ArchiveFileEntry>,
+    pub files: Vec<ArchiveFileEntry>,
     #[serde(default)]
     pub caption: Option<String>,
 }
@@ -3388,11 +3394,11 @@ mod tests {
         let mut args = CreateArchiveArgs {
             filename: "../../project".to_string(),
             files: vec![
-                crate::document::ArchiveFileEntry {
+                ArchiveFileEntry {
                     filename: "../../../etc/passwd".to_string(),
                     content: "root:x:0:0".to_string(),
                 },
-                crate::document::ArchiveFileEntry {
+                ArchiveFileEntry {
                     filename: "src/main.rs".to_string(),
                     content: "fn main() {}".to_string(),
                 },

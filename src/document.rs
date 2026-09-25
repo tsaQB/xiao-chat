@@ -572,11 +572,7 @@ async fn render_scanned_pdf_pages(data: &[u8], page_count: usize) -> Result<Vec<
     render_result
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
-pub struct ArchiveFileEntry {
-    pub filename: String,
-    pub content: String,
-}
+pub use crate::ai::tools::ArchiveFileEntry;
 
 pub fn create_in_memory_multi_file_zip(entries: &[ArchiveFileEntry]) -> Result<Vec<u8>, String> {
     if entries.is_empty() {
@@ -1078,10 +1074,12 @@ mod tests {
         let mut archive = zip::ZipArchive::new(cursor).expect("zip archive valid");
         assert_eq!(archive.len(), 3);
 
-        let mut file1 = archive.by_name("script.sh").expect("find script.sh");
-        let mut c1 = String::new();
-        file1.read_to_string(&mut c1).expect("read script.sh");
-        assert_eq!(c1, "#!/bin/bash\necho hello");
+        {
+            let mut file1 = archive.by_name("script.sh").expect("find script.sh");
+            let mut c1 = String::new();
+            file1.read_to_string(&mut c1).expect("read script.sh");
+            assert_eq!(c1, "#!/bin/bash\necho hello");
+        }
 
         // Traversal path "../../../etc/passwd" sanitized to "etc_passwd"
         assert!(archive.by_name("etc_passwd").is_ok());
