@@ -2489,7 +2489,7 @@ async fn test_create_archive_staging_and_auto_append() {
             }
 
             let sse = if conn_count == 1 {
-                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_arch123\",\"type\":\"function\",\"function\":{\"name\":\"create_archive\",\"arguments\":\"{\\\"filename\\\":\\\"bundle.zip\\\",\\\"files\\\":[{\\\"filename\\\":\\\"cpa.sh\\\",\\\"content\\\":\\\"#!/bin/bash\\\\necho cpa\\\"},{\\\"filename\\\":\\\"README.md\\\",\\\"content\\\":\\\"# Dokumentasi\\\"}]}\"}}]}}]}\n\ndata: [DONE]\n\n"
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_arch123\",\"type\":\"function\",\"function\":{\"name\":\"create_archive\",\"arguments\":\"{\\\"filename\\\":\\\"bundle.zip\\\",\\\"files\\\":[{\\\"filename\\\":\\\"cpa.sh\\\",\\\"content\\\":\\\"#!/bin/bash\\\\necho cpa\\\"},{\\\"filename\\\":\\\"setup.sh\\\",\\\"content\\\":\\\"echo setup\\\"},{\\\"filename\\\":\\\"README.md\\\",\\\"content\\\":\\\"# Dokumentasi\\\"}]}\"}}]}}]}\n\ndata: [DONE]\n\n"
             } else {
                 "data: {\"choices\":[{\"delta\":{\"content\":\"Berikut adalah berkas bundle project Anda.\"}}]}\n\ndata: [DONE]\n\n"
             };
@@ -2561,11 +2561,25 @@ async fn test_create_archive_staging_and_auto_append() {
     // 2. Verify inner files in zip
     let cursor = std::io::Cursor::new(doc.bytes.clone());
     let mut archive = zip::ZipArchive::new(cursor).expect("valid zip archive");
-    assert_eq!(archive.len(), 2);
-    let mut file1 = archive.by_name("cpa.sh").expect("cpa.sh entry");
-    let mut c1 = String::new();
-    file1.read_to_string(&mut c1).expect("read cpa.sh");
-    assert_eq!(c1, "#!/bin/bash\necho cpa");
+    assert_eq!(archive.len(), 3);
+    {
+        let mut file1 = archive.by_name("cpa.sh").expect("cpa.sh entry");
+        let mut c1 = String::new();
+        file1.read_to_string(&mut c1).expect("read cpa.sh");
+        assert_eq!(c1, "#!/bin/bash\necho cpa");
+    }
+    {
+        let mut file2 = archive.by_name("setup.sh").expect("setup.sh entry");
+        let mut c2 = String::new();
+        file2.read_to_string(&mut c2).expect("read setup.sh");
+        assert_eq!(c2, "echo setup");
+    }
+    {
+        let mut file3 = archive.by_name("README.md").expect("README.md entry");
+        let mut c3 = String::new();
+        file3.read_to_string(&mut c3).expect("read README.md");
+        assert_eq!(c3, "# Dokumentasi");
+    }
 
     // 3. Verify auto-append logic
     assert!(answer.contains("[document: bundle.zip](attach://doc_0)"));

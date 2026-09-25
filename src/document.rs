@@ -572,7 +572,7 @@ async fn render_scanned_pdf_pages(data: &[u8], page_count: usize) -> Result<Vec<
     render_result
 }
 
-pub use crate::ai::tools::ArchiveFileEntry;
+pub use crate::ai::tools::{sanitize_archive_entry_path, ArchiveFileEntry};
 
 pub fn create_in_memory_multi_file_zip(entries: &[ArchiveFileEntry]) -> Result<Vec<u8>, String> {
     if entries.is_empty() {
@@ -591,21 +591,9 @@ pub fn create_in_memory_multi_file_zip(entries: &[ArchiveFileEntry]) -> Result<V
             .compression_method(zip::CompressionMethod::Deflated);
 
         for entry in entries {
-            let clean_name = entry
-                .filename
-                .replace("../", "")
-                .replace("..\\", "")
-                .replace(['/', '\\'], "_")
-                .trim()
-                .to_string();
-            let final_name = if clean_name.is_empty() {
-                "file.txt"
-            } else {
-                &clean_name
-            };
-
+            let final_name = sanitize_archive_entry_path(&entry.filename);
             writer
-                .start_file(final_name, options)
+                .start_file(&final_name, options)
                 .map_err(|e| format!("Gagal zip start_file untuk '{final_name}': {e}"))?;
             std::io::Write::write_all(&mut writer, entry.content.as_bytes())
                 .map_err(|e| format!("Gagal write ke zip untuk '{final_name}': {e}"))?;
@@ -1062,7 +1050,7 @@ mod tests {
             },
             ArchiveFileEntry {
                 filename: "../../../etc/passwd".to_string(),
-                content: "fake".to_string(),
+                content: "root:x:0:0".to_string(),
             },
         ];
 
@@ -1081,8 +1069,21 @@ mod tests {
             assert_eq!(c1, "#!/bin/bash\necho hello");
         }
 
-        // Traversal path "../../../etc/passwd" sanitized to "etc_passwd"
-        assert!(archive.by_name("etc_passwd").is_ok());
+        {
+            let mut file2 = archive
+                .by_name("subdir/config.json")
+                .expect("find subdir/config.json");
+            let mut c2 = String::new();
+            file2.read_to_string(&mut c2).expect("read config.json");
+            assert_eq!(c2, "{\"key\": \"val\"}");
+        }
+
+        {
+            let mut file3 = archive.by_name("etc/passwd").expect("find etc/passwd");
+            let mut c3 = String::new();
+            file3.read_to_string(&mut c3).expect("read etc/passwd");
+            assert_eq!(c3, "root:x:0:0");
+        }
     }
 
     #[test]

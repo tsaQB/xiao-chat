@@ -419,6 +419,34 @@ pub fn format_no_images_guidance(query: &str) -> String {
     )
 }
 
+pub fn sanitize_archive_entry_path(path: &str) -> String {
+    use std::path::{Component, Path};
+
+    let mut safe_components = Vec::new();
+    for comp in Path::new(path).components() {
+        match comp {
+            Component::Normal(c) => {
+                let part = c.to_string_lossy().trim().to_string();
+                if !part.is_empty() {
+                    safe_components.push(part);
+                }
+            }
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
+                // Skip traversal and root indicators
+            }
+        }
+    }
+
+    if safe_components.is_empty() {
+        "file.txt".to_string()
+    } else {
+        safe_components.join("/")
+    }
+}
+
 pub fn get_tools_definition() -> Value {
     json!([
         {
@@ -2614,17 +2642,7 @@ impl CreateArchiveArgs {
         self.filename = clean_name;
 
         for entry in &mut self.files {
-            let mut file_clean = entry
-                .filename
-                .replace("../", "")
-                .replace("..\\", "")
-                .replace(['/', '\\'], "_")
-                .trim()
-                .to_string();
-            if file_clean.is_empty() {
-                file_clean = "file.txt".to_string();
-            }
-            entry.filename = file_clean;
+            entry.filename = sanitize_archive_entry_path(&entry.filename);
         }
 
         sanitize_multimedia_caption(&mut self.caption);
@@ -3409,8 +3427,8 @@ mod tests {
 
         args.sanitize();
         assert_eq!(args.filename, "project.zip");
-        assert_eq!(args.files[0].filename, "etc_passwd");
-        assert_eq!(args.files[1].filename, "src_main.rs");
+        assert_eq!(args.files[0].filename, "etc/passwd");
+        assert_eq!(args.files[1].filename, "src/main.rs");
         assert_eq!(args.caption.as_deref(), Some("Test Archive"));
         assert!(args.validate().is_ok());
 
