@@ -378,7 +378,7 @@ impl AIChatService {
             return Err("Format audio tidak dapat direpresentasikan untuk transkripsi.".into());
         }
         let stt_url = provider_url(&route.provider.endpoint, "audio/transcriptions");
-        let part = Part::bytes(audio_bytes)
+        let part = Part::bytes(audio_bytes.clone())
             .file_name(safe_filename)
             .mime_str(safe_mime)
             .map_err(|error| format!("multipart audio error: {error}"))?;
