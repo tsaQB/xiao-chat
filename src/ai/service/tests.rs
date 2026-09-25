@@ -857,27 +857,103 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
 
 #[tokio::test]
 async fn transcribe_audio_resolved_falls_back_to_chat_completions_on_404() {
-    let (endpoint, server) = spawn_mock_server(vec![
-        MockResponse::json(404, json!({"error": "endpoint not found"})),
-        MockResponse::json(
-            200,
-            json!({
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": "fallback audio transcript"
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind local test port");
+    let address = listener.local_addr().expect("valid local address");
+
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        // Request 1: 404 on /audio/transcriptions
+        {
+            let (mut socket, _) = listener.accept().await.expect("accept socket succeeds");
+            let mut bytes = Vec::new();
+            let mut buffer = [0u8; 1024];
+            loop {
+                let count = socket
+                    .read(&mut buffer)
+                    .await
+                    .expect("read socket succeeds");
+                assert!(count > 0);
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length").then(|| {
+                                value.trim().parse::<usize>().expect("valid content-length")
+                            })
+                        })
+                        .expect("content-length header found");
+                    if bytes.len() >= end + 4 + length {
+                        break;
                     }
-                }]
-            }),
-        ),
-    ])
-    .await;
+                }
+            }
+            requests.push(String::from_utf8(bytes).expect("valid utf8 request body"));
+            let body = r#"{"error":"endpoint not found"}"#;
+            let response = format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response succeeds");
+        }
+        // Request 2: 200 on /chat/completions
+        {
+            let (mut socket, _) = listener.accept().await.expect("accept socket succeeds");
+            let mut bytes = Vec::new();
+            let mut buffer = [0u8; 1024];
+            loop {
+                let count = socket
+                    .read(&mut buffer)
+                    .await
+                    .expect("read socket succeeds");
+                assert!(count > 0);
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length").then(|| {
+                                value.trim().parse::<usize>().expect("valid content-length")
+                            })
+                        })
+                        .expect("content-length header found");
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            requests.push(String::from_utf8(bytes).expect("valid utf8 request body"));
+            let body = r#"{"choices":[{"message":{"role":"assistant","content":"fallback audio transcript"}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response succeeds");
+        }
+        requests
+    });
 
     let provider = ProviderConfig {
         id: "p1".into(),
         name: "test-provider".into(),
-        endpoint: endpoint.clone(),
+        endpoint: format!("http://{address}/v1"),
         api_key: "key".into(),
+        api_key_ref: None,
         models: vec!["chat-model".into()],
         active_model: "chat-model".into(),
     };
