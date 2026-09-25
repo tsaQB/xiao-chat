@@ -259,6 +259,44 @@ pub(crate) fn specialist_chat_payload(model: &str, content: Vec<Value>) -> Value
     })
 }
 
+fn apply_specialist_auth(
+    mut request: reqwest::RequestBuilder,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    let clean = api_key.trim();
+    if !clean.is_empty()
+        && !["none", "-", "no", "null"]
+            .iter()
+            .any(|value| clean.eq_ignore_ascii_case(value))
+    {
+        request = request.header("Authorization", format!("Bearer {clean}"));
+    }
+    request
+}
+
+fn extract_chat_completion_text(body: &Value) -> Option<String> {
+    let content = body
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?
+        .get("content")?;
+
+    if let Some(text) = content.as_str() {
+        let trimmed = text.trim();
+        return (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+
+    let parts = content.as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 impl AIChatService {
     pub(crate) async fn run_specialist_observation(
         &self,
@@ -307,22 +345,13 @@ impl AIChatService {
         }
 
         let url = provider_url(&route.provider.endpoint, "chat/completions");
-        let mut request = self
+        let request = self
             .client
             .post(url)
             .header("Content-Type", "application/json")
             .json(&specialist_chat_payload(&route.model, content))
             .timeout(Duration::from_secs(90));
-        if !route.provider.api_key.is_empty()
-            && !["none", "-", "no", "null"]
-                .iter()
-                .any(|value| route.provider.api_key.eq_ignore_ascii_case(value))
-        {
-            request = request.header(
-                "Authorization",
-                format!("Bearer {}", route.provider.api_key),
-            );
-        }
+        let request = apply_specialist_auth(request, &route.provider.api_key);
         let response = request.send().await.map_err(|error| {
             if error.is_timeout() {
                 "specialist request timed out; capability remains unchanged".to_string()
@@ -339,28 +368,9 @@ impl AIChatService {
             ));
         }
         let body = read_bounded_json(response).await?;
-        let content = body
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("message"))
-            .and_then(|message| message.get("content"));
-        let text = if let Some(text) = content.and_then(Value::as_str) {
-            text.to_string()
-        } else if let Some(parts) = content.and_then(Value::as_array) {
-            parts
-                .iter()
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("")
-        } else {
-            String::new()
-        };
-        let text = text.trim();
-        if text.is_empty() {
-            return Err("specialist returned an empty observation".to_string());
-        }
-        Ok(truncate_chars(text, 12_000))
+        let text = extract_chat_completion_text(&body)
+            .ok_or_else(|| "specialist returned an empty observation".to_string())?;
+        Ok(truncate_chars(&text, 12_000))
     }
 
     pub(crate) async fn transcribe_audio_resolved(
@@ -378,28 +388,19 @@ impl AIChatService {
             return Err("Format audio tidak dapat direpresentasikan untuk transkripsi.".into());
         }
         let stt_url = provider_url(&route.provider.endpoint, "audio/transcriptions");
-        let part = Part::bytes(audio_bytes.clone())
+        let part = Part::bytes(audio_bytes.as_slice())
             .file_name(safe_filename)
             .mime_str(safe_mime)
             .map_err(|error| format!("multipart audio error: {error}"))?;
         let form = Form::new()
             .part("file", part)
             .text("model", route.model.clone());
-        let mut request = self
+        let request = self
             .client
             .post(stt_url)
             .multipart(form)
             .timeout(Duration::from_secs(90));
-        if !route.provider.api_key.is_empty()
-            && !["none", "-", "no", "null"]
-                .iter()
-                .any(|value| route.provider.api_key.eq_ignore_ascii_case(value))
-        {
-            request = request.header(
-                "Authorization",
-                format!("Bearer {}", route.provider.api_key),
-            );
-        }
+        let request = apply_specialist_auth(request, &route.provider.api_key);
         let response = request.send().await.map_err(|error| {
             if error.is_timeout() {
                 "audio transcription timed out; timeout is not Unsupported".to_string()
@@ -468,21 +469,12 @@ impl AIChatService {
         });
 
         let url = provider_url(&route.provider.endpoint, "chat/completions");
-        let mut request = self
+        let request = self
             .client
             .post(url)
             .json(&payload)
             .timeout(Duration::from_secs(90));
-        if !route.provider.api_key.is_empty()
-            && !["none", "-", "no", "null"]
-                .iter()
-                .any(|value| route.provider.api_key.eq_ignore_ascii_case(value))
-        {
-            request = request.header(
-                "Authorization",
-                format!("Bearer {}", route.provider.api_key),
-            );
-        }
+        let request = apply_specialist_auth(request, &route.provider.api_key);
 
         let response = request.send().await.map_err(|error| {
             if error.is_timeout() {
@@ -501,19 +493,8 @@ impl AIChatService {
         }
 
         let body = read_bounded_json(response).await?;
-        let text = body
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim();
-
-        if text.is_empty() {
-            return Err("multimodal audio transcription returned empty text".to_string());
-        }
-        Ok(truncate_chars(text, 32_000))
+        let text = extract_chat_completion_text(&body)
+            .ok_or_else(|| "multimodal audio transcription returned empty text".to_string())?;
+        Ok(truncate_chars(&text, 32_000))
     }
 }

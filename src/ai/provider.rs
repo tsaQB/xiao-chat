@@ -1342,7 +1342,7 @@ impl AIChatService {
             if audio_transcription != Some(true) && probed_audio_input == Some(true) {
                 observer(ProbeEvent::Progress {
                     capability: CapabilityKind::AudioTranscription,
-                    message: "Whisper endpoint unavailable; verifying multimodal chat audio transcription..."
+                    message: "Whisper endpoint unavailable; using verified multimodal audio capability..."
                         .to_string(),
                 });
                 audio_transcription = Some(true);
@@ -2207,6 +2207,16 @@ mod tests {
             "text": "Xiao capability probe."
         }));
         assert_eq!(validate_transcription_probe(&response), Some(true));
+    }
+
+    #[test]
+    fn semantic_stt_probe_show_capability_variant_supported() {
+        let response = CapabilityProbeResponse::Success(json!({
+            "text": "Show capability probe"
+        }));
+        assert_eq!(validate_transcription_probe(&response), Some(true));
+        assert_eq!(response.outcome(Some(true)), ProbeOutcome::Supported);
+        assert!(is_expected_probe_transcript("show capability probe"));
     }
 
     #[test]
