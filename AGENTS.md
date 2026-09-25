@@ -73,6 +73,7 @@ cargo run -- context [chat_id] [thread_id]
 
 # Manage long-term user memories
 cargo run -- memory
+cargo run -- memory list
 cargo run -- memory rm [key]
 cargo run -- memory clear
 
@@ -80,15 +81,19 @@ cargo run -- memory clear
 cargo run -- ai
 cargo run -- ai list
 cargo run -- ai use [model]
+cargo run -- ai add
+cargo run -- ai rm
+cargo run -- ai provider [name]
 cargo run -- ai addon
 cargo run -- ai test [role]
 
 # Web Search Engine Hub & API Keys (Brave, Tavily, Exa)
 cargo run -- search
+cargo run -- search test [query]
 cargo run -- search brave [KEY|rm]
 cargo run -- search tavily [KEY|rm]
 cargo run -- search exa [KEY|rm]
-cargo run -- search test [query]
+cargo run -- search engine [NAME]
 
 # Model Context Protocol (MCP) Server Registry & Tools
 cargo run -- mcp
@@ -96,15 +101,16 @@ cargo run -- mcp list
 cargo run -- mcp add <NAME> <URL>
 cargo run -- mcp rm <NAME>
 cargo run -- mcp tools
-cargo run -- mcp test [NAME]
+cargo run -- mcp test [query]
 cargo run -- mcp url [URL]
 cargo run -- mcp reset
 
 # Telegram Gateway & Owner Configuration
 cargo run -- gateway
-cargo run -- gateway test
+cargo run -- gateway check
 cargo run -- gateway token <BOT_TOKEN>
 cargo run -- gateway owner <OWNER_USER_ID>
+cargo run -- gateway id <OWNER_USER_ID>
 
 # Interactive initial setup wizard
 cargo run -- setup

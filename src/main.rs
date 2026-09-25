@@ -212,9 +212,8 @@ async fn main() {
             return;
         }
         Some("search") => {
-            let action_arg = args.get(2).map(|s| s.as_str());
-            let target_arg = args.get(3).map(|s| s.as_str());
-            run_cli_search_hub(&ai_service, action_arg, target_arg).await;
+            let (action_arg, target_buf) = cli::search::parse_search_args(&args[2..]);
+            run_cli_search_hub(&ai_service, action_arg, target_buf.as_deref()).await;
             return;
         }
         Some("mcp") => {

@@ -1548,7 +1548,7 @@ async fn test_create_quiz_with_preamble_sends_two_connected_messages() {
     };
 
     let (_thinking, answer, _staged_docs, cancelled) = service
-        .generate_response_with_snapshot(1234, 0, 1234, gen_input, &snapshot, &mut receiver)
+        .generate_response_with_snapshot(8881, 0, 8881, gen_input, &snapshot, &mut receiver)
         .await;
 
     assert!(!cancelled);
@@ -1565,7 +1565,7 @@ async fn test_create_quiz_with_preamble_sends_two_connected_messages() {
     // Message 1: Preamble (sendRichMessage)
     let (req1_line, payload1) = &tg_requests[0];
     assert!(req1_line.contains("POST /sendRichMessage"));
-    assert_eq!(payload1["chat_id"], 1234);
+    assert_eq!(payload1["chat_id"], 8881);
 
     // Message 2: Native Quiz (sendPoll) linked to message_id 8001
     let (req2_line, payload2) = &tg_requests[1];
@@ -1578,7 +1578,7 @@ async fn test_create_quiz_with_preamble_sends_two_connected_messages() {
     );
 
     // Verify session history recorded both user prompt and assistant preamble+quiz
-    let messages = crate::ai::storage::load_scoped_messages_async(1234, 0, 10).await;
+    let messages = crate::ai::storage::load_scoped_messages_async(8881, 0, 10).await;
     assert!(
         messages.iter().any(|m| m.role == "user"
             && m.content

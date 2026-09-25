@@ -88,11 +88,7 @@ pub(crate) async fn probe_mcp_server(mcp_url: &str, query: &str) {
         Ok(result) => {
             let elapsed = start.elapsed().as_millis();
             println!("\x1b[1;32m✔ Successfully connected to MCP ({elapsed}ms)\x1b[0m\n");
-            let preview = if result.len() > 400 {
-                &result[..400]
-            } else {
-                &result
-            };
+            let preview = crate::util::truncate_chars(&result, 400);
             println!(
                 "\x1b[38;5;244mResponse Snippet:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
                 preview.trim()
@@ -161,10 +157,7 @@ async fn run_interactive_mcp_menu() {
                 println!("      Endpoint  : \x1b[38;5;45m{current_mcp_url}\x1b[0m");
                 println!("      Transport : HTTP / SSE (JSON-RPC 2.0)");
                 println!("      Tools     : web_search_exa\n");
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             1 => {
                 println!("\n\x1b[1;36mAdd / Connect New MCP Server\x1b[0m");
@@ -196,25 +189,16 @@ async fn run_interactive_mcp_menu() {
                         );
                     }
                 }
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             2 => {
                 println!("\n\x1b[1;36mRemove MCP Server\x1b[0m");
                 println!("  Default server 'exa-search' cannot be removed, but can be reset via Reset option.\n");
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             3 => {
                 print_tools_summary();
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             4 => {
                 println!("\n\x1b[1;36mProbe MCP Server Handshake\x1b[0m");
@@ -229,10 +213,7 @@ async fn run_interactive_mcp_menu() {
                     trimmed
                 };
                 probe_mcp_server(&current_mcp_url, query).await;
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             5 => {
                 let default_url = "https://mcp.exa.ai/";
@@ -244,10 +225,7 @@ async fn run_interactive_mcp_menu() {
                 } else {
                     println!("\n\x1b[31m✖ Failed to reset MCP configuration.\x1b[0m\n");
                 }
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             _ => break,
         }
@@ -282,7 +260,7 @@ pub(crate) async fn run_cli_mcp_hub(
             println!(
                 "  xiao mcp add <name> <URL>  - Connect a new remote MCP server (SSRF protected)"
             );
-            println!("  xiao mcp rm <name>         - Remove a registered MCP server");
+            println!("  xiao mcp rm <name>         - Reset custom MCP server to default");
             println!(
                 "  xiao mcp tools             - List registered function calling tools & schemas"
             );
@@ -304,7 +282,7 @@ pub(crate) async fn run_cli_mcp_hub(
                 name_opt.filter(|s| s.starts_with("http://") || s.starts_with("https://"))
             {
                 u.to_string()
-            } else if io::stdout().is_terminal() {
+            } else if io::stdin().is_terminal() && io::stdout().is_terminal() {
                 print!("\nEnter new MCP Endpoint URL: ");
                 let _ = io::stdout().flush();
                 let mut input = String::new();
@@ -345,7 +323,7 @@ pub(crate) async fn run_cli_mcp_hub(
         McpCliAction::Url(tgt) => {
             let raw_url = if let Some(u) = tgt {
                 u.to_string()
-            } else if io::stdout().is_terminal() {
+            } else if io::stdin().is_terminal() && io::stdout().is_terminal() {
                 print!("\nEnter new MCP Endpoint URL: ");
                 let _ = io::stdout().flush();
                 let mut input = String::new();
@@ -388,11 +366,11 @@ pub(crate) async fn run_cli_mcp_hub(
                 if name == "exa-search" || name == "exa" {
                     println!("\n\x1b[33mDefault server '{name}' cannot be removed. Use 'xiao mcp reset' to reset.\x1b[0m\n");
                 } else {
-                    println!("\n\x1b[1;32m✔ MCP server '{name}' successfully removed.\x1b[0m\n");
+                    println!("\n\x1b[33mNo dedicated server '{name}' to remove. XiaoBot manages a unified active MCP endpoint (currently: {current_mcp_url}). Use 'xiao mcp reset' to restore the default endpoint.\x1b[0m\n");
                 }
             } else {
                 println!("\n\x1b[31m✖ Error: <name> parameter is required.\x1b[0m");
-                println!("  Usage: xiao mcp rm <name>\n");
+                println!("  Usage: xiao mcp rm <name> (or run 'xiao mcp reset' to restore default endpoint)\n");
             }
         }
         McpCliAction::Tools => {
@@ -425,7 +403,7 @@ pub(crate) async fn run_cli_mcp_hub(
             println!("    \x1b[1;38;5;45mstatus\x1b[0m, \x1b[38;5;244m(none)\x1b[0m             \x1b[38;5;250mDisplay MCP server status & telemetry dashboard\x1b[0m");
             println!("    \x1b[1;38;5;45mlist\x1b[0m                      \x1b[38;5;250mList all registered MCP server endpoints\x1b[0m");
             println!("    \x1b[1;38;5;45madd\x1b[0m \x1b[38;5;245m<name> <URL>\x1b[0m          \x1b[38;5;250mConnect new remote MCP server (SSRF guarded)\x1b[0m");
-            println!("    \x1b[1;38;5;45mrm\x1b[0m, \x1b[1;38;5;45mremove\x1b[0m \x1b[38;5;245m<name>\x1b[0m         \x1b[38;5;250mDisconnect and unregister an MCP server\x1b[0m");
+            println!("    \x1b[1;38;5;45mrm\x1b[0m, \x1b[1;38;5;45mremove\x1b[0m \x1b[38;5;245m<name>\x1b[0m         \x1b[38;5;250mReset custom MCP endpoint to default\x1b[0m");
             println!("    \x1b[1;38;5;45mtools\x1b[0m                     \x1b[38;5;250mList registered tool schemas exposed to AI\x1b[0m");
             println!("    \x1b[1;38;5;45mtest\x1b[0m, \x1b[1;38;5;45mprobe\x1b[0m \x1b[38;5;245m[query]\x1b[0m        \x1b[38;5;250mDirect JSON-RPC probe to MCP server\x1b[0m");
             println!("    \x1b[1;38;5;45mreset\x1b[0m                     \x1b[38;5;250mReset MCP endpoint to default (https://mcp.exa.ai/)\x1b[0m");
@@ -467,5 +445,71 @@ pub(crate) async fn run_cli_mcp_hub(
             println!("  Run 'xiao mcp help' or 'xiao help' for usage instructions.\n");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_mcp_cli_action() {
+        assert_eq!(parse_mcp_cli_action(None, None, None), McpCliAction::Status);
+        assert_eq!(
+            parse_mcp_cli_action(Some("status"), None, None),
+            McpCliAction::Status
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("list"), None, None),
+            McpCliAction::List
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("help"), None, None),
+            McpCliAction::Help
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("tools"), None, None),
+            McpCliAction::Tools
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("url"), Some("https://mcp.local"), None),
+            McpCliAction::Url(Some("https://mcp.local"))
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("add"), Some("custom"), Some("https://mcp.local")),
+            McpCliAction::Add(Some("custom"), Some("https://mcp.local"))
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("rm"), Some("custom"), None),
+            McpCliAction::Remove(Some("custom"))
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("test"), Some("query"), None),
+            McpCliAction::Test(Some("query"))
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("search"), Some("query"), None),
+            McpCliAction::Search(Some("query"))
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("brave"), Some("key"), None),
+            McpCliAction::Brave(Some("key"))
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("tavily"), Some("key"), None),
+            McpCliAction::Tavily(Some("key"))
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("exa"), Some("key"), None),
+            McpCliAction::Exa(Some("key"))
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("reset"), None, None),
+            McpCliAction::Reset
+        );
+        assert_eq!(
+            parse_mcp_cli_action(Some("bogus"), None, None),
+            McpCliAction::Unknown("bogus")
+        );
     }
 }

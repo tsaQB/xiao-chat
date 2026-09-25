@@ -32,6 +32,40 @@ pub fn parse_search_cli_action<'a>(
     }
 }
 
+pub fn parse_search_args(args: &[String]) -> (Option<&str>, Option<String>) {
+    if args.is_empty() {
+        return (None, None);
+    }
+    let first = args[0].as_str();
+    match first {
+        "status" | "menu" => (Some(first), None),
+        "help" | "--help" | "-h" => (Some(first), None),
+        "brave" | "tavily" | "exa" | "engine" | "use" => {
+            let target = if args.len() > 1 {
+                Some(args[1..].join(" "))
+            } else {
+                None
+            };
+            (Some(first), target)
+        }
+        "test" | "query" | "check" => {
+            let target = if args.len() > 1 {
+                Some(args[1..].join(" "))
+            } else {
+                None
+            };
+            (Some(first), target)
+        }
+        unknown => {
+            if unknown.starts_with('-') {
+                (Some(first), None)
+            } else {
+                (Some("test"), Some(args.join(" ")))
+            }
+        }
+    }
+}
+
 pub fn mask_api_key(key: &str) -> String {
     let trimmed = key.trim();
     if trimmed.is_empty() {
@@ -214,10 +248,7 @@ async fn run_cli_configure_search_keys_submenu() {
             println!("\x1b[31m✖ Failed to save {label} key.\x1b[0m\n");
         }
 
-        print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-        let _ = io::stdout().flush();
-        let mut tmp = String::new();
-        let _ = io::stdin().read_line(&mut tmp);
+        crate::cli::tui::print_press_enter();
     }
 }
 
@@ -317,21 +348,14 @@ async fn run_interactive_search_menu() {
                     println!(
                         "\x1b[1;32m✔ Successfully retrieved search results ({elapsed}ms)\x1b[0m\n"
                     );
-                    let preview = if result.len() > 500 {
-                        &result[..500]
-                    } else {
-                        &result
-                    };
+                    let preview = crate::util::truncate_chars(&result, 500);
                     println!(
                         "\x1b[38;5;244mResult Snippet:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
                         preview.trim()
                     );
                 }
 
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             1 => {
                 run_cli_configure_search_keys_submenu().await;
@@ -354,7 +378,7 @@ pub(crate) async fn run_cli_search_hub(
 
     match parse_search_cli_action(action, target) {
         SearchCliAction::Status => {
-            if io::stdout().is_terminal() {
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
                 run_interactive_search_menu().await;
                 return;
             }
@@ -417,11 +441,7 @@ pub(crate) async fn run_cli_search_hub(
                 println!(
                     "\x1b[1;32m✔ Successfully retrieved search results ({elapsed}ms)\x1b[0m\n"
                 );
-                let preview = if result.len() > 500 {
-                    &result[..500]
-                } else {
-                    &result
-                };
+                let preview = crate::util::truncate_chars(&result, 500);
                 println!(
                     "\x1b[38;5;244mResult Snippet:\x1b[0m\n{}\x1b[38;5;244m...\x1b[0m\n",
                     preview.trim()
@@ -438,10 +458,15 @@ pub(crate) async fn run_cli_search_hub(
             handle_search_key("EXA_API_KEY", "Exa REST API", tgt);
         }
         SearchCliAction::Engine(tgt) => {
-            if let Some(eng) = tgt {
-                println!("\x1b[1;32m✔ Preferred search engine set to: {eng}\x1b[0m\n");
+            println!("  Active search engine: \x1b[1;37m{search_engine_str}\x1b[0m");
+            if let Some(_eng) = tgt {
+                println!("\n  \x1b[38;5;244mNote: Search engine is selected automatically based on configured API keys:\x1b[0m");
+                println!("    1. Brave Search  (\x1b[1;37mxiao search brave <KEY>\x1b[0m)");
+                println!("    2. Tavily Search (\x1b[1;37mxiao search tavily <KEY>\x1b[0m)");
+                println!("    3. Exa REST API  (\x1b[1;37mxiao search exa <KEY>\x1b[0m)");
+                println!("    4. Exa MCP / DuckDuckGo fallback (Keyless)\n");
             } else {
-                println!("  Active search engine: \x1b[1;37m{search_engine_str}\x1b[0m\n");
+                println!();
             }
         }
         SearchCliAction::Help => {
@@ -459,6 +484,7 @@ pub(crate) async fn run_cli_search_hub(
             println!("    \x1b[1;38;5;45mbrave\x1b[0m \x1b[38;5;245m[KEY|rm]\x1b[0m            \x1b[38;5;250mConfigure or remove Brave Search API key\x1b[0m");
             println!("    \x1b[1;38;5;45mtavily\x1b[0m \x1b[38;5;245m[KEY|rm]\x1b[0m           \x1b[38;5;250mConfigure or remove Tavily Search API key\x1b[0m");
             println!("    \x1b[1;38;5;45mexa\x1b[0m \x1b[38;5;245m[KEY|rm]\x1b[0m              \x1b[38;5;250mConfigure or remove Exa REST API key\x1b[0m");
+            println!("    \x1b[1;38;5;45mengine\x1b[0m                    \x1b[38;5;250mDisplay active engine and priority order\x1b[0m");
             println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
 
             println!(
@@ -483,5 +509,115 @@ pub(crate) async fn run_cli_search_hub(
             println!("  Run 'xiao search help' or 'xiao help' for usage instructions.\n");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_search_cli_action() {
+        assert_eq!(parse_search_cli_action(None, None), SearchCliAction::Status);
+        assert_eq!(
+            parse_search_cli_action(Some("status"), None),
+            SearchCliAction::Status
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("menu"), None),
+            SearchCliAction::Status
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("help"), None),
+            SearchCliAction::Help
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("--help"), None),
+            SearchCliAction::Help
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("-h"), None),
+            SearchCliAction::Help
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("test"), Some("rust async")),
+            SearchCliAction::Test(Some("rust async"))
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("brave"), Some("key123")),
+            SearchCliAction::Brave(Some("key123"))
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("tavily"), Some("tvly123")),
+            SearchCliAction::Tavily(Some("tvly123"))
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("exa"), Some("exa123")),
+            SearchCliAction::Exa(Some("exa123"))
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("engine"), Some("brave")),
+            SearchCliAction::Engine(Some("brave"))
+        );
+        assert_eq!(
+            parse_search_cli_action(Some("foo"), None),
+            SearchCliAction::Unknown("foo")
+        );
+    }
+
+    #[test]
+    fn test_multi_word_search_query_parsing() {
+        let args1 = vec![
+            "test".to_string(),
+            "query".to_string(),
+            "with".to_string(),
+            "spaces".to_string(),
+        ];
+        assert_eq!(
+            parse_search_args(&args1),
+            (Some("test"), Some("query with spaces".to_string()))
+        );
+
+        let args2 = vec![
+            "query".to_string(),
+            "another".to_string(),
+            "multi".to_string(),
+            "word".to_string(),
+        ];
+        assert_eq!(
+            parse_search_args(&args2),
+            (Some("query"), Some("another multi word".to_string()))
+        );
+
+        let args3 = vec![
+            "unquoted".to_string(),
+            "direct".to_string(),
+            "search".to_string(),
+        ];
+        assert_eq!(
+            parse_search_args(&args3),
+            (Some("test"), Some("unquoted direct search".to_string()))
+        );
+
+        let args4 = vec!["brave".to_string(), "MY_BRAVE_KEY".to_string()];
+        assert_eq!(
+            parse_search_args(&args4),
+            (Some("brave"), Some("MY_BRAVE_KEY".to_string()))
+        );
+
+        let args5 = vec!["status".to_string()];
+        assert_eq!(parse_search_args(&args5), (Some("status"), None));
+
+        let args6: Vec<String> = vec![];
+        assert_eq!(parse_search_args(&args6), (None, None));
+    }
+
+    #[test]
+    fn test_mask_api_key() {
+        assert_eq!(mask_api_key(""), "(not set)");
+        assert_eq!(mask_api_key("   "), "(not set)");
+        assert_eq!(mask_api_key("12345678"), "••••••••");
+        assert_eq!(mask_api_key("123456789"), "1234••••6789");
+        assert_eq!(mask_api_key("sk-ant-api03-abcdefghijklmn"), "sk-a••••klmn");
     }
 }

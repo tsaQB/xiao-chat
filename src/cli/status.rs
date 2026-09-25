@@ -204,7 +204,11 @@ pub(crate) async fn run_cli_status(ai_service: &AIChatService) {
         let route = routing
             .route(role)
             .cloned()
-            .unwrap_or(ModelRoute::MainModel);
+            .unwrap_or(if role == ModelRole::ImageGeneration {
+                ModelRoute::Disabled
+            } else {
+                ModelRoute::MainModel
+            });
         let route_text = addon_route_text(&route, &providers);
         let health = match ai_service.resolve_model_route(role).await {
             Ok(_) => "\x1b[32mavailable\x1b[0m",
@@ -222,4 +226,51 @@ pub(crate) async fn run_cli_status(ai_service: &AIChatService) {
     println!("    • Search Engine  → {}", search_engine_str);
     println!("    • MCP Hosted     → {}", mcp_url);
     println!("    • Fetch Engine   → \x1b[32mEnabled\x1b[0m (Auto Link Reader & Extract)\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_addon_route_text() {
+        let providers = vec![ProviderConfig {
+            id: "p1".to_string(),
+            name: "OpenAI".to_string(),
+            endpoint: "https://api.openai.com".to_string(),
+            api_key: "key".to_string(),
+            api_key_ref: None,
+            models: vec!["gpt-4o".to_string()],
+            active_model: "gpt-4o".to_string(),
+        }];
+
+        assert_eq!(
+            addon_route_text(&ModelRoute::MainModel, &providers),
+            "Main Model"
+        );
+        assert_eq!(
+            addon_route_text(&ModelRoute::Disabled, &providers),
+            "Disabled"
+        );
+        assert_eq!(
+            addon_route_text(
+                &ModelRoute::Specific {
+                    provider_id: "p1".to_string(),
+                    model: "gpt-4o".to_string()
+                },
+                &providers
+            ),
+            "OpenAI :: gpt-4o"
+        );
+        assert_eq!(
+            addon_route_text(
+                &ModelRoute::Specific {
+                    provider_id: "unknown_p".to_string(),
+                    model: "custom-model".to_string()
+                },
+                &providers
+            ),
+            "unknown_p :: custom-model"
+        );
+    }
 }

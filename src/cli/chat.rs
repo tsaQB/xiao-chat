@@ -565,3 +565,60 @@ pub(crate) async fn execute_cli_chat_turn(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_chat_cli_command() {
+        assert_eq!(parse_chat_cli_command("/exit"), Some(ChatCliCommand::Exit));
+        assert_eq!(parse_chat_cli_command("/quit"), Some(ChatCliCommand::Exit));
+        assert_eq!(
+            parse_chat_cli_command("/clear"),
+            Some(ChatCliCommand::Clear)
+        );
+        assert_eq!(
+            parse_chat_cli_command("/reset"),
+            Some(ChatCliCommand::Clear)
+        );
+        assert_eq!(
+            parse_chat_cli_command("/sessions"),
+            Some(ChatCliCommand::Sessions)
+        );
+        assert_eq!(
+            parse_chat_cli_command("/switch 2"),
+            Some(ChatCliCommand::Switch(2))
+        );
+        assert_eq!(
+            parse_chat_cli_command("/switch"),
+            Some(ChatCliCommand::Unknown("/switch"))
+        );
+        assert_eq!(
+            parse_chat_cli_command("/new Research Session"),
+            Some(ChatCliCommand::New(Some("Research Session")))
+        );
+        assert_eq!(
+            parse_chat_cli_command("/new"),
+            Some(ChatCliCommand::New(None))
+        );
+        assert_eq!(
+            parse_chat_cli_command("/rm 3"),
+            Some(ChatCliCommand::Remove(3))
+        );
+        assert_eq!(
+            parse_chat_cli_command("/model"),
+            Some(ChatCliCommand::Model)
+        );
+        assert_eq!(
+            parse_chat_cli_command("/models"),
+            Some(ChatCliCommand::Model)
+        );
+        assert_eq!(parse_chat_cli_command("/help"), Some(ChatCliCommand::Help));
+        assert_eq!(
+            parse_chat_cli_command("/foobar"),
+            Some(ChatCliCommand::Unknown("/foobar"))
+        );
+        assert_eq!(parse_chat_cli_command("Hello there"), None);
+    }
+}

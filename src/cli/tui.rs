@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use crossterm::{
     cursor,
@@ -425,5 +425,103 @@ pub fn terminal_interactive_select(
                 _ => {}
             }
         }
+    }
+}
+
+pub fn print_press_enter() {
+    if !io::stdin().is_terminal() {
+        return;
+    }
+    print!("\n\x1b[38;5;244mPress Enter to return...\x1b[0m");
+    let _ = io::stdout().flush();
+    let mut tmp = String::new();
+    let _ = io::stdin().read_line(&mut tmp);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_interactive_cursor_wrap_around() {
+        assert_eq!(cycle_prev(0, 5), 4);
+        assert_eq!(cycle_prev(1, 5), 0);
+        assert_eq!(cycle_prev(4, 5), 3);
+        assert_eq!(cycle_next(0, 5), 1);
+        assert_eq!(cycle_next(3, 5), 4);
+        assert_eq!(cycle_next(4, 5), 0);
+
+        // Edge cases
+        assert_eq!(cycle_prev(0, 0), 0);
+        assert_eq!(cycle_next(0, 0), 0);
+        assert_eq!(cycle_prev(0, 1), 0);
+        assert_eq!(cycle_next(0, 1), 0);
+        assert_eq!(cycle_prev(10, 5), 4);
+        assert_eq!(cycle_next(10, 5), 0);
+    }
+
+    #[test]
+    fn test_visible_width() {
+        assert_eq!(visible_width(""), 0);
+        assert_eq!(visible_width("hello"), 5);
+        assert_eq!(visible_width("\x1b[1;32mhello\x1b[0m"), 5);
+        assert_eq!(visible_width("你好"), 2);
+        assert_eq!(visible_width("\x1b[1;32m[ACTIVE]\x1b[0m"), 8);
+        assert_eq!(visible_width("\x1b[38;5;81m ▸ \x1b[0m"), 3);
+        assert_eq!(
+            visible_width("\x1b[48;5;237m\x1b[1;38;5;81m ▸ \x1b[1;37m 1. Model\x1b[0m"),
+            12
+        );
+        assert_eq!(
+            visible_width("OpenAI \x1b[1;32m[ACTIVE]\x1b[0m (gpt-4o)"),
+            24
+        );
+    }
+
+    #[test]
+    fn test_truncate_visible() {
+        assert_eq!(truncate_visible("Hello World", 20), "Hello World");
+        assert_eq!(truncate_visible("Hello World", 11), "Hello World");
+        assert_eq!(truncate_visible("Hello World", 8), "Hello W…\x1b[0m");
+        assert_eq!(
+            truncate_visible("\x1b[1;32mHello World\x1b[0m", 8),
+            "\x1b[1;32mHello W…\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn test_format_tui_title() {
+        let single = format_tui_title("Select Main Model:");
+        assert_eq!(single.len(), 1);
+        assert!(single[0].contains("Select Main Model:"));
+        assert!(single[0].contains("\x1b[1;38;5;45m"));
+
+        let colored = format_tui_title("\x1b[1;36mTitle\x1b[0m");
+        assert_eq!(colored.len(), 1);
+        assert_eq!(colored[0], "\x1b[1;36mTitle\x1b[0m");
+
+        let multi = "== Xiao AI Management Hub ==\r\n • Active Model   : gpt-4o\r\n • Addon Routes:\r\n     Vision   : \x1b[38;5;37mMain Model\x1b[0m";
+        let res = format_tui_title(multi);
+        assert_eq!(res.len(), 4);
+        assert!(res[0].contains("\x1b[1;38;5;45m== Xiao AI Management Hub ==\x1b[0m"));
+        assert!(res[1].contains("\x1b[38;5;245m • Active Model   :\x1b[0m"));
+        assert!(res[1].contains("\x1b[1;37m gpt-4o\x1b[0m"));
+        assert!(res[2].contains("\x1b[38;5;245m • Addon Routes:\x1b[0m"));
+        assert!(res[3].contains("\x1b[38;5;245m     Vision   :\x1b[0m"));
+        assert!(res[3].contains("\x1b[38;5;37mMain Model\x1b[0m"));
+    }
+
+    #[test]
+    fn test_get_terminal_bar_width() {
+        let width = get_terminal_bar_width();
+        assert!(width >= 40);
+        assert!(width <= 140);
+        assert!((40..=MENU_BAR_WIDTH).contains(&width));
+    }
+
+    #[tokio::test]
+    async fn test_central_tui_print_press_enter_non_tty() {
+        // Non-TTY execution must return immediately without blocking on stdin
+        print_press_enter();
     }
 }

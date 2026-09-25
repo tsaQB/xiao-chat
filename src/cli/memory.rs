@@ -6,6 +6,7 @@ use crate::{get_configured_owner_id, load_environment};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MemoryCliAction<'a> {
+    Menu,
     List,
     Clear,
     Remove(Option<&'a str>),
@@ -21,7 +22,8 @@ pub fn parse_memory_cli_action<'a>(
         Some("help") | Some("--help") | Some("-h") => MemoryCliAction::Help,
         Some("clear") => MemoryCliAction::Clear,
         Some("rm") | Some("remove") | Some("delete") => MemoryCliAction::Remove(target),
-        Some("list") | None => MemoryCliAction::List,
+        Some("menu") | None => MemoryCliAction::Menu,
+        Some("list") => MemoryCliAction::List,
         Some(unknown) => MemoryCliAction::Unknown(unknown),
     }
 }
@@ -94,29 +96,19 @@ async fn run_interactive_memory_menu(owner_id: i64) {
                         "─".repeat(bar_width.saturating_sub(4))
                     );
                 }
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             1 => {
                 if memories.is_empty() {
                     println!("\n\x1b[33mNo facts currently recorded to delete.\x1b[0m\n");
-                    print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                    let _ = io::stdout().flush();
-                    let mut tmp = String::new();
-                    let _ = io::stdin().read_line(&mut tmp);
+                    crate::cli::tui::print_press_enter();
                     continue;
                 }
 
                 let mut fact_items: Vec<String> = memories
                     .iter()
                     .map(|(k, f)| {
-                        let snippet = if f.len() > 45 {
-                            format!("{}...", &f[..45])
-                        } else {
-                            f.clone()
-                        };
+                        let snippet = crate::util::truncate_chars_with_ellipsis(f, 45);
                         format!("{:<20} ({snippet})", k)
                     })
                     .collect();
@@ -145,10 +137,7 @@ async fn run_interactive_memory_menu(owner_id: i64) {
                         } else {
                             println!("\n\x1b[31m✖ Failed to remove fact '{target_key}'.\x1b[0m\n");
                         }
-                        print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                        let _ = io::stdout().flush();
-                        let mut tmp = String::new();
-                        let _ = io::stdin().read_line(&mut tmp);
+                        crate::cli::tui::print_press_enter();
                     }
                 }
             }
@@ -166,10 +155,7 @@ async fn run_interactive_memory_menu(owner_id: i64) {
                 } else {
                     println!("\n\x1b[38;5;244mOperation cancelled.\x1b[0m\n");
                 }
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             _ => break,
         }
@@ -184,152 +170,243 @@ pub(crate) async fn run_cli_memory(
     load_environment();
 
     let parsed = parse_memory_cli_action(action, target);
-    if parsed == MemoryCliAction::Help {
-        let bar_width = crate::cli::tui::get_terminal_bar_width();
-        crate::cli::tui::print_mini_header("Long-Term Memory › Command Reference");
-
-        println!("\n  \x1b[1;37mUsage:\x1b[0m");
-        println!("    \x1b[1;38;5;45mxiao memory\x1b[0m \x1b[38;5;245m<action>\x1b[0m \x1b[38;5;245m[target...]\x1b[0m\n");
-
-        println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mACTIONS\x1b[0m");
-        println!("    \x1b[1;38;5;45mlist\x1b[0m, \x1b[38;5;244m(none)\x1b[0m              \x1b[38;5;250mList remembered long-term facts or open TUI\x1b[0m");
-        println!("    \x1b[1;38;5;45mrm\x1b[0m, \x1b[1;38;5;45mremove\x1b[0m \x1b[38;5;245m<key>\x1b[0m           \x1b[38;5;250mRemove a specific remembered fact\x1b[0m");
-        println!("    \x1b[1;38;5;45mclear\x1b[0m                     \x1b[38;5;250mWipe all remembered facts for the owner\x1b[0m");
-        println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
-
-        println!(
-            "  \x1b[38;5;238m{}\x1b[0m\n",
-            "─".repeat(bar_width.saturating_sub(4))
-        );
-
-        println!("  \x1b[1;37mQuick Examples:\x1b[0m");
-        println!("    \x1b[1;38;5;45mxiao memory\x1b[0m                       \x1b[38;5;242m# Interactive memory hub\x1b[0m");
-        println!("    \x1b[1;38;5;45mxiao memory rm user_language\x1b[0m      \x1b[38;5;242m# Remove specific fact\x1b[0m");
-        println!("    \x1b[1;38;5;45mxiao memory clear\x1b[0m                 \x1b[38;5;242m# Wipe all facts\x1b[0m\n");
-        return;
-    }
-
-    let owner_id = get_configured_owner_id().unwrap_or(0);
-    if owner_id == 0 {
-        println!(
-            "\n\x1b[31m✖ OWNER_USER_ID is not configured. Run 'xiao gateway owner <ID>'.\x1b[0m\n"
-        );
-        std::process::exit(1);
-    }
-
     match parsed {
-        MemoryCliAction::Clear => {
-            if crate::ai::storage::clear_user_memories_async(owner_id).await {
-                println!("\n\x1b[1;32m✔ All long-term memories (Tier 1) for Owner ({owner_id}) successfully cleared.\x1b[0m\n");
-            } else {
-                println!("\n\x1b[31m✖ Failed to clear user memories.\x1b[0m\n");
-                std::process::exit(1);
-            }
-        }
-        MemoryCliAction::Remove(Some(key)) => {
-            if crate::ai::storage::delete_user_memory_async(owner_id, key.to_string()).await {
-                println!("\n\x1b[1;32m✔ Memory '{key}' successfully removed for Owner ({owner_id}).\x1b[0m\n");
-            } else {
-                println!("\n\x1b[31m✖ Failed to remove memory '{key}'.\x1b[0m\n");
-                std::process::exit(1);
-            }
-        }
-        MemoryCliAction::Remove(None) => {
-            if io::stdout().is_terminal() {
-                let memories = crate::ai::storage::get_user_memories_async(owner_id).await;
-                if memories.is_empty() {
-                    println!("\n\x1b[33mNo facts currently recorded to delete.\x1b[0m\n");
-                    return;
-                }
+        MemoryCliAction::Help => {
+            let bar_width = crate::cli::tui::get_terminal_bar_width();
+            crate::cli::tui::print_mini_header("Long-Term Memory › Command Reference");
 
-                let mut fact_items: Vec<String> = memories
-                    .iter()
-                    .map(|(k, f)| {
-                        let snippet = if f.len() > 45 {
-                            format!("{}...", &f[..45])
-                        } else {
-                            f.clone()
-                        };
-                        format!("{:<20} ({snippet})", k)
-                    })
-                    .collect();
-                fact_items.push("Cancel / Back".to_string());
+            println!("\n  \x1b[1;37mUsage:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao memory\x1b[0m \x1b[38;5;245m<action>\x1b[0m \x1b[38;5;245m[target...]\x1b[0m\n");
 
-                let sub_sel = terminal_interactive_select(
-                    "Select a fact to delete from memory:",
-                    &fact_items,
-                    0,
-                    false,
-                    None,
-                );
+            println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mACTIONS\x1b[0m");
+            println!("    \x1b[1;38;5;45mlist\x1b[0m                      \x1b[38;5;250mDirectly output remembered long-term facts\x1b[0m");
+            println!("    \x1b[1;38;5;45mmenu\x1b[0m, \x1b[38;5;244m(none)\x1b[0m              \x1b[38;5;250mOpen interactive long-term memory hub (TUI)\x1b[0m");
+            println!("    \x1b[1;38;5;45mrm\x1b[0m, \x1b[1;38;5;45mremove\x1b[0m \x1b[38;5;245m<key>\x1b[0m           \x1b[38;5;250mRemove a specific remembered fact\x1b[0m");
+            println!("    \x1b[1;38;5;45mclear\x1b[0m                     \x1b[38;5;250mWipe all remembered facts for the owner\x1b[0m");
+            println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
 
-                if let Some(fact_idx) = sub_sel {
-                    if fact_idx < memories.len() {
-                        let (target_key, _) = &memories[fact_idx];
-                        if crate::ai::storage::delete_user_memory_async(
-                            owner_id,
-                            target_key.clone(),
-                        )
-                        .await
-                        {
-                            println!(
-                                "\n\x1b[1;32m✔ Memory '{target_key}' successfully removed for Owner ({owner_id}).\x1b[0m\n"
-                            );
-                        } else {
-                            println!(
-                                "\n\x1b[31m✖ Failed to delete memory '{target_key}'.\x1b[0m\n"
-                            );
-                            std::process::exit(1);
-                        }
-                    }
-                }
-            } else {
-                println!("\n\x1b[31m✖ Error: <key> parameter is required.\x1b[0m");
-                println!("  Usage: xiao memory rm <key>\n");
-                std::process::exit(1);
-            }
-        }
-        MemoryCliAction::List => {
-            if io::stdout().is_terminal() {
-                run_interactive_memory_menu(owner_id).await;
-                return;
-            }
-
-            let memories = crate::ai::storage::get_user_memories_async(owner_id).await;
-            crate::cli::tui::print_mini_header("Xiao Long-Term Memory (Tier 1 Facts)");
-            println!("  \x1b[38;5;245mOwner ID :\x1b[0m \x1b[1;37m{owner_id}\x1b[0m");
             println!(
-                "  \x1b[38;5;245mTotal    :\x1b[0m \x1b[1;37m{} facts remembered\x1b[0m\n",
-                memories.len()
+                "  \x1b[38;5;238m{}\x1b[0m\n",
+                "─".repeat(bar_width.saturating_sub(4))
             );
 
-            if memories.is_empty() {
-                println!("  \x1b[38;5;244m(No facts stored yet. Xiao will automatically remember important facts during conversations.)\x1b[0m\n");
-            } else {
-                let bar_width = get_terminal_bar_width();
-                println!("  \x1b[1;37m{:<25} Remembered Fact\x1b[0m", "Key / Topic");
-                println!(
-                    "  \x1b[38;5;238m{}\x1b[0m",
-                    "─".repeat(bar_width.saturating_sub(4))
-                );
-                for (key, fact) in memories {
-                    println!(
-                        "  \x1b[1;38;5;45m{:<25}\x1b[0m \x1b[38;5;252m{}\x1b[0m",
-                        key, fact
-                    );
-                }
-                println!(
-                    "  \x1b[38;5;238m{}\x1b[0m",
-                    "─".repeat(bar_width.saturating_sub(4))
-                );
-                println!("  \x1b[38;5;244mManage: 'xiao memory rm <key>' or 'xiao memory clear'\x1b[0m\n");
-            }
+            println!("  \x1b[1;37mQuick Examples:\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao memory\x1b[0m                       \x1b[38;5;242m# Interactive memory hub\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao memory list\x1b[0m                  \x1b[38;5;242m# Direct fact table output\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao memory rm user_language\x1b[0m      \x1b[38;5;242m# Remove specific fact\x1b[0m");
+            println!("    \x1b[1;38;5;45mxiao memory clear\x1b[0m                 \x1b[38;5;242m# Wipe all facts\x1b[0m\n");
         }
-        MemoryCliAction::Help => unreachable!(),
         MemoryCliAction::Unknown(unknown) => {
             println!("\n\x1b[31m✖ Error: Unknown action '{unknown}'.\x1b[0m");
             println!("  Usage: xiao memory [list|rm <key>|clear]\n");
             std::process::exit(1);
         }
+        action => {
+            let owner_id = get_configured_owner_id().unwrap_or(0);
+            if owner_id == 0 {
+                println!(
+                    "\n\x1b[31m✖ OWNER_USER_ID is not configured. Run 'xiao gateway owner <ID>'.\x1b[0m\n"
+                );
+                crate::cli::tui::print_press_enter();
+                return;
+            }
+
+            match action {
+                MemoryCliAction::Clear => {
+                    if crate::ai::storage::clear_user_memories_async(owner_id).await {
+                        println!("\n\x1b[1;32m✔ All long-term memories (Tier 1) for Owner ({owner_id}) successfully cleared.\x1b[0m\n");
+                    } else {
+                        println!("\n\x1b[31m✖ Failed to clear user memories.\x1b[0m\n");
+                        std::process::exit(1);
+                    }
+                }
+                MemoryCliAction::Remove(Some(key)) => {
+                    if crate::ai::storage::delete_user_memory_async(owner_id, key.to_string()).await
+                    {
+                        println!("\n\x1b[1;32m✔ Memory '{key}' successfully removed for Owner ({owner_id}).\x1b[0m\n");
+                    } else {
+                        println!("\n\x1b[31m✖ Failed to remove memory '{key}'.\x1b[0m\n");
+                        std::process::exit(1);
+                    }
+                }
+                MemoryCliAction::Remove(None) => {
+                    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                        let memories = crate::ai::storage::get_user_memories_async(owner_id).await;
+                        if memories.is_empty() {
+                            println!("\n\x1b[33mNo facts currently recorded to delete.\x1b[0m\n");
+                            return;
+                        }
+
+                        let mut fact_items: Vec<String> = memories
+                            .iter()
+                            .map(|(k, f)| {
+                                let snippet = crate::util::truncate_chars_with_ellipsis(f, 45);
+                                format!("{:<20} ({snippet})", k)
+                            })
+                            .collect();
+                        fact_items.push("Cancel / Back".to_string());
+
+                        let sub_sel = terminal_interactive_select(
+                            "Select a fact to delete from memory:",
+                            &fact_items,
+                            0,
+                            false,
+                            None,
+                        );
+
+                        if let Some(fact_idx) = sub_sel {
+                            if fact_idx < memories.len() {
+                                let (target_key, _) = &memories[fact_idx];
+                                if crate::ai::storage::delete_user_memory_async(
+                                    owner_id,
+                                    target_key.clone(),
+                                )
+                                .await
+                                {
+                                    println!(
+                                        "\n\x1b[1;32m✔ Memory '{target_key}' successfully removed for Owner ({owner_id}).\x1b[0m\n"
+                                    );
+                                } else {
+                                    println!(
+                                        "\n\x1b[31m✖ Failed to delete memory '{target_key}'.\x1b[0m\n"
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        println!("\n\x1b[31m✖ Error: <key> parameter is required.\x1b[0m");
+                        println!("  Usage: xiao memory rm <key>\n");
+                        std::process::exit(1);
+                    }
+                }
+                MemoryCliAction::Menu => {
+                    if io::stdout().is_terminal() {
+                        run_interactive_memory_menu(owner_id).await;
+                    } else {
+                        let memories = crate::ai::storage::get_user_memories_async(owner_id).await;
+                        print_memory_fact_table(&memories, owner_id);
+                    }
+                }
+                MemoryCliAction::List => {
+                    let memories = crate::ai::storage::get_user_memories_async(owner_id).await;
+                    print_memory_fact_table(&memories, owner_id);
+                }
+                MemoryCliAction::Help | MemoryCliAction::Unknown(_) => {}
+            }
+        }
+    }
+}
+
+pub fn format_memory_fact_table(
+    memories: &[(String, String)],
+    owner_id: i64,
+    bar_width: usize,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "  \x1b[38;5;245mOwner ID :\x1b[0m \x1b[1;37m{owner_id}\x1b[0m\n"
+    ));
+    out.push_str(&format!(
+        "  \x1b[38;5;245mTotal    :\x1b[0m \x1b[1;37m{} facts remembered\x1b[0m\n\n",
+        memories.len()
+    ));
+
+    if memories.is_empty() {
+        out.push_str("  \x1b[38;5;244m(No facts stored yet. Xiao will automatically remember important facts during conversations.)\x1b[0m\n");
+    } else {
+        out.push_str(&format!(
+            "  \x1b[1;37m{:<25} Remembered Fact\x1b[0m\n",
+            "Key / Topic"
+        ));
+        out.push_str(&format!(
+            "  \x1b[38;5;238m{}\x1b[0m\n",
+            "─".repeat(bar_width.saturating_sub(4))
+        ));
+        for (key, fact) in memories {
+            out.push_str(&format!(
+                "  \x1b[1;38;5;45m{:<25}\x1b[0m \x1b[38;5;252m{}\x1b[0m\n",
+                key, fact
+            ));
+        }
+        out.push_str(&format!(
+            "  \x1b[38;5;238m{}\x1b[0m\n",
+            "─".repeat(bar_width.saturating_sub(4))
+        ));
+        out.push_str(
+            "  \x1b[38;5;244mManage: 'xiao memory rm <key>' or 'xiao memory clear'\x1b[0m\n",
+        );
+    }
+    out
+}
+
+pub fn print_memory_fact_table(memories: &[(String, String)], owner_id: i64) {
+    let bar_width = get_terminal_bar_width();
+    crate::cli::tui::print_mini_header("Xiao Long-Term Memory (Tier 1 Facts)");
+    print!(
+        "{}",
+        format_memory_fact_table(memories, owner_id, bar_width)
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_memory_cli_action_parsing() {
+        assert_eq!(parse_memory_cli_action(None, None), MemoryCliAction::Menu);
+        assert_eq!(
+            parse_memory_cli_action(Some("menu"), None),
+            MemoryCliAction::Menu
+        );
+        assert_eq!(
+            parse_memory_cli_action(Some("list"), None),
+            MemoryCliAction::List
+        );
+        assert_eq!(
+            parse_memory_cli_action(Some("clear"), None),
+            MemoryCliAction::Clear
+        );
+        assert_eq!(
+            parse_memory_cli_action(Some("rm"), Some("pref")),
+            MemoryCliAction::Remove(Some("pref"))
+        );
+        assert_eq!(
+            parse_memory_cli_action(Some("help"), None),
+            MemoryCliAction::Help
+        );
+    }
+
+    #[test]
+    fn test_format_memory_fact_table() {
+        let empty_table = format_memory_fact_table(&[], 12345, 80);
+        assert!(empty_table.contains("Owner ID"));
+        assert!(empty_table.contains("12345"));
+        assert!(empty_table.contains("0 facts remembered"));
+        assert!(empty_table.contains("No facts stored yet"));
+
+        let facts = vec![
+            ("preferred_language".to_string(), "Rust".to_string()),
+            ("project_name".to_string(), "XiaoBot".to_string()),
+        ];
+        let populated_table = format_memory_fact_table(&facts, 12345, 80);
+        assert!(populated_table.contains("preferred_language"));
+        assert!(populated_table.contains("Rust"));
+        assert!(populated_table.contains("project_name"));
+        assert!(populated_table.contains("XiaoBot"));
+        assert!(populated_table.contains("2 facts remembered"));
+    }
+
+    #[test]
+    fn test_unicode_safe_fact_truncation() {
+        let long_fact =
+            "这是一段非常长的中文事实记录，用来测试截断是否会出现字节边界错误！".repeat(2);
+        let truncated_fact = crate::util::truncate_chars_with_ellipsis(&long_fact, 45);
+        assert!(truncated_fact.ends_with("..."));
+        assert_eq!(truncated_fact.chars().count(), 48);
+
+        let misaligned_fact = format!("a{}", "这是一段非常长的事实记录".repeat(5));
+        let safe_snippet = crate::util::truncate_chars_with_ellipsis(&misaligned_fact, 45);
+        assert!(safe_snippet.ends_with("..."));
     }
 }

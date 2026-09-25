@@ -168,3 +168,57 @@ pub(crate) async fn run_cli_context(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_context_cli_args() {
+        assert_eq!(
+            parse_context_cli_args(Some("help"), None),
+            ContextCliArgs::Help
+        );
+        assert_eq!(
+            parse_context_cli_args(Some("--help"), None),
+            ContextCliArgs::Help
+        );
+        assert_eq!(
+            parse_context_cli_args(Some("12345"), Some("678")),
+            ContextCliArgs::Inspect {
+                chat_id: Some(12345),
+                thread_id: Some(678)
+            }
+        );
+        assert_eq!(
+            parse_context_cli_args(None, None),
+            ContextCliArgs::Inspect {
+                chat_id: None,
+                thread_id: None
+            }
+        );
+        assert_eq!(
+            parse_context_cli_args(Some("abc"), None),
+            ContextCliArgs::InvalidChatId("abc")
+        );
+        assert_eq!(
+            parse_context_cli_args(Some("123"), Some("def")),
+            ContextCliArgs::InvalidThreadId("def")
+        );
+    }
+
+    #[test]
+    fn test_format_context_gauge() {
+        let (bar20, col20) = format_context_gauge(20.0, 10);
+        assert_eq!(bar20, "██░░░░░░░░");
+        assert_eq!(col20, "\x1b[1;32m");
+
+        let (bar70, col70) = format_context_gauge(70.0, 10);
+        assert_eq!(bar70, "███████░░░");
+        assert_eq!(col70, "\x1b[1;33m");
+
+        let (bar95, col95) = format_context_gauge(95.0, 10);
+        assert_eq!(bar95, "██████████");
+        assert_eq!(col95, "\x1b[1;31m");
+    }
+}

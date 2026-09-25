@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 
 use rand::Rng;
 
@@ -59,6 +59,10 @@ pub(crate) async fn run_cli_provider_menu(ai_service: &AIChatService, action: Op
         let store = load_provider_store();
         if store.providers.is_empty() {
             println!("\n\x1b[33mNo AI Providers registered yet.\x1b[0m");
+            if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+                println!("  Run 'xiao ai add' to register a new provider.\n");
+                return;
+            }
             print!("Add a provider now? [Y/n]: ");
             let _ = io::stdout().flush();
             let mut ans = String::new();
@@ -251,10 +255,7 @@ pub(crate) async fn run_cli_provider_menu(ai_service: &AIChatService, action: Op
                             "\n\x1b[31m✖ Provider '{}' is still used by specific Addons.\x1b[0m",
                             target_prov.name
                         );
-                        print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                        let _ = io::stdout().flush();
-                        let mut tmp = String::new();
-                        let _ = io::stdin().read_line(&mut tmp);
+                        print_press_enter();
                         continue;
                     }
                     let mut updated_store = load_provider_store();
@@ -292,6 +293,10 @@ pub(crate) async fn run_cli_provider_menu(ai_service: &AIChatService, action: Op
 }
 
 pub(crate) async fn run_cli_provider_add(ai_service: &AIChatService) {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        println!("\n\x1b[31m✖ Error: Adding a provider requires an interactive terminal.\x1b[0m\n");
+        return;
+    }
     crate::cli::tui::print_mini_header("AI Hub › Add New AI Provider");
 
     let stdin = io::stdin();
@@ -501,7 +506,7 @@ pub(crate) async fn run_cli_model_picker(ai_service: &AIChatService, initial_fil
     let mut store = load_provider_store();
 
     if store.providers.is_empty() {
-        println!("\n\x1b[33mNo AI Providers registered yet. Run 'xiao provider'.\x1b[0m\n");
+        println!("\n\x1b[33mNo AI Providers registered yet. Run 'xiao ai add'.\x1b[0m\n");
         return;
     }
 
@@ -649,6 +654,29 @@ pub(crate) async fn run_cli_model_picker(ai_service: &AIChatService, initial_fil
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum AddonMenuAction {
+    ConfigureRole(ModelRole),
+    TestAll,
+    ResetAll,
+    Back,
+}
+
+pub fn map_addon_menu_selection(idx: usize) -> Option<AddonMenuAction> {
+    let roles = ModelRole::addon_roles();
+    if idx < roles.len() {
+        Some(AddonMenuAction::ConfigureRole(roles[idx]))
+    } else if idx == roles.len() {
+        Some(AddonMenuAction::TestAll)
+    } else if idx == roles.len() + 1 {
+        Some(AddonMenuAction::ResetAll)
+    } else if idx == roles.len() + 2 {
+        Some(AddonMenuAction::Back)
+    } else {
+        None
+    }
+}
+
 pub(crate) async fn run_cli_addon_menu(ai_service: &AIChatService) {
     load_environment();
     loop {
@@ -668,34 +696,37 @@ pub(crate) async fn run_cli_addon_menu(ai_service: &AIChatService) {
             "─".repeat(bar_width.saturating_sub(4))
         );
 
-        let vision_route = routing
-            .route(ModelRole::Vision)
-            .cloned()
-            .unwrap_or(ModelRoute::MainModel);
-        let audio_route = routing
-            .route(ModelRole::AudioStt)
-            .cloned()
-            .unwrap_or(ModelRoute::MainModel);
-        let video_route = routing
-            .route(ModelRole::Video)
-            .cloned()
-            .unwrap_or(ModelRoute::MainModel);
-        let image_route = routing
-            .route(ModelRole::ImageGeneration)
-            .cloned()
-            .unwrap_or(ModelRoute::Disabled);
+        let roles = ModelRole::addon_roles();
 
-        let vision_str = format!("→ {}", addon_route_text(&vision_route, &providers));
-        let audio_str = format!("→ {}", addon_route_text(&audio_route, &providers));
-        let video_str = format!("→ {}", addon_route_text(&video_route, &providers));
-        let image_str = format!("→ {}", addon_route_text(&image_route, &providers));
+        let mut hud_data = Vec::with_capacity(roles.len());
+        let mut menu_items = Vec::with_capacity(roles.len() + 3);
 
-        let hud_rows = [
-            ("VISION ROUTE", vision_str.as_str()),
-            ("AUDIO STT", audio_str.as_str()),
-            ("VIDEO FRAMES", video_str.as_str()),
-            ("IMAGE GEN", image_str.as_str()),
-        ];
+        for &role in &roles {
+            let route =
+                routing
+                    .route(role)
+                    .cloned()
+                    .unwrap_or(if role == ModelRole::ImageGeneration {
+                        ModelRoute::Disabled
+                    } else {
+                        ModelRoute::MainModel
+                    });
+            let route_text = addon_route_text(&route, &providers);
+
+            let (hud_label, menu_label) = match role {
+                ModelRole::Vision => ("VISION ROUTE", "Vision (Image Understanding)   "),
+                ModelRole::Video => ("VIDEO FRAMES", "Video Frames (Video Analysis)  "),
+                ModelRole::AudioStt => ("AUDIO STT", "Audio STT (Voice Notes)        "),
+                ModelRole::ImageGeneration => ("IMAGE GEN", "Image Generation               "),
+                ModelRole::Curator => ("CURATOR", "Memory Curator (Tier 1 Facts)  "),
+                ModelRole::Main => ("MAIN", "Main Model                     "),
+            };
+
+            hud_data.push((hud_label, format!("→ {route_text}")));
+            menu_items.push(format!("{menu_label}[{route_text}]"));
+        }
+
+        let hud_rows: Vec<(&str, &str)> = hud_data.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let hud =
             crate::cli::tui::render_hud_box("CURRENT ADDON ROUTING MATRIX", &hud_rows, bar_width);
 
@@ -703,23 +734,6 @@ pub(crate) async fn run_cli_addon_menu(ai_service: &AIChatService) {
             "{mini_header}\r\n\r\n{hud}\r\n\r\n  \x1b[1;37mSelect Addon Role to Configure:\x1b[0m"
         );
 
-        let mut menu_items = Vec::new();
-        menu_items.push(format!(
-            "Vision (Image Understanding)   [{}]",
-            addon_route_text(&vision_route, &providers)
-        ));
-        menu_items.push(format!(
-            "Audio STT (Voice Notes)        [{}]",
-            addon_route_text(&audio_route, &providers)
-        ));
-        menu_items.push(format!(
-            "Video Frames (Video Analysis)  [{}]",
-            addon_route_text(&video_route, &providers)
-        ));
-        menu_items.push(format!(
-            "Image Generation               [{}]",
-            addon_route_text(&image_route, &providers)
-        ));
         menu_items.push("Test Capabilities of All Active Addon Models".to_string());
         menu_items.push("Reset All Addons to Main Model (Restore default)".to_string());
         menu_items.push("Back to AI Hub                 (Return to Xiao AI Hub)".to_string());
@@ -730,29 +744,33 @@ pub(crate) async fn run_cli_addon_menu(ai_service: &AIChatService) {
             break;
         };
 
-        let roles = ModelRole::addon_roles();
-        if idx < roles.len() {
-            let role = roles[idx];
-            run_cli_addon_role_submenu(ai_service, role).await;
-        } else if idx == roles.len() {
-            run_cli_addon_test_all_routes(ai_service).await;
-        } else if idx == roles.len() + 1 {
-            let mut failed = false;
-            for r in ModelRole::addon_roles() {
-                if let Err(e) = ai_service.set_model_route(r, ModelRoute::MainModel).await {
-                    println!(
-                        "\n\x1b[31m✖ Error: Failed to reset addon {}: {e}\x1b[0m\n",
-                        r.display_name()
-                    );
-                    failed = true;
-                    break;
+        match map_addon_menu_selection(idx) {
+            Some(AddonMenuAction::ConfigureRole(role)) => {
+                run_cli_addon_role_submenu(ai_service, role).await;
+            }
+            Some(AddonMenuAction::TestAll) => {
+                run_cli_addon_test_all_routes(ai_service).await;
+            }
+            Some(AddonMenuAction::ResetAll) => {
+                let mut failed = false;
+                for r in ModelRole::addon_roles() {
+                    if let Err(e) = ai_service.set_model_route(r, ModelRoute::MainModel).await {
+                        println!(
+                            "\n\x1b[31m✖ Error: Failed to reset addon {}: {e}\x1b[0m\n",
+                            r.display_name()
+                        );
+                        failed = true;
+                        break;
+                    }
                 }
+                if !failed {
+                    println!("\n\x1b[1;32m✔ All addon roles reset to Main Model.\x1b[0m\n");
+                }
+                print_press_enter();
             }
-            if !failed {
-                println!("\n\x1b[1;32m✔ All addon roles reset to Main Model.\x1b[0m\n");
+            Some(AddonMenuAction::Back) | None => {
+                break;
             }
-        } else {
-            break;
         }
     }
 }
@@ -873,6 +891,10 @@ async fn run_cli_addon_test_all_routes(ai_service: &AIChatService) {
         println!("  ● \x1b[1m{}\x1b[0m → {}", role.display_name(), route_str);
 
         if role == ModelRole::ImageGeneration {
+            if !io::stdin().is_terminal() {
+                println!("    \x1b[38;5;244m○ Non-interactive session: Image Generation test skipped.\x1b[0m\n");
+                continue;
+            }
             print!("    Test Image Generation? (may consume API quota) [y/N]: ");
             let _ = io::stdout().flush();
             let mut ans = String::new();
@@ -1044,10 +1066,7 @@ pub(crate) async fn run_cli_probe_menu(ai_service: &AIChatService) {
 }
 
 fn print_press_enter() {
-    print!("\n\x1b[38;5;244mPress Enter to return...\x1b[0m");
-    let _ = io::stdout().flush();
-    let mut tmp = String::new();
-    let _ = io::stdin().read_line(&mut tmp);
+    crate::cli::tui::print_press_enter();
 }
 
 fn capability_display_label(cap: CapabilityKind) -> &'static str {
@@ -1183,6 +1202,10 @@ async fn run_cli_probe_test_image_gen(ai_service: &AIChatService) {
     println!(
         "  \x1b[33mWarning: This test will generate a test image and may consume API credits.\x1b[0m"
     );
+    if !io::stdin().is_terminal() {
+        println!("  ○ Non-interactive session: skipping image generation test to avoid unintended API quota consumption.\n");
+        return;
+    }
     print!("  Proceed with test? [y/N]: ");
     let _ = io::stdout().flush();
     let mut ans = String::new();
@@ -1314,26 +1337,69 @@ async fn run_persisted_capability_probe(
     }
 }
 
-fn find_matching_model_in_provider(prov: &ProviderConfig, query: &str) -> Option<String> {
-    if let Some(m) = prov.models.iter().find(|m| *m == query) {
+pub fn find_matching_model_in_provider(prov: &ProviderConfig, query: &str) -> Option<String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return None;
+    }
+    if let Some(m) = prov.models.iter().find(|m| *m == q) {
         return Some(m.clone());
     }
-    if let Some(m) = prov.models.iter().find(|m| m.eq_ignore_ascii_case(query)) {
+    if let Some(m) = prov.models.iter().find(|m| m.eq_ignore_ascii_case(q)) {
         return Some(m.clone());
     }
-    if prov.active_model.eq_ignore_ascii_case(query) && !prov.active_model.trim().is_empty() {
+    if prov.active_model.eq_ignore_ascii_case(q) && !prov.active_model.trim().is_empty() {
         return Some(prov.active_model.clone());
+    }
+    let q_lower = q.to_ascii_lowercase();
+    let suffix = format!("/{}", q_lower);
+    if let Some(m) = prov
+        .models
+        .iter()
+        .find(|m| m.to_ascii_lowercase().ends_with(&suffix))
+    {
+        return Some(m.clone());
+    }
+    if let Some(m) = prov.models.iter().find(|m| {
+        let m_lower = m.to_ascii_lowercase();
+        if let Some(base) = m_lower.split(':').next() {
+            base == q_lower || base.ends_with(&suffix)
+        } else {
+            false
+        }
+    }) {
+        return Some(m.clone());
+    }
+    if !prov.active_model.trim().is_empty() {
+        let act_lower = prov.active_model.to_ascii_lowercase();
+        let matches_suffix = act_lower.ends_with(&suffix);
+        let matches_colon = if let Some(base) = act_lower.split(':').next() {
+            base == q_lower || base.ends_with(&suffix)
+        } else {
+            false
+        };
+        if matches_suffix || matches_colon {
+            return Some(prov.active_model.clone());
+        }
     }
     None
 }
 
-pub(crate) fn find_model_in_store<'a>(
+#[derive(Debug, PartialEq, Eq)]
+pub enum ModelMatchResult<'a> {
+    Exact(&'a ProviderConfig, String),
+    SingleSuffix(&'a ProviderConfig, String),
+    Ambiguous(Vec<(&'a ProviderConfig, String)>),
+    NotFound,
+}
+
+pub fn resolve_model_candidates<'a>(
     store: &'a ProviderStore,
     target: &str,
-) -> Option<(&'a ProviderConfig, String)> {
+) -> ModelMatchResult<'a> {
     let target = target.trim();
     if target.is_empty() {
-        return None;
+        return ModelMatchResult::NotFound;
     }
 
     if let Some((prov_query, model_query)) = target.split_once('/') {
@@ -1352,7 +1418,7 @@ pub(crate) fn find_model_in_store<'a>(
 
         if let Some(prov) = matched_prov {
             if let Some(m) = find_matching_model_in_provider(prov, model_query) {
-                return Some((prov, m));
+                return ModelMatchResult::Exact(prov, m);
             }
         }
     }
@@ -1364,8 +1430,15 @@ pub(crate) fn find_model_in_store<'a>(
         .or_else(|| store.providers.first());
 
     if let Some(prov) = active_prov {
-        if let Some(m) = find_matching_model_in_provider(prov, target) {
-            return Some((prov, m));
+        if let Some(m) = prov
+            .models
+            .iter()
+            .find(|m| *m == target || m.eq_ignore_ascii_case(target))
+        {
+            return ModelMatchResult::Exact(prov, m.clone());
+        }
+        if prov.active_model.eq_ignore_ascii_case(target) && !prov.active_model.trim().is_empty() {
+            return ModelMatchResult::Exact(prov, prov.active_model.clone());
         }
     }
 
@@ -1374,12 +1447,99 @@ pub(crate) fn find_model_in_store<'a>(
         if prov.id == active_prov_id {
             continue;
         }
-        if let Some(m) = find_matching_model_in_provider(prov, target) {
-            return Some((prov, m));
+        if let Some(m) = prov
+            .models
+            .iter()
+            .find(|m| *m == target || m.eq_ignore_ascii_case(target))
+        {
+            return ModelMatchResult::Exact(prov, m.clone());
+        }
+        if prov.active_model.eq_ignore_ascii_case(target) && !prov.active_model.trim().is_empty() {
+            return ModelMatchResult::Exact(prov, prov.active_model.clone());
         }
     }
 
-    None
+    let q_lower = target.to_ascii_lowercase();
+    let suffix = format!("/{}", q_lower);
+    let mut candidates: Vec<(&'a ProviderConfig, String)> = Vec::new();
+
+    for prov in &store.providers {
+        let mut all_models: Vec<&String> = prov.models.iter().collect();
+        if !prov.active_model.trim().is_empty()
+            && !prov.models.iter().any(|m| m == &prov.active_model)
+        {
+            all_models.push(&prov.active_model);
+        }
+        for m in all_models {
+            let m_lower = m.to_ascii_lowercase();
+            let matches_suffix = m_lower.ends_with(&suffix);
+            let matches_colon = if let Some(base) = m_lower.split(':').next() {
+                base == q_lower || base.ends_with(&suffix)
+            } else {
+                false
+            };
+
+            if (matches_suffix || matches_colon)
+                && !candidates
+                    .iter()
+                    .any(|(p, existing)| p.id == prov.id && existing == m)
+            {
+                candidates.push((prov, m.clone()));
+            }
+        }
+    }
+
+    match candidates.len() {
+        0 => ModelMatchResult::NotFound,
+        1 => {
+            let Some((prov, model)) = candidates.into_iter().next() else {
+                return ModelMatchResult::NotFound;
+            };
+            ModelMatchResult::SingleSuffix(prov, model)
+        }
+        _ => ModelMatchResult::Ambiguous(candidates),
+    }
+}
+
+pub fn find_model_in_store<'a>(
+    store: &'a ProviderStore,
+    target: &str,
+) -> Option<(&'a ProviderConfig, String)> {
+    match resolve_model_candidates(store, target) {
+        ModelMatchResult::Exact(prov, model) | ModelMatchResult::SingleSuffix(prov, model) => {
+            Some((prov, model))
+        }
+        ModelMatchResult::Ambiguous(candidates) => {
+            if io::stdout().is_terminal() && io::stdin().is_terminal() {
+                let options: Vec<String> = candidates
+                    .iter()
+                    .map(|(p, m)| format!("{} ({}) :: {}", p.name, p.id, m))
+                    .collect();
+                let prompt = format!("Multiple models match '{target}'. Select one:");
+                if let Some(idx) = terminal_interactive_select(&prompt, &options, 0, false, None) {
+                    if let Some((p, m)) = candidates.get(idx) {
+                        return Some((*p, m.clone()));
+                    }
+                }
+                None
+            } else {
+                println!("\n\x1b[31m✖ Error: Ambiguous model '{target}'. Multiple candidates found:\x1b[0m");
+                for (p, m) in &candidates {
+                    println!("  • {} ({}) :: {}", p.name, p.id, m);
+                }
+                println!("  Please specify the full model name with provider prefix (e.g. 'provider/model').\n");
+                None
+            }
+        }
+        ModelMatchResult::NotFound => {
+            println!(
+                "\x1b[31m✖\x1b[0m Model '{}' not found in any registered provider.",
+                target
+            );
+            println!("  Run 'xiao ai list' to see available models or 'xiao ai add' to register a new provider.");
+            None
+        }
+    }
 }
 
 pub(crate) fn print_ai_models_list() {
@@ -1608,10 +1768,7 @@ pub(crate) async fn run_cli_ai_hub(
                 }
                 4 => {
                     print_ai_models_list();
-                    print!("\n\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                    let _ = std::io::stdout().flush();
-                    let mut tmp = String::new();
-                    let _ = std::io::stdin().read_line(&mut tmp);
+                    print_press_enter();
                 }
                 _ => break,
             }
@@ -1626,12 +1783,16 @@ pub(crate) async fn run_cli_ai_hub(
             };
 
             let mut store = load_provider_store();
-            if let Some((matched_provider, matched_model)) = find_model_in_store(&store, target) {
-                let prov_id = matched_provider.id.clone();
-                let prov_name = matched_provider.name.clone();
-                let prov_endpoint = matched_provider.endpoint.clone();
-                let model_name = matched_model;
+            let selected_target = find_model_in_store(&store, target).map(|(prov, model)| {
+                (
+                    prov.id.clone(),
+                    prov.name.clone(),
+                    prov.endpoint.clone(),
+                    model,
+                )
+            });
 
+            if let Some((prov_id, prov_name, prov_endpoint, model_name)) = selected_target {
                 store.active_id = Some(prov_id.clone());
                 if let Some(p) = store.providers.iter_mut().find(|p| p.id == prov_id) {
                     p.active_model = model_name.clone();
@@ -1652,12 +1813,6 @@ pub(crate) async fn run_cli_ai_hub(
                     model_name
                 );
                 println!("  • Provider : {} ({})", prov_name, prov_endpoint);
-            } else {
-                println!(
-                    "\x1b[31m✖\x1b[0m Model '{}' not found in any registered provider.",
-                    target
-                );
-                println!("  Run 'xiao ai list' to see available models or 'xiao ai add' to register a new provider.");
             }
         }
         AiCliAction::List => {
@@ -1713,6 +1868,7 @@ pub(crate) async fn run_cli_ai_hub(
             println!("    \x1b[1;38;5;45mlist\x1b[0m                      \x1b[38;5;250mPrint table of registered providers and models\x1b[0m");
             println!("    \x1b[1;38;5;45madd\x1b[0m                       \x1b[38;5;250mAdd an OpenAI-compatible AI provider\x1b[0m");
             println!("    \x1b[1;38;5;45mrm\x1b[0m, \x1b[1;38;5;45mremove\x1b[0m                \x1b[38;5;250mRemove an AI provider\x1b[0m");
+            println!("    \x1b[1;38;5;45mprovider\x1b[0m \x1b[38;5;245m[id|name]\x1b[0m          \x1b[38;5;250mManage AI providers or inspect a specific provider\x1b[0m");
             println!("    \x1b[1;38;5;45maddon\x1b[0m                     \x1b[38;5;250mConfigure multimodal specialist routes\x1b[0m");
             println!("    \x1b[1;38;5;45mtest\x1b[0m, \x1b[1;38;5;45mprobe\x1b[0m \x1b[38;5;245m[role]\x1b[0m        \x1b[38;5;250mDiagnostic probes (vision, video, stt, image, all)\x1b[0m");
             println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
@@ -1729,7 +1885,265 @@ pub(crate) async fn run_cli_ai_hub(
         }
         AiCliAction::Unknown(unknown) => {
             println!("\x1b[31m✖ Error: Subcommand 'ai {unknown}' is unknown.\x1b[0m");
-            println!("  Run 'xiao ai help' or 'xiao help' for assistance.");
+            println!("  Run 'xiao ai help' or 'xiao help' for assistance.\n");
+            std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ai_cli_action() {
+        assert_eq!(parse_ai_cli_action(None, None), AiCliAction::Menu);
+        assert_eq!(
+            parse_ai_cli_action(Some("use"), Some("gpt-4o")),
+            AiCliAction::Use(Some("gpt-4o"))
+        );
+        assert_eq!(parse_ai_cli_action(Some("list"), None), AiCliAction::List);
+        assert_eq!(parse_ai_cli_action(Some("add"), None), AiCliAction::Add);
+        assert_eq!(parse_ai_cli_action(Some("rm"), None), AiCliAction::Remove);
+        assert_eq!(
+            parse_ai_cli_action(Some("provider"), Some("groq")),
+            AiCliAction::Provider(Some("groq"))
+        );
+        assert_eq!(parse_ai_cli_action(Some("addon"), None), AiCliAction::Addon);
+        assert_eq!(
+            parse_ai_cli_action(Some("test"), Some("vision")),
+            AiCliAction::Test(Some("vision"))
+        );
+        assert_eq!(parse_ai_cli_action(Some("help"), None), AiCliAction::Help);
+        assert_eq!(
+            parse_ai_cli_action(Some("invalid"), None),
+            AiCliAction::Unknown("invalid")
+        );
+    }
+
+    #[test]
+    fn test_addon_menu_index_mapping() {
+        assert_eq!(
+            map_addon_menu_selection(0),
+            Some(AddonMenuAction::ConfigureRole(ModelRole::Vision))
+        );
+        assert_eq!(
+            map_addon_menu_selection(1),
+            Some(AddonMenuAction::ConfigureRole(ModelRole::Video))
+        );
+        assert_eq!(
+            map_addon_menu_selection(2),
+            Some(AddonMenuAction::ConfigureRole(ModelRole::AudioStt))
+        );
+        assert_eq!(
+            map_addon_menu_selection(3),
+            Some(AddonMenuAction::ConfigureRole(ModelRole::ImageGeneration))
+        );
+        assert_eq!(
+            map_addon_menu_selection(4),
+            Some(AddonMenuAction::ConfigureRole(ModelRole::Curator))
+        );
+        assert_eq!(map_addon_menu_selection(5), Some(AddonMenuAction::TestAll));
+        assert_eq!(map_addon_menu_selection(6), Some(AddonMenuAction::ResetAll));
+        assert_eq!(map_addon_menu_selection(7), Some(AddonMenuAction::Back));
+        assert_eq!(map_addon_menu_selection(8), None);
+        assert_eq!(map_addon_menu_selection(99), None);
+    }
+
+    #[test]
+    fn test_openrouter_model_suffix_resolution() {
+        let store = ProviderStore {
+            active_id: Some("or-1".to_string()),
+            providers: vec![
+                ProviderConfig {
+                    id: "or-1".to_string(),
+                    name: "OpenRouter".to_string(),
+                    endpoint: "https://openrouter.ai/api/v1".to_string(),
+                    api_key: "".to_string(),
+                    api_key_ref: None,
+                    models: vec![
+                        "openai/gpt-4o".to_string(),
+                        "anthropic/claude-3-5-sonnet".to_string(),
+                        "meta-llama/llama-3.1-8b-instruct".to_string(),
+                    ],
+                    active_model: "openai/gpt-4o".to_string(),
+                },
+                ProviderConfig {
+                    id: "groq-1".to_string(),
+                    name: "Groq".to_string(),
+                    endpoint: "https://api.groq.com/openai/v1".to_string(),
+                    api_key: "".to_string(),
+                    api_key_ref: None,
+                    models: vec!["llama-3.1-8b-instant".to_string()],
+                    active_model: "llama-3.1-8b-instant".to_string(),
+                },
+            ],
+        };
+
+        // Single suffix match: gpt-4o -> openai/gpt-4o
+        assert_eq!(
+            resolve_model_candidates(&store, "gpt-4o"),
+            ModelMatchResult::SingleSuffix(&store.providers[0], "openai/gpt-4o".to_string())
+        );
+        let matched = find_model_in_store(&store, "gpt-4o");
+        assert_eq!(
+            matched.map(|(p, m)| (p.id.as_str(), m)),
+            Some(("or-1", "openai/gpt-4o".to_string()))
+        );
+
+        // Case-insensitive suffix match: CLAUDE-3-5-SONNET
+        assert_eq!(
+            resolve_model_candidates(&store, "CLAUDE-3-5-SONNET"),
+            ModelMatchResult::SingleSuffix(
+                &store.providers[0],
+                "anthropic/claude-3-5-sonnet".to_string()
+            )
+        );
+
+        // find_matching_model_in_provider test
+        assert_eq!(
+            find_matching_model_in_provider(&store.providers[0], "gpt-4o"),
+            Some("openai/gpt-4o".to_string())
+        );
+        assert_eq!(
+            find_matching_model_in_provider(&store.providers[0], "claude-3-5-sonnet"),
+            Some("anthropic/claude-3-5-sonnet".to_string())
+        );
+
+        // Ambiguous test across providers
+        let ambiguous_store = ProviderStore {
+            active_id: Some("or-1".to_string()),
+            providers: vec![
+                ProviderConfig {
+                    id: "or-1".to_string(),
+                    name: "OpenRouter".to_string(),
+                    endpoint: "https://openrouter.ai/api/v1".to_string(),
+                    api_key: "".to_string(),
+                    api_key_ref: None,
+                    models: vec!["openai/gpt-4o".to_string()],
+                    active_model: "openai/gpt-4o".to_string(),
+                },
+                ProviderConfig {
+                    id: "azure-1".to_string(),
+                    name: "Azure".to_string(),
+                    endpoint: "https://azure.com".to_string(),
+                    api_key: "".to_string(),
+                    api_key_ref: None,
+                    models: vec!["azure/gpt-4o".to_string()],
+                    active_model: "azure/gpt-4o".to_string(),
+                },
+            ],
+        };
+        match resolve_model_candidates(&ambiguous_store, "gpt-4o") {
+            ModelMatchResult::Ambiguous(cands) => {
+                assert_eq!(cands.len(), 2);
+            }
+            other => panic!("Expected ambiguous result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_colon_variant_and_tag_model_resolution() {
+        let store = ProviderStore {
+            active_id: Some("or-1".to_string()),
+            providers: vec![
+                ProviderConfig {
+                    id: "or-1".to_string(),
+                    name: "OpenRouter".to_string(),
+                    endpoint: "https://openrouter.ai/api/v1".to_string(),
+                    api_key: "".to_string(),
+                    api_key_ref: None,
+                    models: vec![
+                        "openai/gpt-4o:free".to_string(),
+                        "anthropic/claude-3-5-sonnet:beta".to_string(),
+                        "meta-llama/llama-3.1-8b-instruct:free".to_string(),
+                    ],
+                    active_model: "openai/gpt-4o:free".to_string(),
+                },
+                ProviderConfig {
+                    id: "ollama-1".to_string(),
+                    name: "Ollama".to_string(),
+                    endpoint: "http://localhost:11434".to_string(),
+                    api_key: "".to_string(),
+                    api_key_ref: None,
+                    models: vec!["llama3.1:latest".to_string()],
+                    active_model: "llama3.1:latest".to_string(),
+                },
+            ],
+        };
+
+        // 1. Colon variant short name match in provider
+        assert_eq!(
+            find_matching_model_in_provider(&store.providers[0], "gpt-4o"),
+            Some("openai/gpt-4o:free".to_string())
+        );
+        assert_eq!(
+            find_matching_model_in_provider(&store.providers[0], "openai/gpt-4o"),
+            Some("openai/gpt-4o:free".to_string())
+        );
+        assert_eq!(
+            find_matching_model_in_provider(&store.providers[1], "llama3.1"),
+            Some("llama3.1:latest".to_string())
+        );
+
+        // 2. Colon variant resolution across store
+        assert_eq!(
+            resolve_model_candidates(&store, "gpt-4o"),
+            ModelMatchResult::SingleSuffix(&store.providers[0], "openai/gpt-4o:free".to_string())
+        );
+        assert_eq!(
+            resolve_model_candidates(&store, "claude-3-5-sonnet"),
+            ModelMatchResult::SingleSuffix(
+                &store.providers[0],
+                "anthropic/claude-3-5-sonnet:beta".to_string()
+            )
+        );
+        assert_eq!(
+            resolve_model_candidates(&store, "llama3.1"),
+            ModelMatchResult::SingleSuffix(&store.providers[1], "llama3.1:latest".to_string())
+        );
+
+        // 3. Deduplication of identical models in candidate list
+        let dup_store = ProviderStore {
+            active_id: Some("prov-dup".to_string()),
+            providers: vec![ProviderConfig {
+                id: "prov-dup".to_string(),
+                name: "Test".to_string(),
+                endpoint: "https://example.com".to_string(),
+                api_key: "".to_string(),
+                api_key_ref: None,
+                models: vec!["openai/gpt-4o".to_string(), "openai/gpt-4o".to_string()],
+                active_model: "openai/gpt-4o".to_string(),
+            }],
+        };
+        assert_eq!(
+            resolve_model_candidates(&dup_store, "gpt-4o"),
+            ModelMatchResult::SingleSuffix(&dup_store.providers[0], "openai/gpt-4o".to_string())
+        );
+    }
+
+    #[test]
+    fn test_empty_models_active_model_suffix_resolution() {
+        let store = ProviderStore {
+            active_id: Some("prov-empty".to_string()),
+            providers: vec![ProviderConfig {
+                id: "prov-empty".to_string(),
+                name: "FallbackProv".to_string(),
+                endpoint: "https://example.com/v1".to_string(),
+                api_key: "".to_string(),
+                api_key_ref: None,
+                models: vec![],
+                active_model: "openai/gpt-4o:free".to_string(),
+            }],
+        };
+
+        assert_eq!(
+            find_matching_model_in_provider(&store.providers[0], "gpt-4o"),
+            Some("openai/gpt-4o:free".to_string())
+        );
+        assert_eq!(
+            resolve_model_candidates(&store, "gpt-4o"),
+            ModelMatchResult::SingleSuffix(&store.providers[0], "openai/gpt-4o:free".to_string())
+        );
     }
 }

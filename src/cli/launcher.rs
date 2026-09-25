@@ -1,4 +1,3 @@
-use std::io::{self, BufRead, IsTerminal};
 use std::sync::Arc;
 
 use crate::ai::service::ModelRole;
@@ -140,23 +139,11 @@ pub(crate) async fn run_cli_launcher(ai_service: &Arc<AIChatService>) {
                 match diag_sel {
                     Some(0) => {
                         run_cli_status(ai_service).await;
-                        if io::stdout().is_terminal() {
-                            println!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                            let stdin = io::stdin();
-                            let mut reader = stdin.lock();
-                            let mut buffer = String::new();
-                            let _ = reader.read_line(&mut buffer);
-                        }
+                        crate::cli::tui::print_press_enter();
                     }
                     Some(1) => {
                         crate::cli::context::run_cli_context(ai_service, None, None).await;
-                        if io::stdout().is_terminal() {
-                            println!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                            let stdin = io::stdin();
-                            let mut reader = stdin.lock();
-                            let mut buffer = String::new();
-                            let _ = reader.read_line(&mut buffer);
-                        }
+                        crate::cli::tui::print_press_enter();
                     }
                     _ => {}
                 }
@@ -173,5 +160,30 @@ pub(crate) async fn run_cli_launcher(ai_service: &Arc<AIChatService>) {
             }
             _ => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xiao_banner() {
+        let banner = xiao_banner();
+        assert!(banner.contains("RUST 2021"));
+        assert!(banner.contains("「 小 」"));
+        assert!(banner.contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn test_build_telemetry_hud() {
+        let hud = build_telemetry_hud("○ Not connected", "○ No active Provider", "Exa MCP", 76);
+        let lines: Vec<&str> = hud.lines().collect();
+        assert_eq!(lines.len(), 5);
+        assert!(lines[0].contains("STATUS TELEMETRY"));
+        assert!(lines[1].contains("GATEWAY"));
+        assert!(lines[2].contains("MAIN AI"));
+        assert!(lines[3].contains("SEARCH"));
+        assert!(lines[4].contains('╰'));
     }
 }

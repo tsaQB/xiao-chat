@@ -14,14 +14,14 @@ pub(crate) fn print_cli_help() {
     println!("    \x1b[1;38;5;45mstart\x1b[0m                     \x1b[38;5;250mRun Telegram bot daemon\x1b[0m\n");
 
     println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mAI & INTELLIGENCE\x1b[0m");
-    println!("    \x1b[1;38;5;45mai\x1b[0m \x1b[38;5;245m[use|list|add|test]\x1b[0m    \x1b[38;5;250mManage models, providers, & multimodal routes\x1b[0m");
-    println!("    \x1b[1;38;5;45msearch\x1b[0m \x1b[38;5;245m[test|brave|exa]\x1b[0m   \x1b[38;5;250mWeb search engine hub & provider API keys\x1b[0m");
-    println!("    \x1b[1;38;5;45mmcp\x1b[0m \x1b[38;5;245m[list|add|tools]\x1b[0m      \x1b[38;5;250mModel Context Protocol (MCP) server & tool hub\x1b[0m");
+    println!("    \x1b[1;38;5;45mai\x1b[0m \x1b[38;5;245m[use|list|add|rm|addon|test|provider]\x1b[0m \x1b[38;5;250mManage models, providers, & multimodal routes\x1b[0m");
+    println!("    \x1b[1;38;5;45msearch\x1b[0m \x1b[38;5;245m[test|brave|tavily|exa]\x1b[0m   \x1b[38;5;250mWeb search engine hub & provider API keys\x1b[0m");
+    println!("    \x1b[1;38;5;45mmcp\x1b[0m \x1b[38;5;245m[list|add|rm|tools|test|reset]\x1b[0m  \x1b[38;5;250mModel Context Protocol (MCP) server & tool hub\x1b[0m");
     println!("    \x1b[1;38;5;45mcontext\x1b[0m \x1b[38;5;245m[chat] [thread]\x1b[0m   \x1b[38;5;250mInspect token consumption & sliding window budget\x1b[0m");
     println!("    \x1b[1;38;5;45mmemory\x1b[0m \x1b[38;5;245m[list|rm|clear]\x1b[0m    \x1b[38;5;250mManage Tier-1 long-term remembered facts\x1b[0m\n");
 
     println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mGATEWAY & SYSTEM\x1b[0m");
-    println!("    \x1b[1;38;5;45mgateway\x1b[0m \x1b[38;5;245m[check|token|id]\x1b[0m  \x1b[38;5;250mManage Telegram bot token & owner authorization\x1b[0m");
+    println!("    \x1b[1;38;5;45mgateway\x1b[0m \x1b[38;5;245m[check|token|owner|id]\x1b[0m  \x1b[38;5;250mManage Telegram bot token & owner authorization\x1b[0m");
     println!("    \x1b[1;38;5;45mstatus\x1b[0m                    \x1b[38;5;250mDisplay telemetry, health, & provider dashboard\x1b[0m");
     println!("    \x1b[1;38;5;45mversion\x1b[0m, \x1b[1;38;5;45m-v\x1b[0m               \x1b[38;5;250mDisplay binary version\x1b[0m");
     println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
@@ -43,4 +43,14 @@ pub(crate) fn print_cli_help() {
 
     println!("  \x1b[1;37mTips:\x1b[0m");
     println!("    \x1b[38;5;244mRun '\x1b[1;37mxiao <command> help\x1b[0m\x1b[38;5;244m' for subcommand details and interactive menus.\x1b[0m\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_cli_help_executes() {
+        print_cli_help();
+    }
 }

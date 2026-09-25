@@ -12,7 +12,7 @@ use super::secrets::{
     write_secret_in_dir,
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub id: String,
     pub name: String,

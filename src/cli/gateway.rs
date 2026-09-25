@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use crate::bot::client::TelegramBotClient;
 use crate::cli::tui::terminal_interactive_select;
@@ -24,7 +24,7 @@ pub fn parse_gateway_cli_action<'a>(
         None => GatewayCliAction::Menu,
         Some("check") | Some("test") | Some("status") => GatewayCliAction::Check,
         Some("token") | Some("bind") => GatewayCliAction::BindToken(target),
-        Some("owner") => GatewayCliAction::SetOwner(target),
+        Some("owner") | Some("id") => GatewayCliAction::SetOwner(target),
         Some("help") | Some("--help") | Some("-h") => GatewayCliAction::Help,
         Some(unknown) => GatewayCliAction::Unknown(unknown),
     }
@@ -108,13 +108,11 @@ pub(crate) async fn run_cli_gateway_menu() {
                     "\n  \x1b[38;2;6;182;212m●\x1b[0m \x1b[1;37mWhatsApp Gateway integration is currently in development.\x1b[0m"
                 );
                 println!("\x1b[38;5;244mComing in upcoming releases with Baileys / WhatsApp Web multi-device pairing.\x1b[0m\n");
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             2 => {
                 run_cli_telegram_owner(None).await;
+                crate::cli::tui::print_press_enter();
             }
             _ => break,
         }
@@ -182,16 +180,15 @@ async fn run_cli_gateway_telegram_submenu() {
         match choice {
             0 => {
                 let _ = check_telegram_connection().await;
-                print!("\x1b[38;5;244mPress Enter to return...\x1b[0m");
-                let _ = io::stdout().flush();
-                let mut tmp = String::new();
-                let _ = io::stdin().read_line(&mut tmp);
+                crate::cli::tui::print_press_enter();
             }
             1 => {
                 run_cli_telegram_bind(None).await;
+                crate::cli::tui::print_press_enter();
             }
             2 => {
                 run_cli_telegram_owner(None).await;
+                crate::cli::tui::print_press_enter();
             }
             _ => break,
         }
@@ -222,7 +219,7 @@ pub(crate) async fn run_cli_gateway_hub(action: Option<&str>, target: Option<&st
 
             println!("  \x1b[1;38;2;6;182;212m▸ \x1b[1;37mACTIONS\x1b[0m");
             println!("    \x1b[1;38;5;45mmenu\x1b[0m, \x1b[38;5;244m(none)\x1b[0m              \x1b[38;5;250mOpen interactive Gateway Manager (TUI)\x1b[0m");
-            println!("    \x1b[1;38;5;45mcheck\x1b[0m                     \x1b[38;5;250mVerify bot token connectivity (getMe)\x1b[0m");
+            println!("    \x1b[1;38;5;45mcheck\x1b[0m, \x1b[1;38;5;45mtest\x1b[0m               \x1b[38;5;250mVerify bot token connectivity (getMe)\x1b[0m");
             println!("    \x1b[1;38;5;45mtoken\x1b[0m \x1b[38;5;245m<TOKEN>\x1b[0m             \x1b[38;5;250mBind and verify Telegram Bot Token\x1b[0m");
             println!("    \x1b[1;38;5;45mowner\x1b[0m, \x1b[1;38;5;45mid\x1b[0m \x1b[38;5;245m<ID>\x1b[0m            \x1b[38;5;250mSet Telegram Owner User ID\x1b[0m");
             println!("    \x1b[1;38;5;45mhelp\x1b[0m, \x1b[1;38;5;45m-h\x1b[0m                  \x1b[38;5;250mShow this help reference\x1b[0m\n");
@@ -298,7 +295,7 @@ pub(crate) async fn run_cli_telegram_bind(manual_token: Option<&str>) {
     load_environment();
     let token = if let Some(t) = manual_token {
         t.trim().to_string()
-    } else {
+    } else if io::stdin().is_terminal() && io::stdout().is_terminal() {
         print!("\n\x1b[1;37mEnter Telegram Bot Token:\x1b[0m ");
         let _ = io::stdout().flush();
         let mut input = String::new();
@@ -306,6 +303,10 @@ pub(crate) async fn run_cli_telegram_bind(manual_token: Option<&str>) {
             return;
         }
         input.trim().to_string()
+    } else {
+        println!("\n\x1b[31m✖ Error: <TOKEN> parameter is required.\x1b[0m");
+        println!("  Usage: xiao gateway token <TOKEN>\n");
+        return;
     };
 
     if token.is_empty() {
@@ -343,15 +344,20 @@ pub(crate) async fn run_cli_telegram_bind(manual_token: Option<&str>) {
 pub(crate) async fn run_cli_telegram_owner(owner_arg: Option<&str>) {
     let owner = if let Some(value) = owner_arg {
         value.trim().parse::<i64>().ok()
-    } else {
+    } else if io::stdin().is_terminal() && io::stdout().is_terminal() {
         print!("\n\x1b[1;37mEnter Telegram Owner User ID:\x1b[0m ");
         let _ = io::stdout().flush();
         let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
-            None
+        if io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
+            println!("  \x1b[33mOperation cancelled.\x1b[0m\n");
+            return;
         } else {
             input.trim().parse::<i64>().ok()
         }
+    } else {
+        println!("  \x1b[31m✖ Error: <ID> parameter is required.\x1b[0m");
+        println!("  Usage: xiao gateway owner <ID> (or 'xiao gateway id <ID>')\n");
+        return;
     };
 
     match owner.filter(|value| *value > 0) {
@@ -359,12 +365,49 @@ pub(crate) async fn run_cli_telegram_owner(owner_arg: Option<&str>) {
             Ok(()) => println!("  \x1b[1;32m✔ Telegram Owner ID set to: {owner_id}\x1b[0m\n"),
             Err(error) => {
                 println!("  \x1b[31m✖ Failed to save Owner ID: {error}\x1b[0m\n");
-                std::process::exit(1);
             }
         },
         None => {
             println!("  \x1b[31m✖ Owner User ID must be a positive integer.\x1b[0m\n");
-            std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gateway_id_alias_parsing() {
+        assert_eq!(
+            parse_gateway_cli_action(Some("id"), Some("987654")),
+            GatewayCliAction::SetOwner(Some("987654"))
+        );
+        assert_eq!(
+            parse_gateway_cli_action(Some("owner"), Some("987654")),
+            GatewayCliAction::SetOwner(Some("987654"))
+        );
+        assert_eq!(
+            parse_gateway_cli_action(Some("token"), Some("test_token")),
+            GatewayCliAction::BindToken(Some("test_token"))
+        );
+        assert_eq!(
+            parse_gateway_cli_action(Some("check"), None),
+            GatewayCliAction::Check
+        );
+        assert_eq!(
+            parse_gateway_cli_action(Some("test"), None),
+            GatewayCliAction::Check
+        );
+        assert_eq!(
+            parse_gateway_cli_action(Some("status"), None),
+            GatewayCliAction::Check
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gateway_non_tty_safety() {
+        run_cli_telegram_owner(None).await;
+        run_cli_telegram_bind(None).await;
     }
 }

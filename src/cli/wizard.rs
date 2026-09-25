@@ -471,3 +471,100 @@ pub(crate) fn normalize_endpoint_url(raw: &str) -> Result<String, String> {
 
     Ok(format!("{scheme}://{host}{port_str}{final_path}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_endpoint_url() {
+        // 1. Standard HTTPS
+        assert_eq!(
+            normalize_endpoint_url("https://cpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+
+        // 2. Trailing slashes
+        assert_eq!(
+            normalize_endpoint_url("https://cpa.oxygen.web.id/v1/").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+
+        // 3. Domain without scheme (auto-infers https)
+        assert_eq!(
+            normalize_endpoint_url("cpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+
+        // 4. Domain without /v1 path (auto-appends /v1)
+        assert_eq!(
+            normalize_endpoint_url("cpa.oxygen.web.id").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+
+        // 5. Localhost and 127.0.0.1 (auto-infers http and appends /v1 if missing)
+        assert_eq!(
+            normalize_endpoint_url("127.0.0.1:8317/v1").as_deref(),
+            Ok("http://127.0.0.1:8317/v1")
+        );
+        assert_eq!(
+            normalize_endpoint_url("127.0.0.1:8317").as_deref(),
+            Ok("http://127.0.0.1:8317/v1")
+        );
+        assert_eq!(
+            normalize_endpoint_url("localhost:11434").as_deref(),
+            Ok("http://localhost:11434/v1")
+        );
+
+        // 6. Typo variations for https scheme
+        assert_eq!(
+            normalize_endpoint_url("https:cpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+        assert_eq!(
+            normalize_endpoint_url("https//cpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+        assert_eq!(
+            normalize_endpoint_url("https/cpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+        assert_eq!(
+            normalize_endpoint_url("https cpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+        assert_eq!(
+            normalize_endpoint_url("https: //cpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+        assert_eq!(
+            normalize_endpoint_url("https:// cpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+
+        // 7. Directly attached without delimiter
+        assert_eq!(
+            normalize_endpoint_url("httpscpa.oxygen.web.id/v1").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+
+        // 8. Single-word remote domains (preserves host name)
+        assert_eq!(
+            normalize_endpoint_url("httpserver.com/v1").as_deref(),
+            Ok("https://httpserver.com/v1")
+        );
+
+        // 9. Surrounding quotes & angle brackets
+        assert_eq!(
+            normalize_endpoint_url("<https://cpa.oxygen.web.id/v1>").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+        assert_eq!(
+            normalize_endpoint_url("\"https://cpa.oxygen.web.id/v1\"").as_deref(),
+            Ok("https://cpa.oxygen.web.id/v1")
+        );
+
+        // 10. Errors
+        assert!(normalize_endpoint_url("   ").is_err());
+    }
+}

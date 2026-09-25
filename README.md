@@ -312,20 +312,39 @@ xiao <subcommand> [arguments]
 | `chat [prompt]` | Terminal chat mode: run an interactive REPL or execute a one-shot query. |
 | `setup` | Interactive initial configuration and onboarding wizard. |
 | `start` | Start the Telegram polling daemon. |
-| `status` | Display system status dashboard, SQLite database size, and active models. |
+| `status` | Display system telemetry, provider health, SQLite database size, and active models. |
 | `context [chat] [th]` | Inspect token usage, sliding-window consumption, and context breakdown. |
-| `memory` | Inspect and manage Tier-1 persistent user profile memories. |
+| `memory` | Open interactive long-term memory management menu. |
+| `memory list` | Output formatted table of Tier-1 profile facts directly to stdout. |
 | `memory rm [key]` | Delete a remembered fact (interactive picker if key is omitted). |
 | `memory clear` | Wipe all Tier-1 persistent memories. |
 | `ai` | Interactive AI hub for model catalog, capability tests, and routing. |
-| `ai use [model]` | Switch the active Main model (interactive picker if model is omitted). |
-| `ai addon` | Configure multimodal specialist roles (`Vision`, `Video`, `Audio STT`, etc.). |
+| `ai use [model]` | Switch the active Main model (interactive picker if omitted; suffix matching supported). |
+| `ai list` | List all registered providers and their configured models. |
+| `ai add` | Interactively register a new OpenAI-compatible AI provider. |
+| `ai rm` | Interactively remove a registered AI provider. |
+| `ai provider [name]` | Switch the active AI provider or view provider details. |
+| `ai addon` | Configure multimodal specialist roles (`Vision`, `Video`, `Audio STT`, `Image Generation`, `Curator`). |
 | `ai test [role]` | Run live diagnostic capability probes against configured endpoints. |
-| `search [action]` | Web search engine hub and provider API keys (Brave, Tavily, Exa). |
-| `mcp [action]` | Model Context Protocol (MCP) server registry and dynamic tool hub. |
-| `gateway` | Inspect Telegram Bot Token connectivity, verify owner, and test polling. |
-| `version` | Display version and target build metadata. |
-| `help` | Display command-line help screen. |
+| `search` | Web search engine hub and interactive configuration menu. |
+| `search test <query>` | Execute live web search test across prioritized search engines. |
+| `search brave [key]` | Configure Brave Search API key (or remove with `rm`). |
+| `search tavily [key]` | Configure Tavily Search API key (or remove with `rm`). |
+| `search exa [key]` | Configure Exa Search API key (or remove with `rm`). |
+| `search engine [name]` | Inspect search engine priority order and active engine status. |
+| `mcp` | Interactive Model Context Protocol (MCP) server & tool hub. |
+| `mcp list` | List all registered MCP server endpoints and status. |
+| `mcp add <name> <URL>` | Connect new remote MCP server (SSRF guarded). |
+| `mcp rm <name>` | Reset custom MCP server endpoint back to default. |
+| `mcp tools` | List registered tool schemas exposed to AI. |
+| `mcp test [query]` | Direct JSON-RPC handshake and latency probe to MCP server. |
+| `mcp reset` | Reset MCP endpoint to default (`https://mcp.exa.ai/`). |
+| `gateway` | Open interactive Telegram Gateway configuration menu. |
+| `gateway check` | Check Telegram Bot API connectivity and token health (aliases: `test`, `status`). |
+| `gateway token [val]` | Interactively or directly bind Telegram Bot Token. |
+| `gateway owner [id]` | Set authorized owner user ID (alias: `gateway id [id]`). |
+| `version`, `-v` | Display version and target build metadata. |
+| `help`, `-h` | Display command-line help screen. |
 
 ### Terminal Interactive REPL
 Launch direct chat mode without Telegram:
