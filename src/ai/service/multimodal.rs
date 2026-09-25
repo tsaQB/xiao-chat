@@ -410,6 +410,22 @@ impl AIChatService {
         if !response.status().is_success() {
             let status = response.status().as_u16();
             if status == 404 || status == 405 {
+                // Fallback: If /audio/transcriptions is not supported (Protocol Mismatch) and
+                // the audio can be formatted for multimodal chat, try transcribing via chat/completions.
+                if let Ok(audio_part) =
+                    native_audio_input_part(&audio_bytes, mime_type, Some(file_name))
+                {
+                    tracing::info!(
+                        "Audio STT route {} / {} returned HTTP {}; falling back to multimodal chat transcription",
+                        route.provider.name,
+                        route.model,
+                        status
+                    );
+                    return self
+                        .transcribe_audio_via_chat_completions(route, audio_part)
+                        .await;
+                }
+
                 return Err(format!(
                     "Audio STT route {} / {} returned HTTP {}: endpoint /audio/transcriptions is not supported by this provider protocol.",
                     route.provider.name, route.model, status
@@ -428,6 +444,75 @@ impl AIChatService {
             .trim();
         if text.is_empty() {
             return Err("audio transcription returned empty text".to_string());
+        }
+        Ok(truncate_chars(text, 32_000))
+    }
+
+    pub(crate) async fn transcribe_audio_via_chat_completions(
+        &self,
+        route: &ResolvedModelRoute,
+        audio_part: Value,
+    ) -> Result<String, String> {
+        let content = vec![
+            json!({
+                "type": "text",
+                "text": "Transcribe the following audio accurately word-for-word. Return only the verbatim transcript. Do not add commentary or formatting."
+            }),
+            audio_part,
+        ];
+        let payload = json!({
+            "model": route.model,
+            "messages": [{"role": "user", "content": content}],
+            "stream": false,
+            "max_tokens": 2048
+        });
+
+        let url = provider_url(&route.provider.endpoint, "chat/completions");
+        let mut request = self
+            .client
+            .post(url)
+            .json(&payload)
+            .timeout(Duration::from_secs(90));
+        if !route.provider.api_key.is_empty()
+            && !["none", "-", "no", "null"]
+                .iter()
+                .any(|value| route.provider.api_key.eq_ignore_ascii_case(value))
+        {
+            request = request.header(
+                "Authorization",
+                format!("Bearer {}", route.provider.api_key),
+            );
+        }
+
+        let response = request.send().await.map_err(|error| {
+            if error.is_timeout() {
+                "multimodal audio transcription timed out".to_string()
+            } else {
+                "multimodal audio transcription request failed".to_string()
+            }
+        })?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            return Err(format!(
+                "Multimodal Audio STT {} / {} returned HTTP {}",
+                route.provider.name, route.model, status
+            ));
+        }
+
+        let body = read_bounded_json(response).await?;
+        let text = body
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+
+        if text.is_empty() {
+            return Err("multimodal audio transcription returned empty text".to_string());
         }
         Ok(truncate_chars(text, 32_000))
     }

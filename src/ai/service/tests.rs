@@ -855,6 +855,59 @@ async fn transcription_uses_selected_transport_without_probe_or_real_state() {
         .is_err());
 }
 
+#[tokio::test]
+async fn transcribe_audio_resolved_falls_back_to_chat_completions_on_404() {
+    let (endpoint, server) = spawn_mock_server(vec![
+        MockResponse::json(404, json!({"error": "endpoint not found"})),
+        MockResponse::json(
+            200,
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "fallback audio transcript"
+                    }
+                }]
+            }),
+        ),
+    ])
+    .await;
+
+    let provider = ProviderConfig {
+        id: "p1".into(),
+        name: "test-provider".into(),
+        endpoint: endpoint.clone(),
+        api_key: "key".into(),
+        models: vec!["chat-model".into()],
+        active_model: "chat-model".into(),
+    };
+    let service = isolated_service(provider.clone());
+    let snapshot = service.generation_model_snapshot().await;
+    let route = AIChatService::resolve_model_route_from_snapshot(&snapshot, ModelRole::AudioStt)
+        .expect("resolve audio stt route succeeds");
+
+    let transcript = service
+        .transcribe_audio_resolved(
+            &route,
+            b"test audio bytes".to_vec(),
+            "test.mp3",
+            Some("audio/mpeg"),
+        )
+        .await
+        .expect("fallback chat transcription succeeds");
+
+    assert_eq!(transcript, "fallback audio transcript");
+
+    let requests = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server timeout")
+        .expect("server task join");
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with("POST /v1/audio/transcriptions "));
+    assert!(requests[1].starts_with("POST /v1/chat/completions "));
+    assert!(requests[1].contains("input_audio"));
+}
+
 #[test]
 fn main_route_snapshot_keeps_provider_model_and_capability_stable() {
     let route = ResolvedModelRoute {

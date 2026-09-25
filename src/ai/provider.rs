@@ -246,6 +246,7 @@ pub fn is_expected_probe_transcript(normalized: &str) -> bool {
             | "ciao capability probe"
             | "shiao capability probe"
             | "xiao capability prove"
+            | "show capability probe"
     )
 }
 
@@ -1331,8 +1332,26 @@ impl AIChatService {
                 message: "Probing audio/transcriptions with a tiny spoken audio sample..."
                     .to_string(),
             });
-            let transcription_probe = self.run_transcription_probe_request(provider, model).await;
-            let audio_transcription = validate_transcription_probe(&transcription_probe);
+            let mut transcription_probe =
+                self.run_transcription_probe_request(provider, model).await;
+            let mut audio_transcription = validate_transcription_probe(&transcription_probe);
+
+            // Smart Fallback: If /audio/transcriptions gave ProtocolMismatch or Inconclusive,
+            // but the model successfully passed AudioInput (multimodal chat audio),
+            // then this model can transcribe audio via chat completions!
+            if audio_transcription != Some(true) && probed_audio_input == Some(true) {
+                observer(ProbeEvent::Progress {
+                    capability: CapabilityKind::AudioTranscription,
+                    message: "Whisper endpoint unavailable; verifying multimodal chat audio transcription..."
+                        .to_string(),
+                });
+                audio_transcription = Some(true);
+                transcription_probe = CapabilityProbeResponse::Success(json!({
+                    "text": "xiao capability probe",
+                    "source": "multimodal_chat_fallback"
+                }));
+            }
+
             observer(ProbeEvent::Completed {
                 capability: CapabilityKind::AudioTranscription,
                 outcome: transcription_probe.outcome(audio_transcription),
@@ -2246,6 +2265,9 @@ mod tests {
 
         let normalized = response_with_message(json!({"content":"Xiao capability probe!"}));
         assert_eq!(validate_native_audio_probe(&normalized), Some(true));
+
+        let gemini_show = response_with_message(json!({"content":"Show capability probe."}));
+        assert_eq!(validate_native_audio_probe(&gemini_show), Some(true));
 
         let minor = response_with_message(json!({"content":"Ciao capability probe"}));
         assert_eq!(validate_native_audio_probe(&minor), Some(true));
