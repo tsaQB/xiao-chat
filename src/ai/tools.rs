@@ -2676,7 +2676,7 @@ mod tests {
     fn test_tools_definition_contains_expected_tools() {
         let tools = get_tools_definition();
         let array = tools.as_array().expect("tools should be an array");
-        assert_eq!(array.len(), 11);
+        assert_eq!(array.len(), 12);
 
         let names: Vec<_> = array
             .iter()
@@ -2693,6 +2693,7 @@ mod tests {
         assert!(names.contains(&"send_location"));
         assert!(names.contains(&"send_document"));
         assert!(names.contains(&"create_document"));
+        assert!(names.contains(&"create_archive"));
     }
 
     #[test]
@@ -3403,7 +3404,7 @@ mod tests {
                     content: "fn main() {}".to_string(),
                 },
             ],
-            caption: Some("<b>Test Archive</b>".to_string()),
+            caption: Some("  Test Archive  ".to_string()),
         };
 
         args.sanitize();
