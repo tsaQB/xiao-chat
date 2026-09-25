@@ -688,6 +688,45 @@ pub fn get_tools_definition() -> Value {
                     "required": ["filename", "content"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_archive",
+                "description": "Buat paket arsip ZIP multi-file langsung yang memuat banyak berkas/script/dokumen ke dalam satu berkas .zip dan kirimkan ke chat Telegram.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filename": {
+                            "type": "string",
+                            "description": "Nama file arsip zip (contoh: cpa-toolkit.zip, project-bundle.zip)"
+                        },
+                        "files": {
+                            "type": "array",
+                            "description": "Daftar berkas yang dimasukkan ke dalam arsip zip",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "filename": {
+                                        "type": "string",
+                                        "description": "Nama berkas di dalam zip (contoh: cpa.sh, README.md, config.json)"
+                                    },
+                                    "content": {
+                                        "type": "string",
+                                        "description": "Konten/isi berkas"
+                                    }
+                                },
+                                "required": ["filename", "content"]
+                            }
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Keterangan ringkas arsip zip (opsional)"
+                        }
+                    },
+                    "required": ["filename", "files"]
+                }
+            }
         }
     ])
 }
@@ -2543,6 +2582,63 @@ impl CreateDocumentArgs {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct CreateArchiveArgs {
+    pub filename: String,
+    pub files: Vec<crate::document::ArchiveFileEntry>,
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
+#[allow(dead_code)]
+impl CreateArchiveArgs {
+    pub fn sanitize(&mut self) {
+        let mut clean_name = self
+            .filename
+            .replace("../", "")
+            .replace("..\\", "")
+            .replace(['/', '\\'], "")
+            .trim()
+            .to_string();
+        if clean_name.is_empty() {
+            clean_name = "archive.zip".to_string();
+        } else if !clean_name.to_ascii_lowercase().ends_with(".zip") {
+            clean_name = format!("{clean_name}.zip");
+        }
+        self.filename = clean_name;
+
+        for entry in &mut self.files {
+            let mut file_clean = entry
+                .filename
+                .replace("../", "")
+                .replace("..\\", "")
+                .replace(['/', '\\'], "_")
+                .trim()
+                .to_string();
+            if file_clean.is_empty() {
+                file_clean = "file.txt".to_string();
+            }
+            entry.filename = file_clean;
+        }
+
+        sanitize_multimedia_caption(&mut self.caption);
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.files.is_empty() {
+            return Err("Daftar file dalam arsip tidak boleh kosong".to_string());
+        }
+        if self.files.len() > 100 {
+            return Err("Jumlah file dalam arsip melebihi batas 100 file".to_string());
+        }
+        let total_size: usize = self.files.iter().map(|f| f.content.len()).sum();
+        if total_size > 20 * 1024 * 1024 {
+            return Err("Total ukuran konten arsip melebihi batas 20MB".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3285,6 +3381,38 @@ mod tests {
         assert!(guidance.contains("ℹ️ **Catatan Media**"));
         assert!(guidance.contains("gunung rinjani"));
         assert!(guidance.contains("teks Markdown"));
+    }
+
+    #[test]
+    fn test_create_archive_args_sanitization_and_validation() {
+        let mut args = CreateArchiveArgs {
+            filename: "../../project".to_string(),
+            files: vec![
+                crate::document::ArchiveFileEntry {
+                    filename: "../../../etc/passwd".to_string(),
+                    content: "root:x:0:0".to_string(),
+                },
+                crate::document::ArchiveFileEntry {
+                    filename: "src/main.rs".to_string(),
+                    content: "fn main() {}".to_string(),
+                },
+            ],
+            caption: Some("<b>Test Archive</b>".to_string()),
+        };
+
+        args.sanitize();
+        assert_eq!(args.filename, "project.zip");
+        assert_eq!(args.files[0].filename, "etc_passwd");
+        assert_eq!(args.files[1].filename, "src_main.rs");
+        assert_eq!(args.caption.as_deref(), Some("Test Archive"));
+        assert!(args.validate().is_ok());
+
+        let empty_args = CreateArchiveArgs {
+            filename: "empty.zip".to_string(),
+            files: vec![],
+            caption: None,
+        };
+        assert!(empty_args.validate().is_err());
     }
 
     #[test]

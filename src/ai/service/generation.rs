@@ -782,8 +782,8 @@ impl AIChatService {
                     Lakukan penalaran secara internal dan berikan hanya jawaban yang berguna bagi pengguna; jangan menampilkan chain-of-thought tersembunyi. \
                     Gunakan gaya bahasa yang alami dan format teks yang elegan. \
                     Jika membuat tabel atau data berkolom, gunakan Markdown Table standar agar Xiao dapat merendernya secara rapi. \
-                    Jika pengguna meminta atau membutuhkan konten visual, foto, gambar, logo, lambang/ikon, album kolase, tayangan slide, berkas audio/musik, rekaman suara, lokasi peta, dokumen berkas, pembuatan file/arsip langsung, atau kuis interaktif, SELALU panggil tool resmi yang sesuai (`send_photo`, `send_collage`, `send_slideshow`, `send_audio`, `send_voice`, `send_location`, `send_document`, `create_document`, `create_quiz`). Jika Anda membutuhkan URL gambar untuk memanggil tool foto/kolase, gunakan tool `web_search` terlebih dahulu untuk memperoleh URL gambar raster terverifikasi (.jpg, .png, .webp). \
-                    Khusus untuk pembuatan berkas/dokumen (termasuk dokumen PDF `.pdf`, berkas HTML `.html`, script kode, data CSV/JSON, atau teks): Anda MEMILIKI kemampuan membuat dan mengirimkannya secara langsung via tool `create_document`. JANGAN PERNAH menolak permintaan pembuatan PDF atau dokumen dengan alasan teknis seperti tidak memiliki Puppeteer, wkhtmltopdf, WeasyPrint, atau browser engine. SELALU panggil tool `create_document` dengan nama berkas yang diminta (contoh: `laporan.pdf`, `profil.html`, dsb) dan isi konten dokumen tersebut. \
+                    Jika pengguna meminta atau membutuhkan konten visual, foto, gambar, logo, lambang/ikon, album kolase, tayangan slide, berkas audio/musik, rekaman suara, lokasi peta, dokumen berkas, pembuatan file/arsip langsung, atau kuis interaktif, SELALU panggil tool resmi yang sesuai (`send_photo`, `send_collage`, `send_slideshow`, `send_audio`, `send_voice`, `send_location`, `send_document`, `create_document`, `create_archive`, `create_quiz`). Jika Anda membutuhkan URL gambar untuk memanggil tool foto/kolase, gunakan tool `web_search` terlebih dahulu untuk memperoleh URL gambar raster terverifikasi (.jpg, .png, .webp). \
+                    Khusus untuk pembuatan berkas/dokumen (termasuk dokumen PDF `.pdf`, berkas HTML `.html`, script kode, data CSV/JSON, atau teks): Anda MEMILIKI kemampuan membuat dan mengirimkannya secara langsung via tool `create_document`. Jika pengguna meminta bundel/paket arsip ZIP berisi beberapa file sekaligus (multi-file), SELALU gunakan tool `create_archive` dengan daftar berkas `files: [{filename, content}, ...]`. JANGAN PERNAH menolak permintaan pembuatan PDF, dokumen, atau arsip ZIP dengan alasan teknis. SELALU panggil tool `create_document` atau `create_archive` yang sesuai. \
                     Ketika Anda memanggil tool multimedia atau pembuatan dokumen, tool akan menyiapkan media dan mengembalikan tag media yang siap disematkan. WAJIB sematkan tag media tersebut langsung di tengah-tengah penjelasan teks pada posisi yang paling relevan (misalnya di bawah heading pembuka atau di antara paragraf narasi) agar tampil elegan di dalam gelembung pesan utama Xiao. Jangan mengarang URL atau tag media fiktif tanpa memanggil tool terlebih dahulu. \
                     Untuk tautan video streaming eksternal (seperti YouTube, Vimeo, Twitch), sertakan tautan teks Markdown standar [Judul Video](https://...) agar Telegram otomatis memunculkan rich link preview interaktif. \
                     Jika pengguna meminta kuis interaktif, latihan soal, atau tebak-tebakan, selalu panggil tool `create_quiz` (gunakan parameter `preamble` terformat Markdown jika ada materi pengantar, studi kasus, atau potongan kode sebelum kuis).\n\
@@ -1756,6 +1756,51 @@ impl AIChatService {
                             }
                             Err(parse_err) => {
                                 format!("Format argumen create_document tidak valid: {parse_err}")
+                            }
+                        }
+                    } else if name == "create_archive" {
+                        match serde_json::from_str::<crate::ai::tools::CreateArchiveArgs>(
+                            &tc.arguments,
+                        ) {
+                            Ok(mut args) => {
+                                args.sanitize();
+                                match args.validate() {
+                                    Ok(()) => {
+                                        match crate::document::create_in_memory_multi_file_zip(
+                                            &args.files,
+                                        ) {
+                                            Ok(zip_bytes) => {
+                                                let attach_key =
+                                                    format!("doc_{}", staged_documents.len());
+                                                let staged_doc = StagedDocument::new(
+                                                    attach_key,
+                                                    zip_bytes,
+                                                    "application/zip".to_string(),
+                                                    args.filename,
+                                                );
+                                                let doc_tag = staged_doc.markdown_tag();
+                                                staged_documents.push(staged_doc);
+
+                                                format!(
+                                                    "Arsip ZIP '{}' yang memuat {} file telah berhasil dibuat di memori. Tag media Telegram: {}\nWAJIB sematkan tag media {} ini langsung di dalam teks jawaban/penjelasan Anda pada posisi yang paling relevan. Jelaskan daftar berkas yang ada di dalamnya secara rapi kepada pengguna.",
+                                                    staged_documents.last().map(|d| d.filename.as_str()).unwrap_or(""),
+                                                    args.files.len(),
+                                                    doc_tag,
+                                                    doc_tag
+                                                )
+                                            }
+                                            Err(zip_err) => {
+                                                format!("Gagal membuat berkas ZIP arsip: {zip_err}")
+                                            }
+                                        }
+                                    }
+                                    Err(validation_err) => {
+                                        format!("Validasi arsip gagal: {validation_err}")
+                                    }
+                                }
+                            }
+                            Err(parse_err) => {
+                                format!("Format argumen create_archive tidak valid: {parse_err}")
                             }
                         }
                     } else {

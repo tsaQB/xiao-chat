@@ -2447,3 +2447,127 @@ async fn test_create_document_staging_and_auto_append() {
     assert!(answer.contains("[document: laporan.pdf](attach://doc_0)"));
     assert!(answer.contains("Ini penjelasannya."));
 }
+
+#[tokio::test]
+async fn test_create_archive_staging_and_auto_append() {
+    use std::io::Read;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let ai_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock ai server");
+    let ai_address = ai_listener.local_addr().expect("local addr");
+
+    let ai_server = tokio::spawn(async move {
+        let mut conn_count = 0;
+        loop {
+            let (mut socket, _) = ai_listener.accept().await.expect("accept connection");
+            conn_count += 1;
+            let mut bytes = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = socket.read(&mut buf).await.expect("read chunk");
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+
+            let sse = if conn_count == 1 {
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_arch123\",\"type\":\"function\",\"function\":{\"name\":\"create_archive\",\"arguments\":\"{\\\"filename\\\":\\\"bundle.zip\\\",\\\"files\\\":[{\\\"filename\\\":\\\"cpa.sh\\\",\\\"content\\\":\\\"#!/bin/bash\\\\necho cpa\\\"},{\\\"filename\\\":\\\"README.md\\\",\\\"content\\\":\\\"# Dokumentasi\\\"}]}\"}}]}}]}\n\ndata: [DONE]\n\n"
+            } else {
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Berikut adalah berkas bundle project Anda.\"}}]}\n\ndata: [DONE]\n\n"
+            };
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                sse.len(), sse
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write sse");
+            let _ = socket.shutdown().await;
+            if conn_count == 2 {
+                break;
+            }
+        }
+    });
+
+    let provider = ProviderConfig {
+        id: "main-archive-test".into(),
+        name: "Main Archive Test".into(),
+        endpoint: format!("http://{ai_address}/v1"),
+        api_key: String::new(),
+        api_key_ref: None,
+        models: vec!["archive-model".into()],
+        active_model: "archive-model".into(),
+    };
+    let service = isolated_service(provider.clone());
+    let snapshot = service.generation_model_snapshot().await;
+
+    let (_cancel, mut receiver) = tokio::sync::watch::channel(false);
+
+    let gen_input = GenerationInput {
+        prompt: "Tolong buatkan bundle installer dalam file zip",
+        canonical_prompt: None,
+        media_to_main: true,
+        sink: None,
+        image_bytes: None,
+        document_images: None,
+        mime_type: None,
+        doc_text: None,
+        doc_name: None,
+        audio_bytes: None,
+        audio_mime: None,
+        video_bytes: None,
+        video_mime: None,
+        video_duration: None,
+        bot: None,
+        reply_to_message_id: None,
+    };
+
+    let (_thinking, answer, staged_docs, cancelled) = service
+        .generate_response_with_snapshot(6666, 0, 6666, gen_input, &snapshot, &mut receiver)
+        .await;
+
+    assert!(!cancelled);
+    ai_server.await.expect("ai server join");
+
+    // 1. Verify staged doc
+    assert_eq!(staged_docs.len(), 1);
+    let doc = &staged_docs[0];
+    assert_eq!(doc.attach_key, "doc_0");
+    assert_eq!(doc.filename, "bundle.zip");
+    assert_eq!(doc.mime_type, "application/zip");
+    assert!(!doc.bytes.is_empty());
+    assert_eq!(&doc.bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
+
+    // 2. Verify inner files in zip
+    let cursor = std::io::Cursor::new(doc.bytes.clone());
+    let mut archive = zip::ZipArchive::new(cursor).expect("valid zip archive");
+    assert_eq!(archive.len(), 2);
+    let mut file1 = archive.by_name("cpa.sh").expect("cpa.sh entry");
+    let mut c1 = String::new();
+    file1.read_to_string(&mut c1).expect("read cpa.sh");
+    assert_eq!(c1, "#!/bin/bash\necho cpa");
+
+    // 3. Verify auto-append logic
+    assert!(answer.contains("[document: bundle.zip](attach://doc_0)"));
+    assert!(answer.contains("Berikut adalah berkas bundle project Anda."));
+}

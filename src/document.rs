@@ -572,6 +572,55 @@ async fn render_scanned_pdf_pages(data: &[u8], page_count: usize) -> Result<Vec<
     render_result
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ArchiveFileEntry {
+    pub filename: String,
+    pub content: String,
+}
+
+pub fn create_in_memory_multi_file_zip(entries: &[ArchiveFileEntry]) -> Result<Vec<u8>, String> {
+    if entries.is_empty() {
+        return Err("Daftar file arsip tidak boleh kosong".to_string());
+    }
+
+    let estimated_size = entries
+        .iter()
+        .map(|entry| entry.content.len() / 2 + 128)
+        .sum::<usize>()
+        + 512;
+    let mut cursor = std::io::Cursor::new(Vec::with_capacity(estimated_size));
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for entry in entries {
+            let clean_name = entry
+                .filename
+                .replace("../", "")
+                .replace("..\\", "")
+                .replace(['/', '\\'], "_")
+                .trim()
+                .to_string();
+            let final_name = if clean_name.is_empty() {
+                "file.txt"
+            } else {
+                &clean_name
+            };
+
+            writer
+                .start_file(final_name, options)
+                .map_err(|e| format!("Gagal zip start_file untuk '{final_name}': {e}"))?;
+            std::io::Write::write_all(&mut writer, entry.content.as_bytes())
+                .map_err(|e| format!("Gagal write ke zip untuk '{final_name}': {e}"))?;
+        }
+        writer
+            .finish()
+            .map_err(|e| format!("Gagal finish multi-file zip: {e}"))?;
+    }
+    Ok(cursor.into_inner())
+}
+
 pub fn create_in_memory_zip(filename: &str, content: &[u8]) -> Result<Vec<u8>, String> {
     let mut cursor = std::io::Cursor::new(Vec::with_capacity(content.len() / 2 + 512));
     {
@@ -1000,6 +1049,42 @@ mod tests {
         assert!(!zip_bytes.is_empty());
         // Verify it contains standard zip headers (PK..)
         assert_eq!(&zip_bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
+    }
+
+    #[test]
+    fn test_create_in_memory_multi_file_zip() {
+        use std::io::Read;
+
+        let entries = vec![
+            ArchiveFileEntry {
+                filename: "script.sh".to_string(),
+                content: "#!/bin/bash\necho hello".to_string(),
+            },
+            ArchiveFileEntry {
+                filename: "subdir/config.json".to_string(),
+                content: "{\"key\": \"val\"}".to_string(),
+            },
+            ArchiveFileEntry {
+                filename: "../../../etc/passwd".to_string(),
+                content: "fake".to_string(),
+            },
+        ];
+
+        let zip_bytes =
+            create_in_memory_multi_file_zip(&entries).expect("multi-file zip created successfully");
+        assert_eq!(&zip_bytes[0..4], &[0x50, 0x4B, 0x03, 0x04]);
+
+        let cursor = std::io::Cursor::new(zip_bytes);
+        let mut archive = zip::ZipArchive::new(cursor).expect("zip archive valid");
+        assert_eq!(archive.len(), 3);
+
+        let mut file1 = archive.by_name("script.sh").expect("find script.sh");
+        let mut c1 = String::new();
+        file1.read_to_string(&mut c1).expect("read script.sh");
+        assert_eq!(c1, "#!/bin/bash\necho hello");
+
+        // Traversal path "../../../etc/passwd" sanitized to "etc_passwd"
+        assert!(archive.by_name("etc_passwd").is_ok());
     }
 
     #[test]
