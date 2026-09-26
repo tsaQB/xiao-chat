@@ -47,18 +47,18 @@ fn load_sessions_db(user_id: i64) -> rusqlite::Result<Vec<ChatSession>> {
     let mut rows = stmt.query(params![user_id])?;
     let mut sessions = Vec::new();
     while let Some(row) = rows.next()? {
-        let id: usize = row.get(0)?;
+        let id: usize = row.get::<_, i64>(0)? as usize;
         let mut session = ChatSession {
             id,
             name: row.get(1)?,
             messages: Vec::new(),
             created_at: row.get(2)?,
-            revision: row.get(3)?,
+            revision: row.get::<_, i64>(3)? as u64,
         };
         let mut msg_stmt = conn.prepare(
             "SELECT role,content FROM messages WHERE user_id=?1 AND session_id=?2 ORDER BY rowid",
         )?;
-        let mut msg_rows = msg_stmt.query(params![user_id, id])?;
+        let mut msg_rows = msg_stmt.query(params![user_id, id as i64])?;
         while let Some(msg) = msg_rows.next()? {
             let content: String = msg.get(1)?;
             session.messages.push(ChatMessage {
@@ -96,20 +96,20 @@ fn allocate_session_id_tx(tx: &rusqlite::Transaction<'_>, user_id: i64) -> rusql
     let max_existing: usize = tx.query_row(
         "SELECT COALESCE(MAX(session_id),0) FROM sessions WHERE user_id=?1",
         params![user_id],
-        |row| row.get(0),
+        |row| row.get::<_, i64>(0).map(|id| id as usize),
     )?;
     let stored_next = tx
         .query_row(
             "SELECT next_session_id FROM session_counters WHERE user_id=?1",
             params![user_id],
-            |row| row.get::<_, usize>(0),
+            |row| row.get::<_, i64>(0).map(|id| id as usize),
         )
         .ok();
     let next_id = compute_next_session_id(stored_next, max_existing);
     tx.execute(
         "INSERT INTO session_counters(user_id,next_session_id) VALUES(?1,?2)
          ON CONFLICT(user_id) DO UPDATE SET next_session_id=excluded.next_session_id",
-        params![user_id, next_id.saturating_add(1)],
+        params![user_id, next_id.saturating_add(1) as i64],
     )?;
     Ok(next_id)
 }
@@ -136,11 +136,11 @@ fn replace_session_messages_if_revision_on_conn(
          WHERE user_id=?1 AND session_id=?2 AND revision=?6",
         params![
             user_id,
-            session.id,
+            session.id as i64,
             session.name,
             now,
-            session.revision,
-            expected_revision
+            session.revision as i64,
+            expected_revision as i64
         ],
     )?;
     if changed != 1 {
@@ -148,13 +148,13 @@ fn replace_session_messages_if_revision_on_conn(
     }
     tx.execute(
         "DELETE FROM messages WHERE user_id=?1 AND session_id=?2",
-        params![user_id, session.id],
+        params![user_id, session.id as i64],
     )?;
     for message in &session.messages {
         let content = serde_json::to_string(&message.content).unwrap_or_default();
         tx.execute(
             "INSERT INTO messages(user_id,session_id,role,content,created_at) VALUES(?1,?2,?3,?4,?5)",
-            params![user_id, session.id, message.role, content, now],
+            params![user_id, session.id as i64, message.role, content, now],
         )?;
     }
     tx.commit()?;
@@ -173,7 +173,7 @@ fn append_session_messages_on_conn(
     let now = Local::now().to_rfc3339();
     let changed = tx.execute(
         "UPDATE sessions SET name=?3,updated_at=?4 WHERE user_id=?1 AND session_id=?2 AND revision=?5",
-        params![user_id, session.id, session.name, now, expected_revision],
+        params![user_id, session.id as i64, session.name, now, expected_revision as i64],
     )?;
     if changed != 1 {
         return Ok(false);
@@ -182,7 +182,7 @@ fn append_session_messages_on_conn(
         let content = serde_json::to_string(&message.content).unwrap_or_default();
         tx.execute(
             "INSERT INTO messages(user_id,session_id,role,content,created_at) VALUES(?1,?2,?3,?4,?5)",
-            params![user_id, session.id, message.role, content, now],
+            params![user_id, session.id as i64, message.role, content, now],
         )?;
     }
     tx.commit()?;
@@ -194,7 +194,7 @@ fn save_active_session_db(user_id: i64, session_id: usize) -> rusqlite::Result<(
     conn.execute(
         "INSERT INTO active_sessions(user_id,session_id) VALUES(?1,?2)
          ON CONFLICT(user_id) DO UPDATE SET session_id=excluded.session_id",
-        params![user_id, session_id],
+        params![user_id, session_id as i64],
     )?;
     Ok(())
 }
@@ -204,7 +204,7 @@ fn switch_active_session_db(user_id: i64, session_id: usize) -> rusqlite::Result
     let tx = conn.transaction()?;
     let exists = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM sessions WHERE user_id=?1 AND session_id=?2)",
-        params![user_id, session_id],
+        params![user_id, session_id as i64],
         |row| row.get::<_, bool>(0),
     )?;
     if !exists {
@@ -213,7 +213,7 @@ fn switch_active_session_db(user_id: i64, session_id: usize) -> rusqlite::Result
     tx.execute(
         "INSERT INTO active_sessions(user_id,session_id) VALUES(?1,?2)
          ON CONFLICT(user_id) DO UPDATE SET session_id=excluded.session_id",
-        params![user_id, session_id],
+        params![user_id, session_id as i64],
     )?;
     tx.commit()?;
     Ok(true)
@@ -231,12 +231,12 @@ fn create_session_and_activate_db(
     tx.execute(
         "INSERT INTO sessions(user_id,session_id,name,created_at,updated_at,revision)
          VALUES(?1,?2,?3,?4,?5,0)",
-        params![user_id, session_id, name, created_at, now],
+        params![user_id, session_id as i64, name, created_at, now],
     )?;
     tx.execute(
         "INSERT INTO active_sessions(user_id,session_id) VALUES(?1,?2)
          ON CONFLICT(user_id) DO UPDATE SET session_id=excluded.session_id",
-        params![user_id, session_id],
+        params![user_id, session_id as i64],
     )?;
     tx.commit()?;
     Ok(ChatSession {
@@ -286,7 +286,7 @@ fn remove_session_transaction_on_conn(
     let tx = conn.transaction()?;
     let exists = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM sessions WHERE user_id=?1 AND session_id=?2)",
-        params![user_id, session_id],
+        params![user_id, session_id as i64],
         |row| row.get::<_, bool>(0),
     )?;
     if !exists {
@@ -295,13 +295,13 @@ fn remove_session_transaction_on_conn(
     let count: usize = tx.query_row(
         "SELECT COUNT(*) FROM sessions WHERE user_id=?1",
         params![user_id],
-        |row| row.get(0),
+        |row| row.get::<_, i64>(0).map(|c| c as usize),
     )?;
     let current_active = tx
         .query_row(
             "SELECT session_id FROM active_sessions WHERE user_id=?1",
             params![user_id],
-            |row| row.get::<_, usize>(0),
+            |row| row.get::<_, i64>(0).map(|id| id as usize),
         )
         .ok();
 
@@ -313,7 +313,7 @@ fn remove_session_transaction_on_conn(
              VALUES(?1,?2,?3,?4,?5,0)",
             params![
                 user_id,
-                replacement_id,
+                replacement_id as i64,
                 replacement_name,
                 replacement_created_at,
                 now
@@ -332,11 +332,11 @@ fn remove_session_transaction_on_conn(
 
     tx.execute(
         "DELETE FROM messages WHERE user_id=?1 AND session_id=?2",
-        params![user_id, session_id],
+        params![user_id, session_id as i64],
     )?;
     tx.execute(
         "DELETE FROM sessions WHERE user_id=?1 AND session_id=?2",
-        params![user_id, session_id],
+        params![user_id, session_id as i64],
     )?;
 
     let new_active_id = if let Some(replacement) = &replacement {
@@ -346,7 +346,7 @@ fn remove_session_transaction_on_conn(
         || !current_active.is_some_and(|active_id| {
             tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sessions WHERE user_id=?1 AND session_id=?2)",
-                params![user_id, active_id],
+                params![user_id, active_id as i64],
                 |row| row.get::<_, bool>(0),
             )
             .unwrap_or(false)
@@ -355,7 +355,7 @@ fn remove_session_transaction_on_conn(
         tx.query_row(
             "SELECT session_id FROM sessions WHERE user_id=?1 ORDER BY session_id LIMIT 1",
             params![user_id],
-            |row| row.get::<_, usize>(0),
+            |row| row.get::<_, i64>(0).map(|id| id as usize),
         )?
     } else {
         current_active.unwrap_or_default()
@@ -364,7 +364,7 @@ fn remove_session_transaction_on_conn(
     tx.execute(
         "INSERT INTO active_sessions(user_id,session_id) VALUES(?1,?2)
          ON CONFLICT(user_id) DO UPDATE SET session_id=excluded.session_id",
-        params![user_id, new_active_id],
+        params![user_id, new_active_id as i64],
     )?;
     tx.commit()?;
     Ok(Some(RemoveSessionOutcome {
@@ -393,7 +393,7 @@ fn ensure_session_identity_v2_db(user_id: i64, sessions: &[ChatSession]) -> rusq
             .query_row(
                 "SELECT session_id FROM active_sessions WHERE user_id=?1",
                 params![user_id],
-                |row| row.get::<_, usize>(0),
+                |row| row.get::<_, i64>(0).map(|id| id as usize),
             )
             .ok();
         let stable_id = legacy_active_session_id(legacy_value, sessions).unwrap_or(sessions[0].id);
@@ -414,7 +414,7 @@ fn ensure_session_identity_v2_db(user_id: i64, sessions: &[ChatSession]) -> rusq
     conn.execute(
         "INSERT INTO session_counters(user_id,next_session_id) VALUES(?1,?2)
          ON CONFLICT(user_id) DO UPDATE SET next_session_id=MAX(next_session_id,excluded.next_session_id)",
-        params![user_id, next_id],
+        params![user_id, next_id as i64],
     )?;
     Ok(())
 }
@@ -491,7 +491,7 @@ pub(crate) async fn load_active_session_id_db_async(user_id: i64) -> Option<usiz
         conn.query_row(
             "SELECT session_id FROM active_sessions WHERE user_id=?1",
             params![user_id],
-            |row| row.get::<_, usize>(0),
+            |row| row.get::<_, i64>(0).map(|id| id as usize),
         )
     })
     .await
@@ -545,7 +545,7 @@ fn count_scoped_messages_on_conn(
     conn.query_row(
         "SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND thread_id = ?2",
         params![chat_id, thread_id],
-        |row| row.get(0),
+        |row| row.get::<_, i64>(0).map(|c| c as usize),
     )
 }
 
@@ -735,7 +735,7 @@ mod tests {
         conn.execute(
             "INSERT INTO sessions(user_id,session_id,name,created_at,updated_at,revision)
              VALUES(7,3,'Original','now','now',?1)",
-            params![revision],
+            params![revision as i64],
         )
         .expect("insert session succeeds");
         conn.execute(
@@ -772,14 +772,14 @@ mod tests {
             .query_row(
                 "SELECT revision FROM sessions WHERE user_id=7 AND session_id=3",
                 [],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0).map(|r| r as u64),
             )
             .expect("query revision succeeds");
         let messages: usize = conn
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE user_id=7 AND session_id=3",
                 [],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0).map(|c| c as usize),
             )
             .expect("query count succeeds");
         assert_eq!(revision, 4);
@@ -818,7 +818,7 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE user_id=7 AND session_id=3",
                 [],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0).map(|c| c as usize),
             )
             .expect("query count succeeds");
         assert_eq!(name, "Original");
@@ -840,7 +840,9 @@ mod tests {
             .expect("append_session_messages succeeds");
         assert!(!result);
         let messages: usize = conn
-            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| {
+                row.get::<_, i64>(0).map(|c| c as usize)
+            })
             .expect("query count succeeds");
         assert_eq!(messages, 1);
     }
@@ -864,21 +866,21 @@ mod tests {
         );
         let session_count: usize = conn
             .query_row("SELECT COUNT(*) FROM sessions WHERE user_id=7", [], |row| {
-                row.get(0)
+                row.get::<_, i64>(0).map(|c| c as usize)
             })
             .expect("query count succeeds");
         let active: usize = conn
             .query_row(
                 "SELECT session_id FROM active_sessions WHERE user_id=7",
                 [],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0).map(|id| id as usize),
             )
             .expect("query active succeeds");
         let next_id: usize = conn
             .query_row(
                 "SELECT next_session_id FROM session_counters WHERE user_id=7",
                 [],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0).map(|id| id as usize),
             )
             .expect("query next_session_id succeeds");
         assert_eq!(session_count, 1);

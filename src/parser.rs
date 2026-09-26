@@ -19,6 +19,9 @@ pub mod terminal;
 #[allow(unused_imports)]
 pub use terminal::render_terminal_markdown;
 
+#[path = "parser/whatsapp.rs"]
+pub mod whatsapp;
+
 pub fn parse_streaming_markdown_to_rich_blocks(text: &str) -> Vec<RichBlock> {
     let mut blocks = markdown::parse_streaming_markdown_to_rich_blocks(text);
     normalize_bot_api_10_3_media(&mut blocks);

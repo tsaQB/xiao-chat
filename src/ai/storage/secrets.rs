@@ -353,7 +353,7 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM settings WHERE key='app:BOT_TOKEN'",
                 [],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0).map(|c| c as usize),
             )
             .expect("query raw count succeeds");
         assert_eq!(raw_count, 0);

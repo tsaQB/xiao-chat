@@ -3,6 +3,7 @@ mod attachments;
 mod bot;
 mod cli;
 mod document;
+pub mod gateway;
 mod parser;
 mod timeline;
 mod util;
@@ -22,6 +23,31 @@ pub(crate) fn get_configured_owner_id() -> Option<i64> {
         .or_else(|| ai::service::load_app_setting("OWNER_USER_ID"))
         .and_then(|value| value.trim().parse::<i64>().ok())
         .filter(|value| *value > 0)
+}
+
+pub(crate) fn get_configured_whatsapp_owner() -> Option<String> {
+    load_environment();
+    env::var("WHATSAPP_OWNER_NUMBER")
+        .ok()
+        .or_else(|| ai::service::load_app_setting("WHATSAPP_OWNER_NUMBER"))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+pub(crate) fn is_whatsapp_enabled() -> bool {
+    load_environment();
+    env::var("WHATSAPP_ENABLED")
+        .ok()
+        .or_else(|| ai::service::load_app_setting("WHATSAPP_ENABLED"))
+        .map(|v| {
+            let s = v.trim().to_lowercase();
+            s == "true" || s == "1" || s == "yes"
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn get_whatsapp_db_path() -> std::path::PathBuf {
+    crate::ai::storage::xiao_data_dir().join("whatsapp.db")
 }
 
 fn get_config_path() -> std::path::PathBuf {
@@ -208,7 +234,8 @@ async fn main() {
         Some("gateway") => {
             let action_arg = args.get(2).map(|s| s.as_str());
             let target_arg = args.get(3).map(|s| s.as_str());
-            run_cli_gateway_hub(action_arg, target_arg).await;
+            let extra_arg = args.get(4).map(|s| s.as_str());
+            run_cli_gateway_hub(action_arg, target_arg, extra_arg).await;
             return;
         }
         Some("search") => {

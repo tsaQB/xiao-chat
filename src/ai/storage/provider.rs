@@ -1469,7 +1469,7 @@ mod tests {
                     .query_row(
                         "SELECT COUNT(*) FROM settings WHERE key='app:AI_API_KEY'",
                         [],
-                        |row| row.get(0),
+                        |row| row.get::<_, i64>(0).map(|c| c as usize),
                     )
                     .expect("query count app:AI_API_KEY succeeds");
                 assert_eq!(plaintext_key_count, 0);

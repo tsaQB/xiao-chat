@@ -113,7 +113,7 @@ pub(crate) async fn run_cli_launcher(ai_service: &Arc<AIChatService>) {
                 run_cli_ai_hub(ai_service, None, None).await;
             }
             Some(3) => {
-                run_cli_gateway_hub(None, None).await;
+                run_cli_gateway_hub(None, None, None).await;
             }
             Some(4) => {
                 crate::cli::search::run_cli_search_hub(ai_service, None, None).await;
